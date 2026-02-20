@@ -1,0 +1,365 @@
+#!/usr/bin/env zsh
+
+bf=$(tput bold)
+nf=$(tput sgr0)
+uf=$(tput smul)
+
+nt_syn_1="${bf}nt${nf}"
+nt_syn_2="${bf}-h${nf}"
+nt_syn_3="${bf}n${nf} [${uf}title${nf}]"
+nt_syn_4="${bf}l${nf} [${uf}title${nf} | ${bf}n${nf}]" 
+nt_syn_5="${uf}num${nf} [...]" 
+nt_syn_6="${bf}r${nf} ${uf}num${nf} ${uf}title${nf}"
+nt_syn_7="${bf}e${nf} ${uf}editor${nf}" 
+nt_syn_8="${bf}R${nf}"
+nt_syn_9="${bf}t${nf}"
+
+nt_template_name='nt_template'
+
+read -d '' NT_MAN_VAR << NT_MANUAL
+${bf}NAME${nf}
+     ${nt_syn_1} - simple notes maintainer
+
+${bf}SYNOPSIS${nf}
+     ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_8}] [${nt_syn_9}]
+
+${bf}DESCRIPTION${nf}
+     The ${nt_syn_1} utility initializes and edits documents, ideal for building an indexed list of notes documents.
+
+     By default, the file extension for each new document is the extension of the last numbered document in the folder. If the folder has no numbered documents, ${nt_syn_1} defaults to ${bf}.txt${nf}. If the folder has a template file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then each new document uses this template's content and ${uf}extension${nf}.
+
+     If ${nt_syn_1} is given a ${uf}title${nf} when creating or renaming a doc, a number of underscores will be inserted between the numeric index and the title portion of the file name based on the same format as the last doc, defaulting to one underscore.
+
+     As a syntactic sugar, you can pass in multiple numeric indices, as well as ${nt_syn_8} and/or ${nt_syn_9} in a row to open the specified files all at once.
+
+     Options include:
+
+     ${nt_syn_2}
+             Print help page.
+     
+     ${nt_syn_3}
+             Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by an underscore and a hyphenated version of the ${uf}title${nf}, with the same extension as the previous document (or .txt), then open it in the preferred editor. If the current directory contains the file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then the new document uses this template's content and ${uf}extension${nf} instead.
+
+     ${nt_syn_4}
+             Open the document with the latest numeric index. A numeric index must be a 1-to-3-digit positive integer. If ${uf}title${nf} is provided, rename this document to ${uf}title${nf} without opening the document. Alternatively, if the optional argument is ${bf}n${nf}, ${bf}nt${nf} simply returns the numeric index of the last detected note in the current directory.
+
+     ${nt_syn_6}
+             Open the existing document(s) with the ${uf}num${nf} index (indices).
+
+     ${nt_syn_6}
+             Rename the existing document with the ${uf}num${nf} index to ${uf}title${nf} without opening the document. 
+
+     ${nt_syn_7}
+             Set the ${uf}editor${nf} that ${bf}nt${nf} will use for the current session. The ${uf}editor${nf} can be a command-line command or an application. If ${uf}editor${nf} name contains multiple words, single-quote the name. In effect, this option sets the NT_EDITOR environment variable. The default editor is TextEdit. This option must be called by sourcing rather than executing the ${bf}nt${nf} script, as follows:
+             
+             $ source ${(%):-%x} e ${uf}editor${nf}
+
+     ${nt_syn_8}
+             Open the README.md (case-insensitive) document in the current working directory, if there is any.
+
+     ${nt_syn_9}
+             Open the ${bf}${nt_template_name}${nf} document in the current working directory, if there is any.
+
+${bf}ENVIRONMENT${nf}
+     NT_EDITOR  By default, the editor is set to TextEdit. 
+
+${bf}EXIT STATUS${nf}
+     The ${bf}nt${nf} utility exits with one of the following values:
+
+     0     Document, either new or existing, was successfully opened.
+     1     Document, either new or existing, could not be opened.
+     >1    Another error occurred.
+NT_MANUAL
+
+last_num_getter() {
+	maybe_last_num="$(ls -1 | cut -d '.' -f1 | cut -d '_' -f1 | sort -n | awk 'END{print}')"
+	if [[ $maybe_last_num =~ ^[0-9]+$ ]]; then
+		echo "${maybe_last_num}"
+	else
+		echo 0
+	fi
+}
+
+count_leading_underscores() {
+	# a simple grep or awk gsub() won't do here, since we only want the number of leading underscores in a file of format ###__..__file-name.txt
+	name="$1"
+	has_leading_underscore=true
+	if [[ "$name" =~ ^[0-9]+_ ]]; then 
+		num_leading_underscores=1
+		while [ $has_leading_underscore = true ]; do
+			name="${name#*_}"
+			if [[ "$name" =~ ^_ ]]; then
+				(( num_leading_underscores ++ ))
+			else has_leading_underscore=false
+			fi
+		done
+	else
+		num_leading_underscores=0
+	fi
+	printf '%d' "$num_leading_underscores"
+}
+
+last_ext_getter() {
+	ls -1 | tr '_.' ' ' | sort -n -k1 | tail -1 | tr ' ' '\n' | tail -1
+}
+
+deprecated_update_modified() {
+	doc_list=("$@")
+	doc_count="${#doc_list[@]}"
+	doc_index=0
+	while [ "${doc_index}" -lt "${doc_count}" ]; do
+		doc="${doc_list[@]:${doc_index}:1}"
+		if [ -f "${doc}" ]; then
+			mod_time="$(date -r "${doc}" '+%Y%m%d%H%M%S')"
+			sed -i.bak "s/^modified=[0-9]*/modified=${mod_time}/" "${doc}" \
+				&& rm "${doc}.bak" \
+				&& printf "${doc} last modified at ${mod_time}\n"
+		else
+			printf "${doc} is no longer available.\n"
+		fi
+		doc_index=$(( doc_index + 1 ))
+	done
+}
+
+nt_open() {
+	app_or_cmd="$1"
+	file_list=("${@:2}")
+
+	cmd_info="$( command -v "${app_or_cmd}" )"
+	if [ -z "${cmd_info}" ]; then
+		if [[ "$OSTYPE" == darwin* ]]; then
+			open -a "${app_or_cmd}" "${file_list[@]}"
+		else
+			printf 'Editor "%s" not found in PATH.\n' "${app_or_cmd}"
+			return 1
+		fi
+	else
+		case "$app_or_cmd" in
+		vi|vim) vim -p "${file_list[@]}" ;; # -p to open all files in tabbed mode
+		*) "${app_or_cmd}" "${file_list[@]}" ;;
+		esac
+	fi
+}
+
+if [ -z "$NT_EDITOR" ]; then NT_EDITOR='vim'; fi
+	
+if [ "$#" -eq 0 ]; then
+	printf "usage: ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}]\n"
+	exit 0
+fi
+
+files_to_open=() # arrays are not POSIX-compliant
+setopt extended_glob 2>/dev/null
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+
+		-h)
+			clear
+			printf "${NT_MAN_VAR}"
+			printf '\n'
+			;;
+
+		n)
+			new_num="$(last_num_getter)"
+			new_num="$(( new_num + 1 ))"
+			new_num="$( printf '%03d' "${new_num}" )"
+			# make sure to consume the full argv
+			if [ "$#" -gt 1 ]; then
+				shift
+				new_title="${1}"
+				while [ "$#" -gt 1 ]; do
+					shift
+					new_title+=" ${1}"
+				done
+				new_title="${new_title// /-}"
+				last_doc="$(ls -1 | sort -n | awk 'END{print}')"
+				last_underscores_count="$(count_leading_underscores "$last_doc")"
+				if [ $last_underscores_count -eq 0 ]; then
+					new_doc="${new_num}_${new_title}"
+				else
+					new_underscores="$( printf '_%.0s' {1..$last_underscores_count} )"
+					new_doc="${new_num}${new_underscores}${new_title}"
+				fi
+			else
+				new_doc="${new_num}"
+			fi
+			template_count="$( find . -name "${nt_template_name}.*" -maxdepth 1 | wc -l )"
+			if [ "$template_count" -eq 1 ]; then
+				template_file="$( find . -name "${nt_template_name}.*" -maxdepth 1 )"
+				new_doc+=".${template_file##*.}"
+				cat $template_file >> "$new_doc"
+			elif [ "$template_count" -gt 1 ]; then
+				printf "Too many nt template files in this folder.\n"
+				exit 5
+			else
+				if [ "$new_num" -eq 1 ]; then
+					new_doc+=".txt"
+				else
+					new_doc+=".$(last_ext_getter)"
+				fi
+				new_time="$(date '+%Y%m%d-%H%M')"
+				printf "created=${new_time}\n" >> "${new_doc}"
+				printf '\n\n\n' >> "${new_doc}"
+			fi
+			files_to_open+=( "${new_doc}" )
+			;;
+
+		l)
+			last_num="$(last_num_getter)"
+			if [ "${last_num}" -ne 0 ]; then
+				if [ "$2" = 'n' ]; then
+					printf '%d\n' "${last_num}"
+					exit
+				else
+					last_doc="$(ls -1 | sort -n | awk 'END{print}')"
+					if [ "$#" -gt 1 ]; then
+						shift
+						new_title="$1"
+						while [ "$#" -gt 1 ]; do
+							shift
+							new_title+=" ${1}"
+						done
+						new_title="${new_title// /-}"
+
+						last_underscores_count="$(count_leading_underscores "$last_doc")"
+						if [ $last_underscores_count -eq 0 ]; then
+							new_doc="${last_num}_${new_title}.$(last_ext_getter)"
+						else
+							new_underscores="$( printf '_%.0s' {1..$last_underscores_count} )"
+							new_doc="${last_num}${new_underscores}${new_title}.$(last_ext_getter)"
+						fi
+
+						mv "${last_doc}" "${new_doc}" \
+							&& printf '%s renamed to %s\n' "${last_doc}" "${new_doc}"
+					else
+						files_to_open+=( "${last_doc}" )
+					fi
+				fi
+			else
+				printf 'No indexed document found.\n'
+				exit 2
+			fi
+			;;
+
+		[0-9]|[0-9][0-9]|[0-9][0-9][0-9])
+			try_num="$( printf '%03d' "$1" )"
+			try_doc="$( find * -name "${try_num}*" -maxdepth 0 )"
+			if [ -f "${try_doc}" ]; then
+				files_to_open+=( "${try_doc}" )
+			else
+				printf 'File with index %s not found.\n' "$try_num"
+				exit 2
+			fi
+			;;
+
+		r)
+			if [ "$#" -le 2 ]; then
+				printf 'usage: %s\n' "${nt_syn_6}"
+				exit 1
+			fi
+			shift
+			try_num="$( printf '%03d' "$1" )"
+			try_doc="$( find * -name "${try_num}*" -maxdepth 0 )"
+			if [ -f "${try_doc}" ]; then
+				try_doc_ext="$( printf "$try_doc" | tr '.' '\n' | tail -1 )"
+				if [ "$#" -gt 1 ]; then
+					shift
+					new_title="$1"
+					while [ "$#" -gt 1 ]; do
+						shift
+						new_title+=" ${1}"
+					done
+					new_title="${new_title// /-}"
+
+					try_underscores_count="$(count_leading_underscores "$try_doc")"
+					if [ $try_underscores_count -eq 0 ]; then
+						new_doc="${try_num}_${new_title}.${try_doc_ext}"
+					else
+						new_underscores="$( printf '_%.0s' {1..$try_underscores_count} )"
+						new_doc="${try_num}${new_underscores}.${try_doc_ext}"
+					fi
+
+					new_doc="${try_num}_${new_title}.${try_doc_ext}"
+					mv "${try_doc}" "${new_doc}" \
+						&& printf '%s renamed to %s\n' "${try_doc}" "${new_doc}"
+				else
+					files_to_open+=( "${try_doc}" )
+				fi
+			else
+				printf 'File number %s not found.\n' "${try_num}"
+				exit 2
+			fi
+			;;
+
+		e)
+			shift	
+			if [ -z "$1" ]; then
+				printf 'No editor given.\n'
+				exit 2
+			fi
+			chosen_editor="$1"
+			copy_to_clipboard() {
+				if [[ "$OSTYPE" == darwin* ]]; then
+					pbcopy
+				elif [[ "$OSTYPE" == linux* ]] && command -v xsel >/dev/null 2>&1; then
+					xsel --clipboard --input
+				else
+					return 1
+				fi
+			}
+			export_cmd="export NT_EDITOR=${chosen_editor}"
+			if printf '%s' "${export_cmd}" | copy_to_clipboard; then
+				printf "The command to update the ${bf}nt${nf} editor has been placed in your clipboard.\n"
+				printf 'Please paste it into the command line to update it.\n'
+			else
+				printf 'Run this command to set the editor:\n  %s\n' "${export_cmd}"
+			fi
+
+			#if [ ${ZSH_EVAL_CONTEXT} = 'toplevel' ]; then
+			#	printf "In order to set the ${bf}nt${nf} editor, you must source the ${bf}nt${nf} script instead of executing it.\n"
+			#	exit 3
+			#elif [ ${ZSH_EVAL_CONTEXT} = 'toplevel:file' ]; then
+			#	export NT_EDITOR="${chosen_editor}"
+			#	printf "${bf}nt${nf} editor set to '${chosen_editor}'\n"
+			#else
+			#	printf "Unknown zsh eval context: ${ZSH_EVAL_CONTEXT}\n"
+			#	exit 3
+			#fi
+			;;
+
+		R)
+			readme_file="$( find . -iname readme.md -maxdepth 1 )"
+			if [ -z "$readme_file" ]; then
+				printf "No README.md found in current working directory.\n"
+				exit 4
+			fi
+			files_to_open+=( "$readme_file" )
+			;;
+
+		t)
+			template_count="$( find . -name "${nt_template_name}.*" -maxdepth 1 | wc -l )"
+			if [ "$template_count" -eq 1 ]; then
+				template_file="$( find . -name "${nt_template_name}.*" -maxdepth 1 )"
+				files_to_open+=( "${template_file}" )
+			elif [ "$template_count" -gt 1 ]; then
+				printf "Too many nt template files in this folder.\n"
+				exit 5
+			else
+				printf "No nt template found in this folder.\n"
+				exit 0
+			fi
+			;;
+
+		*)
+			printf "Unknown option '$1'\n"
+			exit 2
+			;;
+	esac
+	shift
+done
+unsetopt extended_glob 2>/dev/null
+
+if [ "${#files_to_open[@]}" -gt 0 ]; then
+	files_to_open=( $(echo "${files_to_open[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ') )
+	nt_open "${NT_EDITOR}" "${files_to_open[@]}"
+fi
