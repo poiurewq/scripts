@@ -1,0 +1,192 @@
+.Dd February 24, 2026
+.Dt CLOCK 1
+.Os
+.Sh NAME
+.Nm clock
+.Nd clock in & out of work
+.Sh SYNOPSIS
+.Nm
+.Op Cm help Op Cm error
+.br
+.Op Cm in Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp
+.br
+.Op Cm out Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.br
+.Op Cm switch Ar tag Op Cm on Ar description
+.br
+.Op Cm add Ar tag Cm for Ar minutes Op Brq Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.br
+.Op Cm extend Op Brq Cm minus Ar minutes | Cm at Ar timestamp
+.br
+.Op Cm remove | pop
+.br
+.Op Cm pause | p | resume | r
+.br
+.Op Cm log
+.br
+.Op Cm last | l
+.br
+.Op Cm past Brq Cm dtn | day | week | Ar number Brq Cm days | weeks Op Cm minus Ar number Cm hour(s)
+.Sh DESCRIPTION
+.Nm
+lets you clock in and out of work, tracking how many minutes you've spent working each day.
+.Pp
+Options include:
+.Bl -tag -width indent
+.It Cm help Op Cm error
+Print help page.
+Optionally add
+.Cm error
+to see the error codes.
+.It Cm in Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp
+Clock in to work labeled with a single-word
+.Ar tag .
+The
+.Ar tag
+is of the form
+.Ar top Ns Op . Ns Ar nextLevel ...
+where
+.Ar top
+is a top-level tag and
+.Ar nextLevel
+are next-level tags under the
+.Ar top
+tag.
+At summary time (see
+.Cm past
+option),
+.Ar top
+tags are summarized in a dedicated section.
+Optionally specify the number of
+.Ar minutes
+ago at which the clock in happened.
+Clock automatically calculates the number of minutes in the session and records it to the log.
+Clock always records time in the locally-set time zone.
+Behind the scenes, clocking in adds a temporary record of the starting time and tag for a session in the format
+.Ql started,start time,tag,paused minutes,paused time
+where
+.Ql started
+is simply a keyword.
+.It Cm out Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+Clock out from work labeled with a single-word
+.Ar tag .
+See
+.Cm in
+option above for the
+.Ar tag
+format.
+Optionally specify either the number of
+.Ar minutes
+ago or the
+.Ar timestamp
+at which the session ended.
+The
+.Ar timestamp
+should be in the format
+.Ql yyyy.mm.dd-HH:MM .
+Optionally specify what you worked on by typing
+.Cm on
+followed by a sequence of words without any comma.
+Note that the
+.Cm on
+suboption must be the last suboption passed in, as all subsequent words are parsed as a part of the description.
+Clock automatically calculates the number of minutes in the session and records it to the log.
+The clock-in record is overridden upon clocking out by a permanent record of the format
+.Ql end time,tag,length,description .
+.It Cm switch Ar tag Op Cm on Ar description
+As syntactic sugar, the
+.Cm switch
+option clocks out of the current session and clocks in to a new session in
+.Ar tag
+at the same time.
+Optionally specify what you worked on in the previous session by typing
+.Cm on
+followed by a sequence of words without any comma.
+Note that the
+.Cm on
+suboption must be the last suboption passed in, as all subsequent words are parsed as a part of the description.
+.It Cm add Ar tag Cm for Ar minutes Op Brq Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+Manually add a session of
+.Ar minutes
+length to the log, ending at the time of command call.
+Optionally specify either the number of
+.Ar minutes
+ago or the
+.Ar timestamp
+at which the session ended.
+The
+.Ar timestamp
+should be in the format
+.Ql yyyy.mm.dd-HH:MM .
+Optionally specify what you worked on by typing
+.Cm on
+followed by a sequence of words without any comma.
+Note that the
+.Cm on
+suboption must be the last suboption passed in, as all subsequent words are parsed as a part of the description.
+.It Cm extend Op Brq Cm minus Ar minutes | Cm at Ar timestamp
+Extend the last session (only if complete) record in the log to the current time or, optionally, to an earlier time as specified by
+.Cm minus Ar minutes
+or
+.Cm at Ar timestamp .
+.It Cm remove | pop
+Remove the last session record, whether incomplete or complete, and see what was removed.
+A synonym for
+.Cm remove
+is
+.Cm pop .
+.It Cm pause | p | resume | r
+Pause or resume the current session.
+Behind the scenes,
+.Cm pause
+updates the
+.Ql paused time
+field to the current timestamp, while
+.Cm resume
+clears the
+.Ql paused time
+field and updates the
+.Ql paused minutes
+field as appropriate.
+.It Cm log
+Open the clock log file itself.
+It is helpful for manually editing session details.
+The clock log records work sessions as rows.
+Its implicit header is
+.Ql end time,tag,length,description .
+.It Cm last | l
+Prints the last entry of the clock log.
+.It Cm past Brq Cm dtn | day | week | Ar number Brq Cm days | weeks Op Cm minus Ar number Cm hour(s)
+Prints a useful summary of clock records over the past
+.Ar number
+of day(s) or week(s), grouping the results by tag.
+.Cm dtn
+returns a summary of the day since midnight while
+.Cm day
+returns a summary of the past 24 hours.
+If no
+.Ar number
+is given, the number is assumed to be 1.
+Optionally specify the starting point of the look-back summary via the
+.Cm minus Ar number Cm hour(s)
+suboption.
+.El
+.Sh EXIT STATUS
+.Bl -tag -width indent
+.It 0
+No error.
+.It 1
+Argument error.
+.It 2
+Log access / modification error.
+.It 3
+Incompatible operating system.
+.It 4
+Date conversion error.
+.It 5
+Invalid log state.
+.It 6
+Summarization failed.
+.El
+.Sh AUTHORS
+.An poiurewq
