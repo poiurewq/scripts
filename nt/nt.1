@@ -1,0 +1,133 @@
+.Dd February 24, 2026
+.Dt NT 1
+.Os
+.Sh NAME
+.Nm nt
+.Nd simple notes maintainer
+.Sh SYNOPSIS
+.Nm
+.Op Fl h
+.br
+.Op Cm n Op Ar title
+.br
+.Op Cm l Op Ar title | Cm n
+.br
+.Op Ar num Op Ar ...
+.br
+.Op Cm r Ar num Ar title
+.br
+.Op Cm e Ar editor
+.br
+.Op Cm R
+.br
+.Op Cm t
+.Sh DESCRIPTION
+The
+.Nm
+utility initializes and edits documents, ideal for building an indexed list of notes documents.
+.Pp
+By default, the file extension for each new document is the extension of the last numbered document in the folder.
+If the folder has no numbered documents,
+.Nm
+defaults to
+.Pa .txt .
+If the folder has a template file
+.Ql nt_template. Ns Ar extension ,
+then each new document uses this template's content and
+.Ar extension .
+.Pp
+If
+.Nm
+is given a
+.Ar title
+when creating or renaming a doc, a number of underscores will be inserted between the numeric index and the title portion of the file name based on the same format as the last doc, defaulting to one underscore.
+.Pp
+As syntactic sugar, you can pass in multiple numeric indices, as well as
+.Cm R
+and/or
+.Cm t
+in a row to open the specified files all at once.
+.Pp
+Options include:
+.Bl -tag -width indent
+.It Fl h
+Print help page.
+.It Cm n Op Ar title
+Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by an underscore and a hyphenated version of the
+.Ar title ,
+with the same extension as the previous document (or .txt), then open it in the preferred editor.
+If the current directory contains the file
+.Ql nt_template. Ns Ar extension ,
+then the new document uses this template's content and
+.Ar extension
+instead.
+.It Cm l Op Ar title | Cm n
+Open the document with the latest numeric index.
+A numeric index must be a 1-to-3-digit positive integer.
+If
+.Ar title
+is provided, rename this document to
+.Ar title
+without opening the document.
+Alternatively, if the optional argument is
+.Cm n ,
+.Nm
+simply returns the numeric index of the last detected note in the current directory.
+.It Ar num Op Ar ...
+Open the existing document(s) with the
+.Ar num
+index (indices).
+.It Cm r Ar num Ar title
+Rename the existing document with the
+.Ar num
+index to
+.Ar title
+without opening the document.
+.It Cm e Ar editor
+Set the
+.Ar editor
+that
+.Nm
+will use for the current session.
+The
+.Ar editor
+can be a command-line command or an application.
+If
+.Ar editor
+name contains multiple words, single-quote the name.
+In effect, this option sets the
+.Ev NT_EDITOR
+environment variable.
+The default editor is vim.
+This option must be called by sourcing rather than executing the
+.Nm
+script, as follows:
+.Pp
+.Dl $ source nt e Ar editor
+.It Cm R
+Open the README.md (case-insensitive) document in the current working directory, if there is any.
+.It Cm t
+Open the
+.Pa nt_template
+document in the current working directory, if there is any.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width indent
+.It Ev NT_EDITOR
+The editor used to open documents.
+By default, the editor is set to vim.
+.El
+.Sh EXIT STATUS
+The
+.Nm
+utility exits with one of the following values:
+.Bl -tag -width indent
+.It 0
+Document, either new or existing, was successfully opened.
+.It 1
+Document, either new or existing, could not be opened.
+.It >1
+Another error occurred.
+.El
+.Sh AUTHORS
+.An poiurewq
