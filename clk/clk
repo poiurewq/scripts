@@ -483,13 +483,13 @@ if [ "$clk_subfunction" = 'in' ]; then
 		fi
 	fi
 
-	total_paused_minutes=0
+	total_paused_seconds=0
 	last_paused_at=""
 
-	printf "started\t${start_timestamp}\t${clk_tag}\t${total_paused_minutes}\t${last_paused_at}\n" >> $clk_log &&
+	printf "started\t${start_timestamp}\t${clk_tag}\t${total_paused_seconds}\t${last_paused_at}\n" >> $clk_log &&
 		printf "\nAdded new session in\n  ${clk_tag}\n  that started at\n  ${start_timestamp}\n" ||
 		exit 2
-	
+
 	printf '\n'
 	exit 0
 fi
@@ -640,14 +640,21 @@ if [ "$clk_subfunction" = 'out' ]; then
 		printf "Clock-out time\n  ${end_timestamp}\n  cannot be earlier than clock-in time\n  ${start_timestamp}\n" && exit 1
 	fi
 
-	# now obtain and subtract paused minutes
-	paused_minutes="$( printf "$last_line" | cut -d"$CLK_TAB" -f4 )"
-	no_pause_session_length=$(( $difference_in_seconds / 60 ))
-	session_length=$(( $no_pause_session_length - $paused_minutes ))
+	# now obtain and subtract paused seconds
+	paused_seconds="$( printf "$last_line" | cut -d"$CLK_TAB" -f4 )"
+	# if session is currently paused, add time from last pause to now
+	last_paused_at="$( printf "$last_line" | cut -d"$CLK_TAB" -f5 )"
+	if [ -n "$last_paused_at" ]; then
+		now_epoch="$(date +%s)"
+		paused_seconds=$(( $paused_seconds + $now_epoch - $last_paused_at ))
+	fi
+	session_length=$(( ($difference_in_seconds - $paused_seconds) / 60 ))
 
-	# if the session length is negative due to too many paused minutes, inform the user end time is invalid.
+	# if the session length is negative due to too much paused time, inform the user
 	if printf '%s' "$session_length" | grep -Eq '^-'; then
-		printf 'Current session paused minutes of %d\n  cannot exceed total session length of %d.\n' ${paused_minutes} ${no_pause_session_length} && exit 1
+		no_pause_session_length=$(( $difference_in_seconds / 60 ))
+		paused_minutes_display=$(( $paused_seconds / 60 ))
+		printf 'Current session paused time of %d minutes\n  cannot exceed total session length of %d minutes.\n' ${paused_minutes_display} ${no_pause_session_length} && exit 1
 	fi
 
 	# Replace start-session record with completed-session record
@@ -657,10 +664,11 @@ if [ "$clk_subfunction" = 'out' ]; then
 	mv $clk_log_tmp $clk_log || exit 2
 
 	paused_string=""
-	if [ "$paused_minutes" -gt 0 ]; then
+	if [ "$paused_seconds" -gt 0 ]; then
+		paused_minutes_display=$(( $paused_seconds / 60 ))
 		paused_string="was paused for"
 		paused_string+=$'\n'
-		paused_string+="  ${paused_minutes} minutes"
+		paused_string+="  ${paused_minutes_display} minutes"
 		paused_string+=$'\n  and '
 	fi
 
@@ -726,7 +734,13 @@ if [ "$clk_subfunction" = 'switch' ]; then
 		printf "Clock-switch time\n  ${switch_timestamp}\n  cannot be earlier than previous session's clock-in time\n  ${prev_sesh_start_timestamp}\n" && exit 1
 	fi
 
-	session_length=$(( $difference_in_seconds / 60 ))
+	# obtain and subtract paused seconds from previous session
+	prev_sesh_paused_seconds="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
+	prev_sesh_last_paused_at="$(printf "$last_line" | cut -d"$CLK_TAB" -f5)"
+	if [ -n "$prev_sesh_last_paused_at" ]; then
+		prev_sesh_paused_seconds=$(( $prev_sesh_paused_seconds + $end_epochtime - $prev_sesh_last_paused_at ))
+	fi
+	session_length=$(( ($difference_in_seconds - $prev_sesh_paused_seconds) / 60 ))
 
 	# obtain previous session tag
 	prev_sesh_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
@@ -748,14 +762,23 @@ if [ "$clk_subfunction" = 'switch' ]; then
 		description_string+=$'\n'
 	fi
 
-	printf "\nRecorded full session in\n  %s\n%s  that was active for\n  %d minutes\n  and ended at\n  %s.\n" "${prev_sesh_tag}" "${description_string}" "${session_length}" "${switch_timestamp}"
+	paused_string=""
+	if [ "$prev_sesh_paused_seconds" -gt 0 ]; then
+		paused_minutes_display=$(( $prev_sesh_paused_seconds / 60 ))
+		paused_string="was paused for"
+		paused_string+=$'\n'
+		paused_string+="  ${paused_minutes_display} minutes"
+		paused_string+=$'\n  and '
+	fi
+
+	printf "\nRecorded full session in\n  %s\n%s  that %swas active for\n  %d minutes\n  and ended at\n  %s.\n" "${prev_sesh_tag}" "${description_string}" "${paused_string}" "${session_length}" "${switch_timestamp}"
 
 	## Add start of new session to log ##
 
-	total_paused_minutes=0
+	total_paused_seconds=0
 	last_paused_at=""
 
-	printf "started\t${switch_timestamp}\t${clk_tag}\t${total_paused_minutes}\t${last_paused_at}\n" >> $clk_log &&
+	printf "started\t${switch_timestamp}\t${clk_tag}\t${total_paused_seconds}\t${last_paused_at}\n" >> $clk_log &&
 		printf "\nAdded new session in\n  ${clk_tag}\n  that started at\n  ${switch_timestamp}\n" ||
 		exit 2
 	
@@ -831,20 +854,22 @@ if [ "$clk_subfunction" = 'pause' ]; then
 	# obtain existing fields
 	start_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f2)"
 	current_sesh_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
-	current_sesh_paused_mins="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
-	current_sesh_paused_time="$(printf "$last_line" | cut -d"$CLK_TAB" -f5)"
-	if [ -n "$current_sesh_paused_time" ]; then
-		printf 'Cannot pause current session, as it was already paused at %s\n' "${current_sesh_paused_time}"
+	current_sesh_paused_secs="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
+	current_sesh_paused_at="$(printf "$last_line" | cut -d"$CLK_TAB" -f5)"
+	if [ -n "$current_sesh_paused_at" ]; then
+		pause_display="$(date -r "$current_sesh_paused_at" +$clk_fmt 2>/dev/null || printf '%s' "$current_sesh_paused_at")"
+		printf 'Cannot pause current session, as it was already paused at %s\n' "${pause_display}"
 		exit 5
 	fi
-	# replace record with new one where paused time field is set to current timestamp
-	pause_timestamp="$(date +$clk_fmt)"
-	new_record="started${CLK_TAB}${start_timestamp}${CLK_TAB}${current_sesh_tag}${CLK_TAB}${current_sesh_paused_mins}${CLK_TAB}${pause_timestamp}"
+	# replace record with new one where paused time field is set to epoch timestamp
+	pause_epoch="$(date +%s)"
+	pause_display="$(date +$clk_fmt)"
+	new_record="started${CLK_TAB}${start_timestamp}${CLK_TAB}${current_sesh_tag}${CLK_TAB}${current_sesh_paused_secs}${CLK_TAB}${pause_epoch}"
 	sed -e '$d' $clk_log > $clk_log_tmp || exit 2
 	printf "${new_record}\n" >> $clk_log_tmp || exit 2
 	mv $clk_log_tmp $clk_log || exit 2
 	# report the pause
-	printf '\nThe current session in\n  %s\n  has been paused at\n  %s\n\n' "${current_sesh_tag}" "${pause_timestamp}"
+	printf '\nThe current session in\n  %s\n  has been paused at\n  %s\n\n' "${current_sesh_tag}" "${pause_display}"
 	exit 0
 fi
 
@@ -853,49 +878,36 @@ if [ "$clk_subfunction" = 'resume' ]; then
 	## obtain existing fields
 	start_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f2)"
 	sesh_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
-	sesh_prev_paused_mins="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
-	if ! printf '%s' "${sesh_prev_paused_mins}" | grep -Eq '^[0-9]+$'; then
-		printf 'Current session paused minutes field (4th field) is not an integer. Please fix in log.\n'
+	sesh_prev_paused_secs="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
+	if ! printf '%s' "${sesh_prev_paused_secs}" | grep -Eq '^[0-9]+$'; then
+		printf 'Current session paused seconds field (4th field) is not an integer. Please fix in log.\n'
 		exit 5
 	fi
-	paused_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f5)"
-	# obtain timestamp now
-	now_timestamp="$(date +$clk_fmt)"
+	paused_epoch="$(printf "$last_line" | cut -d"$CLK_TAB" -f5)"
+	# obtain epoch now
+	now_epoch="$(date +%s)"
 
-	## calculate new paused minutes	
-	# calculate paused time as diff between current timestamp and paused timestamp
-	paused_epochtime=""
-	now_epochtime=""
-	case "$current_os" in
-			Linux)
-					# timestamp format in clk_fmt
-					paused_epochtime="$( date -d "$paused_timestamp" +'%s' )" || exit 4
-					now_epochtime="$( date -d "$now_timestamp" +'%s' )" || exit 4
-					;;
-			Darwin)
-					paused_epochtime="$( date -j -f $clk_fmt "$paused_timestamp" +'%s' )" || exit 4
-					now_epochtime="$( date -j -f $clk_fmt "$now_timestamp" +'%s' )" || exit 4
-					;;
-	esac
+	## calculate new paused seconds
+	difference_in_seconds=$(( $now_epoch - $paused_epoch ))
 
-	difference_in_seconds=$(( $now_epochtime - $paused_epochtime ))
-
-	# if the difference is negative, inform the user end time is invalid.
+	# if the difference is negative, inform the user
 	if printf '%s' "$difference_in_seconds" | grep -Eq '^-'; then
-			printf "Resume time\n  ${now_timestamp}\n  cannot be earlier than paused time\n  ${paused_timestamp}\n" && exit 1
+		now_display="$(date +$clk_fmt)"
+		paused_display="$(date -r "$paused_epoch" +$clk_fmt 2>/dev/null || printf '%s' "$paused_epoch")"
+		printf "Resume time\n  ${now_display}\n  cannot be earlier than paused time\n  ${paused_display}\n" && exit 1
 	fi
-	# increment paused mins by new paused mins
-	added_paused_mins=$(( ( $difference_in_seconds / 60 ) ))
-	sesh_new_paused_mins=$(( $sesh_prev_paused_mins + $added_paused_mins ))
+	# increment paused seconds
+	sesh_new_paused_secs=$(( $sesh_prev_paused_secs + $difference_in_seconds ))
 
 	## update record
-	# update paused minutes and clear paused time field
-	new_record="started${CLK_TAB}${start_timestamp}${CLK_TAB}${sesh_tag}${CLK_TAB}${sesh_new_paused_mins}${CLK_TAB}"
+	# update paused seconds and clear paused time field
+	new_record="started${CLK_TAB}${start_timestamp}${CLK_TAB}${sesh_tag}${CLK_TAB}${sesh_new_paused_secs}${CLK_TAB}"
 	sed -e '$d' $clk_log > $clk_log_tmp || exit 2
 	printf "${new_record}\n" >> $clk_log_tmp || exit 2
 	mv $clk_log_tmp $clk_log || exit 2
 	# report resume
-	printf '\nThe current session in\n  %s\n  which was paused at\n  %s\n  for %s minutes\n  has been resumed.\n\n' "${sesh_tag}" "${paused_timestamp}" "${sesh_new_paused_mins}"
+	paused_display_mins=$(( $sesh_new_paused_secs / 60 ))
+	printf '\nThe current session in\n  %s\n  has been resumed.\n  Total paused: %d seconds (%d minutes)\n\n' "${sesh_tag}" "${sesh_new_paused_secs}" "${paused_display_mins}"
 	exit 0
 fi
 
