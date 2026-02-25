@@ -942,7 +942,7 @@ if [ "$clk_subfunction" = 'past' ]; then
 		Linux)
 			current_epochtime="$(date +'%s')"
 			if [ "$clk_dtn" = 'true' ]; then
-				startcut_epochtime="$( date -d "$( date +'%Y.%m.%d-%H:%M:%S' )" +'%s' )"
+				startcut_epochtime="$( date -d "$( date +'%Y.%m.%d' )" +'%s' )"
 				endcut_epochtime="$current_epochtime"
 			else
 				startcut_epochtime=$(( $current_epochtime - $clk_past_hours_with_minus * 3600 ))
@@ -960,166 +960,33 @@ if [ "$clk_subfunction" = 'past' ]; then
 			;;
 	esac
 
-	## Output a helpful summary of records after cut-off time ##
-	# for a more efficient algorithm:
-	#   first sort the records
-	#   then search backwards using tail or tac and find the earliest in-startcut and the earliest in-endcut lines' timestamps
-	#   then use those timestamps to make a non-filtering awk for the final aggregation operation.
-
-	# sort the records
-	sort $clk_log > $clk_log_tmp || exit 2
-	mv $clk_log_tmp $clk_log || exit 2
-
-	# search backwards using tail and find earliest in-startcut timestamp
-	first_timestamp_of_all_time="$( head -1 $clk_log | cut -d"$CLK_TAB" -f1 )"
-	last_timestamp_of_all_time="$( tail -1 $clk_log | cut -d"$CLK_TAB" -f1 )"
-
-	earliest_post_startcut_line=""
-	latest_pre_endcut_line=""
-
-	# first check if endcut is before the first timestamp. if so, there's nothing to summarize.
+	## Convert cutoff epochs to clk_fmt strings for lexicographic comparison ##
 	case "$current_os" in
-		# zeroed_fmt is clk_fmt with a standardized 00 for seconds so that the converted epoch time is consistent across calls.
-		# note that we can access record_epoch outside of the if condition because variables are globally scoped by default.
-		Linux)
-			# if the startcut is before the first timestamp, then just use the first timestamp
-			first_epochtime="$( date -d "$first_timestamp_of_all_time" +'%s' )"
-			last_epochtime="$( date -d "$last_timestamp_of_all_time" +'%s' )"
-			if [ "$first_epochtime" -ge "$endcut_epochtime" ]; then
-				printf 'Nothing to summarize: cutoff end-time precedes earliest timestamp in clock log\n'; exit 0
-			elif [ "$last_epochtime" -lt "$startcut_epochtime" ]; then
-				printf 'Nothing to summarize: cutoff start-time is later than latest timestamp in clock log\n'; exit 0
-			elif [ "$first_epochtime" -ge "$startcut_epochtime" ]; then
-				earliest_post_startcut_line="$first_timestamp_of_all_time"
-			else
-				earliest_post_startcut_line="$( \
-					tac $clk_log | \
-					awk -F'\t' -v startcut="$startcut_epochtime" -v zeroed_fmt="${clk_fmt}:%S" \
-						'{ \
-							date_cmd = "date -d "$1":00 +%s"; \
-							if ( ( date_cmd | getline record_epoch ) < 0 ) \
-								{ print "Date conversion inside startcut search failed for timestamp " $1 > "/dev/stderr" ; exit 1; } \
-							close(date_cmd); \
-							if ( record_epoch > startcut ) \
-								{ prev_timestamp = $1; prev_NR = NR; } \
-							else \
-								{ printf "%d,%s", prev_NR, prev_timestamp; exit; } \
-						}' \
-				)" || exit 1
-			fi
-			latest_pre_endcut_line="$( \
-				tac $clk_log | \
-				awk -F'\t' -v endcut="$endcut_epochtime" -v zeroed_fmt="${clk_fmt}:%S" \
-					'{ \
-						date_cmd = "date -d "$1":00 +%s"; \
-						if ( ( date_cmd | getline record_epoch ) < 0 ) \
-							{ print "Date conversion inside endcut search failed for timestamp " $1 > "/dev/stderr" ; exit 1; } \
-						close(date_cmd); \
-						if ( record_epoch < endcut ) { printf "%d,%s", NR, $1; exit; } \
-					}' \
-			)" || exit 1
-
-			;;
-
-		Darwin)
-			first_epochtime="$( date -j -f "$clk_fmt" "$first_timestamp_of_all_time" +'%s' )"
-			last_epochtime="$( date -j -f "$clk_fmt" "$last_timestamp_of_all_time" +'%s' )"
-			if [ "$first_epochtime" -ge "$endcut_epochtime" ]; then
-				printf 'Nothing to summarize: cutoff end-time precedes earliest timestamp in clock log\n'; exit 0
-			elif [ "$last_epochtime" -lt "$startcut_epochtime" ]; then
-				printf 'Nothing to summarize: cutoff start-time is later than latest timestamp in clock log\n'; exit 0
-			elif [ "$first_epochtime" -ge "$startcut_epochtime" ]; then
-				earliest_post_startcut_line="$first_timestamp_of_all_time"
-			else
-				# printf >&2 "startcut_epochtime: $startcut_epochtime\n"
-				# printf >&2 "%s\n" "clk_fmt: $clk_fmt"
-				# it is CRUCIAL to close the command after each run, otherwise the pipe will fail after too many open files.
-				earliest_post_startcut_line="$( \
-					tail -r $clk_log | \
-					awk -F'\t' -v startcut="$startcut_epochtime" -v zeroed_fmt="${clk_fmt}:%S" \
-						'{ \
-							date_cmd = "date -j -f "zeroed_fmt" "$1":00 +%s"; \
-							if ( ( date_cmd | getline record_epoch ) < 0 ) \
-								{ print "Date conversion inside endcut search failed for timestamp " $1 > "/dev/stderr"; exit 1; } \
-							close(date_cmd); \
-							if ( record_epoch > startcut ) \
-								{ prev_timestamp = $1; prev_NR = NR; } \
-							else \
-								{ printf "%d,%s", prev_NR, prev_timestamp; exit; } \
-						}' \
-				)" || exit 1
-			fi
-			latest_pre_endcut_line="$( \
-				tail -r $clk_log | \
-				awk -F'\t' -v endcut="$endcut_epochtime" -v zeroed_fmt="${clk_fmt}:%S" \
-					'{ \
-						date_cmd = "date -j -f "zeroed_fmt" "$1":00 +%s"; \
-						if ( ( date_cmd | getline record_epoch ) < 0 ) \
-							{ print "Date conversion inside endcut search failed for timestamp " $1 > "/dev/stderr" ; exit 1; } \
-						close(date_cmd); \
-						if ( record_epoch < endcut ) { printf "%d,%s", NR, $1; exit; } \
-					}' \
-			)" || exit 1
-			;;
+		Linux)  startcut_str="$(date -d @"$startcut_epochtime" +"$clk_fmt")"
+			endcut_str="$(date -d @"$endcut_epochtime" +"$clk_fmt")" ;;
+		Darwin) startcut_str="$(date -r "$startcut_epochtime" +"$clk_fmt")"
+			endcut_str="$(date -r "$endcut_epochtime" +"$clk_fmt")" ;;
 	esac
 
-	# check variables
-	# printf >&2 "endcut_epochtime: $endcut_epochtime\n"
-	# printf >&2 "earliest_post_startcut_line: $earliest_post_startcut_line\n"
-	# printf >&2 "latest_pre_endcut_line: $latest_pre_endcut_line\n"
+	## Summarize records within [startcut_str, endcut_str] using string comparison ##
+	sorted_log="$(sort "$clk_log")"
 
-	# obtain the line-number fields for each line.
-	earliest_post_startcut_linenum="${earliest_post_startcut_line%,*}"
-	latest_pre_endcut_linenum="${latest_pre_endcut_line%,*}"
-
-	# guard-check that earliest line is not _after_ latest line, which would mean the time range is negative and summary should be empty. since the awk results are based on reverse-files, we early-exit if earliest linenum is less than latest linenum, indicating that earliest linenum actually comes _after_ latest linenum in right order.
-	if [ $earliest_post_startcut_linenum -le $latest_pre_endcut_linenum ]; then
-		printf 'No clock records found within the desired time range.\n' >&2 && exit 0
-	fi
-
-	# obtain timestamps
-	earliest_post_startcut_timestamp="${earliest_post_startcut_line#*,}"
-	latest_pre_endcut_timestamp="${latest_pre_endcut_line#*,}"
-
-
-	if [ -z "$earliest_post_startcut_timestamp" ]; then
-		printf "No clock records found after the desired time range start time.\n" >&2 && exit 0
-	elif [ -z "$latest_pre_endcut_timestamp" ]; then
-		printf "No clock records found before the desired time range end time.\n" >&2 && exit 0
-	fi
-	
-	# using the startcut and endcut timestamps, give summary of the right records
-	# note that because of the sort command at the end, the ordering of your output will be determined by the sort and not by awk.
-	# note that split("", arr) is used to clear an arr
 	printf "\n-- Top-level tags --\n"
-	awk -F'\t' -v earliest_match="$earliest_post_startcut_timestamp" \
-			-v latest_match="$latest_pre_endcut_timestamp" \
-		'$0 ~ earliest_match, $0 ~ latest_match \
-			{ 	\
-				split("", tag_components); \
-				split($2, tag_components, "."); \
-				TOP[tag_components[1]]+=$3; \
-				total+=$3; \
-			} \
-		END { \
-			printf "%-17s%-7d%7.2fh\n", "TOTAL", total, (total/60); \
-			for (tl in TOP) printf "%-17s%-7d%7.2fh   %06.3f%%\n", tl, TOP[tl], (TOP[tl]/60), TOP[tl]/total*100; \
-		}' $clk_log | \
-	sort -k2 -n -r || exit 6
+	printf '%s\n' "$sorted_log" | awk -F'\t' -v s="$startcut_str" -v e="$endcut_str" \
+		'$1 >= s && $1 <= e { split($2, tc, "."); TOP[tc[1]] += $3; total += $3 }
+		 END {
+			if (!total) { print "No clock records found within the desired time range." > "/dev/stderr"; exit 0 }
+			printf "%-17s%-7d%7.2fh\n", "TOTAL", total, (total/60);
+			for (tl in TOP) printf "%-17s%-7d%7.2fh   %06.3f%%\n", tl, TOP[tl], (TOP[tl]/60), TOP[tl]/total*100
+		 }' | sort -k2 -n -r || exit 6
 
 	printf "\n-- Original tags --\n"
-	awk -F'\t' -v earliest_match="$earliest_post_startcut_timestamp" \
-			-v latest_match="$latest_pre_endcut_timestamp" \
-	'$0 ~ earliest_match, $0 ~ latest_match \
-		{ 	\
-			TAG[$2]+=$3; \
-			total+=$3; \
-		} \
-	END { \
-		printf "%-17s%-7d%7.2fh\n", "TOTAL", total, (total/60); \
-		for (t in TAG) printf "%-17s%-7d%7.2fh   %06.3f%%\n", t, TAG[t], (TAG[t]/60), TAG[t]/total*100; \
-	}' $clk_log | \
-	sort -k2 -n -r || exit 6
+	printf '%s\n' "$sorted_log" | awk -F'\t' -v s="$startcut_str" -v e="$endcut_str" \
+		'$1 >= s && $1 <= e { TAG[$2] += $3; total += $3 }
+		 END {
+			printf "%-17s%-7d%7.2fh\n", "TOTAL", total, (total/60);
+			for (t in TAG) printf "%-17s%-7d%7.2fh   %06.3f%%\n", t, TAG[t], (TAG[t]/60), TAG[t]/total*100
+		 }' | sort -k2 -n -r || exit 6
 
 	printf '\n'
 	exit 0
