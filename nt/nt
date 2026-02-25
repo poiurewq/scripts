@@ -163,7 +163,7 @@ while [ "$#" -gt 0 ]; do
 
 		-h|h)
 			clear
-			printf "${NT_MAN_VAR}"
+			printf '%s' "${NT_MAN_VAR}"
 			printf '\n'
 			;;
 
