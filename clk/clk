@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# clk v2
+# clk
 #   single unified tsv for easier analysis & porting to other apps
-#   minimal POSIX-set sh-compliant instead of zsh so as to enable mobile recording on iSH with ash on iPhone (when porting to iSH, change the shebang to ash.)
-#     does not use shebang since it should work on both zsh (Mac) and ash (iSH)
-#   no fancy stuff not found in busybox
-#     that means no: tput
 #   more flexible input UI, non-interactive mode only
 #     allow adding sessions directly
-#   more convenient analysis UI, interactive mode only
+#   more convenient analysis UI, non-interactive mode only
 #     since analysis is based on a unified file, there is no need to divide up a day at a certain cut-off time.
 
 #### Constants #####
