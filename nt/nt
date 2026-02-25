@@ -5,7 +5,7 @@ nf=$(tput sgr0)
 uf=$(tput smul)
 
 nt_syn_1="${bf}nt${nf}"
-nt_syn_2="${bf}-h${nf}"
+nt_syn_2="${bf}-h${nf}|${bf}h${nf}"
 nt_syn_3="${bf}n${nf} [${uf}title${nf}]"
 nt_syn_4="${bf}l${nf} [${uf}title${nf} | ${bf}n${nf}]" 
 nt_syn_5="${uf}num${nf} [...]" 
@@ -13,6 +13,7 @@ nt_syn_6="${bf}r${nf} ${uf}num${nf} ${uf}title${nf}"
 nt_syn_7="${bf}e${nf} ${uf}editor${nf}" 
 nt_syn_8="${bf}R${nf}"
 nt_syn_9="${bf}t${nf}"
+nt_syn_10="${bf}rn${nf} ${uf}n${nf} ${uf}m${nf}"
 
 nt_template_name='nt_template'
 
@@ -21,7 +22,7 @@ ${bf}NAME${nf}
      ${nt_syn_1} - simple notes maintainer
 
 ${bf}SYNOPSIS${nf}
-     ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_8}] [${nt_syn_9}]
+     ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_8}] [${nt_syn_9}] [${nt_syn_10}]
 
 ${bf}DESCRIPTION${nf}
      The ${nt_syn_1} utility initializes and edits documents, ideal for building an indexed list of notes documents.
@@ -47,10 +48,13 @@ ${bf}DESCRIPTION${nf}
              Open the existing document(s) with the ${uf}num${nf} index (indices).
 
      ${nt_syn_6}
-             Rename the existing document with the ${uf}num${nf} index to ${uf}title${nf} without opening the document. 
+             Rename the existing document with the ${uf}num${nf} index to ${uf}title${nf} without opening the document.
+
+     ${nt_syn_10}
+             Starting from document index ${uf}n${nf}, renumber the consecutive run of documents so that ${uf}n${nf} becomes ${uf}m${nf}, ${uf}n${nf}+1 becomes ${uf}m${nf}+1, and so on, until the end of the consecutive sequence. Documents are renamed in the correct order to avoid collisions. Fails if any target index is already occupied by a document outside the source range.
 
      ${nt_syn_7}
-             Set the ${uf}editor${nf} that ${bf}nt${nf} will use for the current session. The ${uf}editor${nf} can be a command-line command or an application. If ${uf}editor${nf} name contains multiple words, single-quote the name. In effect, this option sets the NT_EDITOR environment variable. The default editor is TextEdit. This option must be called by sourcing rather than executing the ${bf}nt${nf} script, as follows:
+             Set the ${uf}editor${nf} that ${bf}nt${nf} will use for the current session. The ${uf}editor${nf} can be a command-line command or an application. If ${uf}editor${nf} name contains multiple words, single-quote the name. In effect, this option sets the NT_EDITOR environment variable. The default editor is vim. This option must be called by sourcing rather than executing the ${bf}nt${nf} script, as follows:
              
              $ source ${(%):-%x} e ${uf}editor${nf}
 
@@ -61,7 +65,7 @@ ${bf}DESCRIPTION${nf}
              Open the ${bf}${nt_template_name}${nf} document in the current working directory, if there is any.
 
 ${bf}ENVIRONMENT${nf}
-     NT_EDITOR  By default, the editor is set to TextEdit. 
+     NT_EDITOR  By default, the editor is set to vim. 
 
 ${bf}EXIT STATUS${nf}
      The ${bf}nt${nf} utility exits with one of the following values:
@@ -144,7 +148,7 @@ nt_open() {
 if [ -z "$NT_EDITOR" ]; then NT_EDITOR='vim'; fi
 	
 if [ "$#" -eq 0 ]; then
-	printf "usage: ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}]\n"
+	printf "usage: ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_10}]\n"
 	exit 0
 fi
 
@@ -153,7 +157,7 @@ setopt extended_glob 2>/dev/null
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 
-		-h)
+		-h|h)
 			clear
 			printf "${NT_MAN_VAR}"
 			printf '\n'
@@ -291,8 +295,77 @@ while [ "$#" -gt 0 ]; do
 			fi
 			;;
 
+		rn)
+			if [ "$#" -le 2 ]; then
+				printf 'usage: %s\n' "${nt_syn_10}"
+				exit 1
+			fi
+			shift
+			rn_start="$1"
+			shift
+			rn_target="$1"
+			if ! [[ "$rn_start" =~ ^[0-9]+$ ]] || ! [[ "$rn_target" =~ ^[0-9]+$ ]]; then
+				printf 'Both arguments must be positive integers.\n'
+				exit 2
+			fi
+			if [ "$rn_start" -eq "$rn_target" ]; then
+				printf 'Nothing to renumber.\n'
+				exit 0
+			fi
+			# verify starting file exists
+			rn_start_padded="$( printf '%03d' "$rn_start" )"
+			rn_start_doc="$( find * -name "${rn_start_padded}*" -maxdepth 0 2>/dev/null )"
+			if [ ! -f "${rn_start_doc}" ]; then
+				printf 'File with index %s not found.\n' "$rn_start_padded"
+				exit 2
+			fi
+			# find end of consecutive run starting from rn_start
+			rn_end=$rn_start
+			while true; do
+				rn_next=$(( rn_end + 1 ))
+				rn_next_padded="$( printf '%03d' "$rn_next" )"
+				rn_next_doc="$( find * -name "${rn_next_padded}*" -maxdepth 0 2>/dev/null )"
+				if [ -f "${rn_next_doc}" ]; then
+					rn_end=$rn_next
+				else
+					break
+				fi
+			done
+			rn_count=$(( rn_end - rn_start ))
+			# check for collisions in target range
+			for rn_i in $(seq 0 $rn_count); do
+				rn_ti=$(( rn_target + rn_i ))
+				# skip if target is within source range (will be moved)
+				if [ "$rn_ti" -ge "$rn_start" ] && [ "$rn_ti" -le "$rn_end" ]; then
+					continue
+				fi
+				rn_ti_padded="$( printf '%03d' "$rn_ti" )"
+				rn_ti_doc="$( find * -name "${rn_ti_padded}*" -maxdepth 0 2>/dev/null )"
+				if [ -f "${rn_ti_doc}" ]; then
+					printf 'Target index %s already occupied by %s.\n' "$rn_ti_padded" "$rn_ti_doc"
+					exit 2
+				fi
+			done
+			# rename in correct order to avoid collisions
+			if [ "$rn_target" -gt "$rn_start" ]; then
+				rn_seq="$(seq $rn_count -1 0)"
+			else
+				rn_seq="$(seq 0 $rn_count)"
+			fi
+			for rn_i in ${=rn_seq}; do
+				rn_si=$(( rn_start + rn_i ))
+				rn_ti=$(( rn_target + rn_i ))
+				rn_si_padded="$( printf '%03d' "$rn_si" )"
+				rn_ti_padded="$( printf '%03d' "$rn_ti" )"
+				rn_si_doc="$( find * -name "${rn_si_padded}*" -maxdepth 0 )"
+				rn_ti_doc="${rn_ti_padded}${rn_si_doc#${rn_si_padded}}"
+				mv "${rn_si_doc}" "${rn_ti_doc}" \
+					&& printf '%s -> %s\n' "${rn_si_doc}" "${rn_ti_doc}"
+			done
+			;;
+
 		e)
-			shift	
+			shift
 			if [ -z "$1" ]; then
 				printf 'No editor given.\n'
 				exit 2

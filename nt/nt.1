@@ -6,7 +6,7 @@
 .Nd simple notes maintainer
 .Sh SYNOPSIS
 .Nm
-.Op Fl h
+.Op Fl h | Cm h
 .br
 .Op Cm n Op Ar title
 .br
@@ -15,6 +15,8 @@
 .Op Ar num Op Ar ...
 .br
 .Op Cm r Ar num Ar title
+.br
+.Op Cm rn Ar n Ar m
 .br
 .Op Cm e Ar editor
 .br
@@ -50,7 +52,7 @@ in a row to open the specified files all at once.
 .Pp
 Options include:
 .Bl -tag -width indent
-.It Fl h
+.It Fl h | Cm h
 Print help page.
 .It Cm n Op Ar title
 Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by an underscore and a hyphenated version of the
@@ -83,6 +85,19 @@ Rename the existing document with the
 index to
 .Ar title
 without opening the document.
+.It Cm rn Ar n Ar m
+Starting from document index
+.Ar n ,
+renumber the consecutive run of documents so that
+.Ar n
+becomes
+.Ar m ,
+.Ar n Ns +1
+becomes
+.Ar m Ns +1 ,
+and so on, until the end of the consecutive sequence.
+Documents are renamed in the correct order to avoid collisions.
+Fails if any target index is already occupied by a document outside the source range.
 .It Cm e Ar editor
 Set the
 .Ar editor
