@@ -118,13 +118,11 @@ esac
 
 #### Help Page #####
 if [ "$#" -eq 0 ]; then
-	clear
 	printf "\n${CLK_SYN_VAR}\n\n"
 	exit
 fi
 
 if [ "$1" = 'help' ]; then
-	clear
 	printf "${CLK_MAN_VAR}\n\n"
 	if [ -n "$2" ] && [ "$2" = 'error' ]; then
 		printf "${CLK_ERROR_VAR}\n\n"
