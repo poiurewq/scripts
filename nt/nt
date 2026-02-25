@@ -14,6 +14,7 @@ nt_syn_7="${bf}e${nf} ${uf}editor${nf}"
 nt_syn_8="${bf}R${nf}"
 nt_syn_9="${bf}t${nf}"
 nt_syn_10="${bf}rn${nf} ${uf}n${nf} ${uf}m${nf}"
+nt_syn_11="${bf}a${nf}|${bf}ar${nf}"
 
 nt_template_name='nt_template'
 
@@ -22,7 +23,7 @@ ${bf}NAME${nf}
      ${nt_syn_1} - simple notes maintainer
 
 ${bf}SYNOPSIS${nf}
-     ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_8}] [${nt_syn_9}] [${nt_syn_10}]
+     ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_8}] [${nt_syn_9}] [${nt_syn_10}] [${nt_syn_11}]
 
 ${bf}DESCRIPTION${nf}
      The ${nt_syn_1} utility initializes and edits documents, ideal for building an indexed list of notes documents.
@@ -52,6 +53,9 @@ ${bf}DESCRIPTION${nf}
 
      ${nt_syn_10}
              Starting from document index ${uf}n${nf}, renumber the consecutive run of documents so that ${uf}n${nf} becomes ${uf}m${nf}, ${uf}n${nf}+1 becomes ${uf}m${nf}+1, and so on, until the end of the consecutive sequence. Documents are renamed in the correct order to avoid collisions. Fails if any target index is already occupied by a document outside the source range.
+
+     ${nt_syn_11}
+             Show an activity summary of indexed documents grouped by last-modified month. ${bf}a${nf} searches the current directory only; ${bf}ar${nf} searches all subdirectories as well.
 
      ${nt_syn_7}
              Set the ${uf}editor${nf} that ${bf}nt${nf} will use for the current session. The ${uf}editor${nf} can be a command-line command or an application. If ${uf}editor${nf} name contains multiple words, single-quote the name. In effect, this option sets the NT_EDITOR environment variable. The default editor is vim. This option must be called by sourcing rather than executing the ${bf}nt${nf} script, as follows:
@@ -148,7 +152,7 @@ nt_open() {
 if [ -z "$NT_EDITOR" ]; then NT_EDITOR='vim'; fi
 	
 if [ "$#" -eq 0 ]; then
-	printf "usage: ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_10}]\n"
+	printf "usage: ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_10}] [${nt_syn_11}]\n"
 	exit 0
 fi
 
@@ -362,6 +366,26 @@ while [ "$#" -gt 0 ]; do
 				mv "${rn_si_doc}" "${rn_ti_doc}" \
 					&& printf '%s -> %s\n' "${rn_si_doc}" "${rn_ti_doc}"
 			done
+			;;
+
+		a|ar)
+			if [ "$1" = "ar" ]; then
+				nt_files=( **/[0-9][0-9][0-9]*(N.) )
+			else
+				nt_files=( [0-9][0-9][0-9]*(N.) )
+			fi
+			if [ "${#nt_files[@]}" -eq 0 ]; then
+				printf 'No indexed documents found.\n'
+				exit 0
+			fi
+			printf '\nActivity Summary\n================\n\n'
+			stat -f "%Sm" -t "%Y-%m" "${nt_files[@]}" \
+				| sort | uniq -c | sort -k2 \
+				| while read count month; do
+					bar=$(printf '%*s' "$count" '' | tr ' ' '#')
+					printf "  %s  %3d  %s\n" "$month" "$count" "$bar"
+				done
+			printf '\n  Total: %d documents\n\n' "${#nt_files[@]}"
 			;;
 
 		e)

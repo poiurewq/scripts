@@ -23,6 +23,8 @@
 .Op Cm R
 .br
 .Op Cm t
+.br
+.Op Cm a | Cm ar
 .Sh DESCRIPTION
 The
 .Nm
@@ -98,6 +100,12 @@ becomes
 and so on, until the end of the consecutive sequence.
 Documents are renamed in the correct order to avoid collisions.
 Fails if any target index is already occupied by a document outside the source range.
+.It Cm a | Cm ar
+Show an activity summary of indexed documents grouped by last-modified month.
+.Cm a
+searches the current directory only;
+.Cm ar
+searches all subdirectories as well.
 .It Cm e Ar editor
 Set the
 .Ar editor
