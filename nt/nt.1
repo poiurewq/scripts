@@ -39,6 +39,12 @@ If the folder has a template file
 .Ql nt_template. Ns Ar extension ,
 then each new document uses this template's content and
 .Ar extension .
+The template supports the following macros:
+.Cm %DATE
+is replaced with today's date (yyyy-mm-dd), and
+.Cm %TITLE
+is replaced with the title passed to
+.Cm n .
 .Pp
 If
 .Nm

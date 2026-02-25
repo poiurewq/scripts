@@ -28,7 +28,7 @@ ${bf}SYNOPSIS${nf}
 ${bf}DESCRIPTION${nf}
      The ${nt_syn_1} utility initializes and edits documents, ideal for building an indexed list of notes documents.
 
-     By default, the file extension for each new document is the extension of the last numbered document in the folder. If the folder has no numbered documents, ${nt_syn_1} defaults to ${bf}.txt${nf}. If the folder has a template file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then each new document uses this template's content and ${uf}extension${nf}.
+     By default, the file extension for each new document is the extension of the last numbered document in the folder. If the folder has no numbered documents, ${nt_syn_1} defaults to ${bf}.txt${nf}. If the folder has a template file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then each new document uses this template's content and ${uf}extension${nf}. The template supports the following macros: ${bf}%DATE${nf} is replaced with today's date (yyyy-mm-dd), and ${bf}%TITLE${nf} is replaced with the title passed to ${bf}n${nf}.
 
      If ${nt_syn_1} is given a ${uf}title${nf} when creating or renaming a doc, a number of underscores will be inserted between the numeric index and the title portion of the file name based on the same format as the last doc, defaulting to one underscore.
 
@@ -179,6 +179,7 @@ while [ "$#" -gt 0 ]; do
 					shift
 					new_title+=" ${1}"
 				done
+				new_title_raw="${new_title}"
 				new_title="${new_title// /-}"
 				last_doc="$(ls -1 | sort -n | awk 'END{print}')"
 				last_underscores_count="$(count_leading_underscores "$last_doc")"
@@ -190,12 +191,15 @@ while [ "$#" -gt 0 ]; do
 				fi
 			else
 				new_doc="${new_num}"
+				new_title_raw=""
 			fi
 			template_count="$( find . -name "${nt_template_name}.*" -maxdepth 1 | wc -l )"
 			if [ "$template_count" -eq 1 ]; then
 				template_file="$( find . -name "${nt_template_name}.*" -maxdepth 1 )"
 				new_doc+=".${template_file##*.}"
-				cat $template_file >> "$new_doc"
+				sed -e "s|%DATE|$(date '+%Y-%m-%d')|g" \
+					-e "s|%TITLE|${new_title_raw}|g" \
+					"$template_file" >> "$new_doc"
 			elif [ "$template_count" -gt 1 ]; then
 				printf "Too many nt template files in this folder.\n"
 				exit 5
