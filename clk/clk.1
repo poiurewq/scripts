@@ -63,7 +63,7 @@ ago at which the clock in happened.
 Clock automatically calculates the number of minutes in the session and records it to the log.
 Clock always records time in the locally-set time zone.
 Behind the scenes, clocking in adds a temporary record of the starting time and tag for a session in the format
-.Ql started<tab>start time<tab>tag<tab>paused minutes<tab>paused time
+.Ql started<tab>start time<tab>tag<tab>paused seconds<tab>paused epoch
 where
 .Ql started
 is simply a keyword and <tab> is a tab character.
@@ -140,13 +140,13 @@ Pause or resume the current session.
 Behind the scenes,
 .Cm pause
 updates the
-.Ql paused time
-field to the current timestamp, while
+.Ql paused epoch
+field to the current epoch timestamp, while
 .Cm resume
 clears the
-.Ql paused time
+.Ql paused epoch
 field and updates the
-.Ql paused minutes
+.Ql paused seconds
 field as appropriate.
 .It Cm log
 Open the clock log file itself.

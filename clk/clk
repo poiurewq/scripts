@@ -71,7 +71,7 @@ DESCRIPTION
              Print help page. Optionally add 'error' to see the error codes.
    
      ${clk_synopsis_line3}
-             Clock in to work labeled with a single-word <tag>. The <tag> is of the form <top>[.<nextLevel>*] where <top> is a top-level tag and <nextLevel> are next-level tags under the <top> tag. At summary time (see 'past' option), <top> tags are summarized in a dedicated section. Optionally specify the number of <minutes> ago at which the clock in happened. Clock automatically calculates the number of minutes in the session and records it to the log. Clock always records time in the locally-set time zone. Behind the scenes, clocking in adds a temporary record of the starting time and tag for a session in the format 'started<tab>start time<tab>tag<tab>paused minutes<tab>paused time' where 'started' is simply a keyword and <tab> is a tab character. 
+             Clock in to work labeled with a single-word <tag>. The <tag> is of the form <top>[.<nextLevel>*] where <top> is a top-level tag and <nextLevel> are next-level tags under the <top> tag. At summary time (see 'past' option), <top> tags are summarized in a dedicated section. Optionally specify the number of <minutes> ago at which the clock in happened. Clock automatically calculates the number of minutes in the session and records it to the log. Clock always records time in the locally-set time zone. Behind the scenes, clocking in adds a temporary record of the starting time and tag for a session in the format 'started<tab>start time<tab>tag<tab>paused seconds<tab>paused epoch' where 'started' is simply a keyword and <tab> is a tab character.
 
      ${clk_synopsis_line4}
              Clock out from work labeled with a single-word <tag>. See 'in' option above for the <tag> format. Optionally specify either the number of <minutes> ago or the <timestamp> at which the session ended. The <timestamp> should be in the format '${clk_user_facing_fmt}'. Optionally specify what you worked on by typing 'on' followed by a description of what you worked on. Note that the 'on' suboption must be the last suboption passed in, as all subsequent words are parsed as a part of the description. Clock automatically calculates the number of minutes in the session and records it to the log. The clock-in record is overridden upon clocking out by a permanent record of the format '${CLK_HEADER}'.
@@ -89,7 +89,7 @@ DESCRIPTION
              Remove the last session record, whether incomplete or complete, and see what was removed. A synonym for 'remove' is 'pop'.
    
      ${clk_synopsis_line9}
-             Pause or resume the current session. Behind the scenes, 'pause' updates the 'paused time' field to the current timestamp, while 'resume' clears the 'paused time' field and updates the 'paused minutes' field as appropriate.
+             Pause or resume the current session. Behind the scenes, 'pause' updates the 'paused epoch' field to the current epoch timestamp, while 'resume' clears the 'paused epoch' field and updates the 'paused seconds' field as appropriate.
 
      ${clk_synopsis_line10}
              Open the clock log file itself. It is helpful for manually editing session details. The clock log records work sessions as rows. Its implicit header is '${CLK_HEADER}'.
