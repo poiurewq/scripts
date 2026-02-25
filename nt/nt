@@ -209,7 +209,7 @@ while [ "$#" -gt 0 ]; do
 				else
 					new_doc+=".$(last_ext_getter)"
 				fi
-				new_time="$(date '+%Y%m%d-%H%M')"
+				new_time="$(date '+%Y.%m.%d-%H:%M')"
 				printf "created=${new_time}\n" >> "${new_doc}"
 				printf '\n\n\n' >> "${new_doc}"
 			fi
