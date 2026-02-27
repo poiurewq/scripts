@@ -374,9 +374,9 @@ while [ "$#" -gt 0 ]; do
 
 		a|ar)
 			if [ "$1" = "ar" ]; then
-				nt_files=( **/[0-9][0-9][0-9]*(N.) )
+				nt_files=( **/[0-9][0-9][0-9](_*|.?*)(N.) )
 			else
-				nt_files=( [0-9][0-9][0-9]*(N.) )
+				nt_files=( [0-9][0-9][0-9](_*|.?*)(N.) )
 			fi
 			if [ "${#nt_files[@]}" -eq 0 ]; then
 				printf 'No indexed documents found.\n'
