@@ -6,7 +6,7 @@
 .Nd clock in & out of work
 .Sh SYNOPSIS
 .Nm
-.Op Cm help Op Cm error
+.Op Cm help
 .br
 .Op Cm in Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp
 .br
@@ -27,17 +27,26 @@
 .Op Cm last | l
 .br
 .Op Cm past Brq Cm dtn | day | week | Ar number Brq Cm days | weeks Op Cm minus Ar number Cm hour(s)
+.br
+.Op Cm alias
 .Sh DESCRIPTION
 .Nm
 lets you clock in and out of work, tracking how many minutes you've spent working each day.
+.Nm
+is designed for minimal overhead so that you can focus on work and still accurately track your time.
+Consistent with this mission,
+.Nm
+offers an alias
+.Sq c
+that you can type even more quickly for maximal efficiency.
+Use
+.Ql clk alias
+to inject it into your shell rc file.
 .Pp
 Options include:
 .Bl -tag -width indent
-.It Cm help Op Cm error
-Print help page.
-Optionally add
-.Cm error
-to see the error codes.
+.It Cm help
+Print this help page.
 .It Cm in Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp
 Clock in to work labeled with a single-word
 .Ar tag .
@@ -170,6 +179,25 @@ is given, the number is assumed to be 1.
 Optionally specify the starting point of the look-back summary via the
 .Cm minus Ar number Cm hour(s)
 suboption.
+.It Cm alias
+Inject an alias
+.Sq c
+for
+.Nm
+into the current shell's rc file.
+Detects the default shell and appends
+.Ql alias c='clk'
+to
+.Pa ~/.bashrc
+(bash) or
+.Pa ~/.zshrc
+(zsh).
+Only bash and zsh are supported.
+If
+.Sq c
+is already defined as a command, function, or alias in the environment,
+.Nm
+will report the conflict and exit.
 .El
 .Sh EXIT STATUS
 .Bl -tag -width indent
