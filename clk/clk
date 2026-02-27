@@ -868,12 +868,12 @@ if [ "$clk_subfunction" = 'alias' ]; then
 			;;
 	esac
 
-	# Check if 'c' is already defined in the environment
-	existing_c="$(command -v c 2>/dev/null)"
+	# Check if 'c' is already defined (alias, function, or executable)
+	# Spawn an interactive shell so aliases from rc files and sourced configs are visible
+	existing_c="$("$SHELL" -ic 'command -v c' 2>/dev/null)"
 	if [ -n "$existing_c" ]; then
-		# Check if it already points to clk
 		case "$existing_c" in
-			*clk)
+			*clk|*clk\'|*clk\")
 				printf "'c' already points to clk.\\n"
 				exit 0
 				;;
@@ -882,13 +882,6 @@ if [ "$clk_subfunction" = 'alias' ]; then
 				exit 1
 				;;
 		esac
-	fi
-
-	# Check if alias already exists in rc file
-	if [ -f "$clk_alias_rc" ] && grep -q "alias c='clk'" "$clk_alias_rc"; then
-		printf "Alias already present in %s\\n" "$clk_alias_rc"
-		printf "\\nTo reload, run:\\n  source %s\\n\\n" "$clk_alias_rc"
-		exit 0
 	fi
 
 	# Append alias to rc file
