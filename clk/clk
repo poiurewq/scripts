@@ -885,7 +885,7 @@ if [ "$clk_subfunction" = 'alias' ]; then
 	fi
 
 	# Append alias to rc file
-	printf "\\nalias c='clk'\\n" >> "$clk_alias_rc" || exit 2
+	printf "\\nalias c='clk' # Added by clk\\n" >> "$clk_alias_rc" || exit 2
 
 	printf "\\nAdded alias c='clk' to %s\\n" "$clk_alias_rc"
 	printf "\\nTo enable it now, run:\\n  source %s\\n\\n" "$clk_alias_rc"
