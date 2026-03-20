@@ -14,8 +14,8 @@ set -u
 # Constants & format definitions
 #####################################################################
 
-CLK_FMT='%Y.%m.%d-%H:%M'
-CLK_USER_FMT='yyyy.mm.dd-HH:MM'
+CLK_FMT='%Y-%m-%dT%H:%M:%S'
+CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS'
 CLK_TAB='	'
 CLK_VERSION_MARKER='#clk-v2'
 
@@ -82,7 +82,7 @@ clk__die() {
 # No case "$CLK_OS" appears in business logic.
 
 # clk__to_epoch(timestamp) → epoch
-# Input:  timestamp in CLK_FMT (e.g., "2026.03.19-18:45")
+# Input:  timestamp in CLK_FMT (e.g., "2026-03-19T18:45:00")
 # Output: Unix epoch seconds on stdout
 # Exit 4 on failure, with captured date(1) stderr in the message.
 clk__to_epoch() {
@@ -295,7 +295,7 @@ clk__validate_tag() {
 # Exits with error if ts doesn't match CLK_FMT regex.
 clk__validate_timestamp() {
     local ts="$1"
-    if ! printf '%s' "$ts" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{2}:[0-9]{2}$'; then
+    if ! printf '%s' "$ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'; then
         clk__die 1 "Invalid timestamp '$ts'. Expected format: ${CLK_USER_FMT}"
     fi
 }

@@ -146,7 +146,7 @@ test_die_upstream_detail() {
 
 test_to_epoch_valid() {
     local epoch
-    epoch="$(clk__to_epoch "2026.01.01-00:00")"
+    epoch="$(clk__to_epoch "2026-01-01T00:00:00")"
     # Just check it's a reasonable epoch (non-empty integer)
     if ! printf '%s' "$epoch" | grep -Eq '^[0-9]+$'; then
         printf 'FAIL: clk__to_epoch returned non-integer: "%s"\n' "$epoch"
@@ -161,7 +161,7 @@ test_to_epoch_invalid() {
 }
 
 test_epoch_roundtrip() {
-    local ts="2026.03.19-14:30"
+    local ts="2026-03-19T14:30:00"
     local epoch result
     epoch="$(clk__to_epoch "$ts")"
     result="$(clk__from_epoch "$epoch")"
@@ -169,7 +169,7 @@ test_epoch_roundtrip() {
 }
 
 test_epoch_roundtrip_midnight() {
-    local ts="2026.01.01-00:00"
+    local ts="2026-01-01T00:00:00"
     local epoch result
     epoch="$(clk__to_epoch "$ts")"
     result="$(clk__from_epoch "$epoch")"
@@ -177,7 +177,7 @@ test_epoch_roundtrip_midnight() {
 }
 
 test_epoch_roundtrip_end_of_day() {
-    local ts="2026.12.31-23:59"
+    local ts="2026-12-31T23:59:00"
     local epoch result
     epoch="$(clk__to_epoch "$ts")"
     result="$(clk__from_epoch "$epoch")"
@@ -202,7 +202,7 @@ test_now_epoch_is_integer() {
 test_now_fmt_matches_format() {
     local ts
     ts="$(clk__now_fmt)"
-    if ! printf '%s' "$ts" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{2}:[0-9]{2}$'; then
+    if ! printf '%s' "$ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'; then
         printf 'FAIL: clk__now_fmt returned invalid format: "%s"\n' "$ts"
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
         return 1
@@ -233,18 +233,26 @@ test_now_roundtrip() {
 
 test_resolve_time_at() {
     local result
-    result="$(clk__resolve_time "2026.03.19-10:00" "")"
-    clk_test__assert_equals "2026.03.19-10:00" "$result" "resolve_time with at value"
+    result="$(clk__resolve_time "2026-03-19T10:00:00" "")"
+    clk_test__assert_equals "2026-03-19T10:00:00" "$result" "resolve_time with at value"
 }
 
 test_resolve_time_minus() {
     # resolve_time with minus should return now - N minutes
-    local result now_epoch expected_epoch expected_ts
+    # Use epoch comparison with 2-second tolerance to avoid race conditions
+    local result now_epoch expected_epoch result_epoch
     now_epoch="$(clk__now_epoch)"
     expected_epoch=$(( now_epoch - 30 * 60 ))
-    expected_ts="$(clk__from_epoch "$expected_epoch")"
     result="$(clk__resolve_time "" "30")"
-    clk_test__assert_equals "$expected_ts" "$result" "resolve_time with minus 30"
+    result_epoch="$(clk__to_epoch "$result")"
+    local diff=$(( result_epoch - expected_epoch ))
+    if [ "$diff" -lt 0 ]; then diff=$(( -diff )); fi
+    if [ "$diff" -gt 2 ]; then
+        printf 'FAIL: resolve_time with minus 30: off by %d seconds\n' "$diff"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
 }
 
 test_resolve_time_now() {
@@ -258,8 +266,8 @@ test_resolve_time_now() {
 test_resolve_time_at_takes_precedence() {
     # If both at and minus are set, at wins
     local result
-    result="$(clk__resolve_time "2026.03.19-10:00" "30")"
-    clk_test__assert_equals "2026.03.19-10:00" "$result" "resolve_time: at takes precedence over minus"
+    result="$(clk__resolve_time "2026-03-19T10:00:00" "30")"
+    clk_test__assert_equals "2026-03-19T10:00:00" "$result" "resolve_time: at takes precedence over minus"
 }
 
 #####################################################################
@@ -308,11 +316,11 @@ test_fmt_duration_large() {
 
 test_read_line_done_record() {
     local tab=$'\t'
-    local line="done${tab}2026.03.19-09:00${tab}2026.03.19-10:00${tab}work${tab}3600${tab}0${tab}${tab}wrote code"
+    local line="done${tab}2026-03-19T09:00:00${tab}2026-03-19T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}wrote code"
     clk__read_line "$line"
     clk_test__assert_equals "done" "$CLK_F1" "read_line F1=status" &&
-    clk_test__assert_equals "2026.03.19-09:00" "$CLK_F2" "read_line F2=start" &&
-    clk_test__assert_equals "2026.03.19-10:00" "$CLK_F3" "read_line F3=end" &&
+    clk_test__assert_equals "2026-03-19T09:00:00" "$CLK_F2" "read_line F2=start" &&
+    clk_test__assert_equals "2026-03-19T10:00:00" "$CLK_F3" "read_line F3=end" &&
     clk_test__assert_equals "work" "$CLK_F4" "read_line F4=tag" &&
     clk_test__assert_equals "3600" "$CLK_F5" "read_line F5=length" &&
     clk_test__assert_equals "0" "$CLK_F6" "read_line F6=break" &&
@@ -322,10 +330,10 @@ test_read_line_done_record() {
 
 test_read_line_active_record() {
     local tab=$'\t'
-    local line="active${tab}2026.03.19-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local line="active${tab}2026-03-19T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
     clk__read_line "$line"
     clk_test__assert_equals "active" "$CLK_F1" "read_line active F1=status" &&
-    clk_test__assert_equals "2026.03.19-09:00" "$CLK_F2" "read_line active F2=start" &&
+    clk_test__assert_equals "2026-03-19T09:00:00" "$CLK_F2" "read_line active F2=start" &&
     clk_test__assert_equals "" "$CLK_F3" "read_line active F3=end (empty)" &&
     clk_test__assert_equals "work" "$CLK_F4" "read_line active F4=tag" &&
     clk_test__assert_equals "" "$CLK_F5" "read_line active F5=length (empty)" &&
@@ -338,18 +346,18 @@ test_read_line_active_record() {
 
 test_fmt_record_done_basic() {
     local tab=$'\t'
-    local line="done${tab}2026.03.19-09:00${tab}2026.03.19-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local line="done${tab}2026-03-19T09:00:00${tab}2026-03-19T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
     local result
     result="$(clk__fmt_record "$line")"
     clk_test__assert_output_contains "work" printf '%s' "$result" &&
-    clk_test__assert_output_contains "2026.03.19-09:00" printf '%s' "$result" &&
-    clk_test__assert_output_contains "2026.03.19-10:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "2026-03-19T09:00:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "2026-03-19T10:00:00" printf '%s' "$result" &&
     clk_test__assert_output_contains "1h 0m" printf '%s' "$result"
 }
 
 test_fmt_record_done_with_break() {
     local tab=$'\t'
-    local line="done${tab}2026.03.19-09:00${tab}2026.03.19-10:30${tab}work${tab}4800${tab}600${tab}${tab}"
+    local line="done${tab}2026-03-19T09:00:00${tab}2026-03-19T10:30:00${tab}work${tab}4800${tab}600${tab}${tab}"
     local result
     result="$(clk__fmt_record "$line")"
     clk_test__assert_output_contains "(break: 10m)" printf '%s' "$result"
@@ -357,7 +365,7 @@ test_fmt_record_done_with_break() {
 
 test_fmt_record_done_with_description() {
     local tab=$'\t'
-    local line="done${tab}2026.03.19-09:00${tab}2026.03.19-10:00${tab}work${tab}3600${tab}0${tab}${tab}wrote tests"
+    local line="done${tab}2026-03-19T09:00:00${tab}2026-03-19T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}wrote tests"
     local result
     result="$(clk__fmt_record "$line")"
     clk_test__assert_output_contains "wrote tests" printf '%s' "$result"
@@ -365,11 +373,11 @@ test_fmt_record_done_with_description() {
 
 test_fmt_record_active_basic() {
     local tab=$'\t'
-    local line="active${tab}2026.03.19-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local line="active${tab}2026-03-19T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
     local result
     result="$(clk__fmt_record "$line")"
     clk_test__assert_output_contains "work" printf '%s' "$result" &&
-    clk_test__assert_output_contains "started at 2026.03.19-09:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "started at 2026-03-19T09:00:00" printf '%s' "$result" &&
     clk_test__assert_output_contains "(active" printf '%s' "$result"
 }
 
@@ -412,7 +420,7 @@ test_validate_tag_with_tab() {
 #####################################################################
 
 test_validate_timestamp_valid() {
-    clk_test__assert_exit 0 clk__validate_timestamp "2026.03.19-14:30"
+    clk_test__assert_exit 0 clk__validate_timestamp "2026-03-19T14:30:00"
 }
 
 test_validate_timestamp_invalid_format() {
@@ -476,7 +484,7 @@ test_save_undo_creates_file() {
 test_save_undo_matches_log() {
     # Add a line to the log first
     local tab=$'\t'
-    clk__append_line "done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
     clk__save_undo
     local log_content undo_content
     log_content="$(cat "$CLK_LOG")"
@@ -502,7 +510,7 @@ test_save_undo_clears_redo() {
 
 test_append_line_basic() {
     local tab=$'\t'
-    local record="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local record="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$record"
     local last_line
     last_line="$(tail -1 "$CLK_LOG")"
@@ -511,8 +519,8 @@ test_append_line_basic() {
 
 test_append_line_preserves_existing() {
     local tab=$'\t'
-    local record1="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
-    local record2="done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}play${tab}3600${tab}0${tab}${tab}"
+    local record1="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local record2="done${tab}2026-01-01T10:00:00${tab}2026-01-01T11:00:00${tab}play${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$record1"
     clk__append_line "$record2"
     # First line should still be version marker
@@ -531,8 +539,8 @@ test_append_line_preserves_existing() {
 
 test_replace_line_basic() {
     local tab=$'\t'
-    local original="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
-    local replacement="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}play${tab}3600${tab}0${tab}${tab}"
+    local original="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local replacement="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}play${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$original"
     clk__replace_line 2 "$replacement"
     local line
@@ -542,13 +550,13 @@ test_replace_line_basic() {
 
 test_replace_line_preserves_other_lines() {
     local tab=$'\t'
-    local line1="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}a${tab}3600${tab}0${tab}${tab}"
-    local line2="done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}b${tab}3600${tab}0${tab}${tab}"
-    local line3="done${tab}2026.01.01-11:00${tab}2026.01.01-12:00${tab}c${tab}3600${tab}0${tab}${tab}"
+    local line1="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}a${tab}3600${tab}0${tab}${tab}"
+    local line2="done${tab}2026-01-01T10:00:00${tab}2026-01-01T11:00:00${tab}b${tab}3600${tab}0${tab}${tab}"
+    local line3="done${tab}2026-01-01T11:00:00${tab}2026-01-01T12:00:00${tab}c${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$line1"
     clk__append_line "$line2"
     clk__append_line "$line3"
-    local replacement="done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}REPLACED${tab}3600${tab}0${tab}${tab}"
+    local replacement="done${tab}2026-01-01T10:00:00${tab}2026-01-01T11:00:00${tab}REPLACED${tab}3600${tab}0${tab}${tab}"
     clk__replace_line 3 "$replacement"
     # Line 2 (first data line) should be unchanged
     local got
@@ -565,8 +573,8 @@ test_replace_line_preserves_other_lines() {
 
 test_delete_line_basic() {
     local tab=$'\t'
-    local line1="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}a${tab}3600${tab}0${tab}${tab}"
-    local line2="done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}b${tab}3600${tab}0${tab}${tab}"
+    local line1="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}a${tab}3600${tab}0${tab}${tab}"
+    local line2="done${tab}2026-01-01T10:00:00${tab}2026-01-01T11:00:00${tab}b${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$line1"
     clk__append_line "$line2"
     # Delete line 2 (first data line)
@@ -582,7 +590,7 @@ test_delete_line_basic() {
 
 test_delete_line_last() {
     local tab=$'\t'
-    local line1="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}a${tab}3600${tab}0${tab}${tab}"
+    local line1="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}a${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$line1"
     clk__delete_line 2
     local count
@@ -603,7 +611,7 @@ test_find_active_none() {
 
 test_find_active_one() {
     local tab=$'\t'
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
     local lineno
     lineno="$(clk__find_active)"
     clk_test__assert_equals "2" "$lineno" "find_active returns correct line number"
@@ -611,9 +619,9 @@ test_find_active_one() {
 
 test_find_active_multiple() {
     local tab=$'\t'
-    clk__append_line "done${tab}2026.01.01-08:00${tab}2026.01.01-09:00${tab}old${tab}3600${tab}0${tab}${tab}"
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
-    clk__append_line "active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    clk__append_line "done${tab}2026-01-01T08:00:00${tab}2026-01-01T09:00:00${tab}old${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:30:00${tab}${tab}play${tab}${tab}0${tab}${tab}"
     local lines
     lines="$(clk__find_active)"
     local count
@@ -623,8 +631,8 @@ test_find_active_multiple() {
 
 test_find_active_by_tag() {
     local tab=$'\t'
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
-    clk__append_line "active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:30:00${tab}${tab}play${tab}${tab}0${tab}${tab}"
     local lineno
     lineno="$(clk__find_active "play")"
     clk_test__assert_equals "3" "$lineno" "find_active by tag returns correct line"
@@ -632,7 +640,7 @@ test_find_active_by_tag() {
 
 test_find_active_by_tag_not_found() {
     local tab=$'\t'
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
     local result=0
     clk__find_active "nope" || result=$?
     clk_test__assert_equals "1" "$result" "find_active returns 1 for missing tag"
@@ -640,7 +648,7 @@ test_find_active_by_tag_not_found() {
 
 test_find_active_skips_done() {
     local tab=$'\t'
-    clk__append_line "done${tab}2026.01.01-08:00${tab}2026.01.01-09:00${tab}old${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "done${tab}2026-01-01T08:00:00${tab}2026-01-01T09:00:00${tab}old${tab}3600${tab}0${tab}${tab}"
     local result=0
     clk__find_active || result=$?
     clk_test__assert_equals "1" "$result" "find_active ignores done records"
@@ -652,7 +660,7 @@ test_find_active_skips_done() {
 
 test_insert_before_active_no_active() {
     local tab=$'\t'
-    local done_rec="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local done_rec="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
     clk__insert_before_active "$done_rec"
     local last_line
     last_line="$(tail -1 "$CLK_LOG")"
@@ -661,8 +669,8 @@ test_insert_before_active_no_active() {
 
 test_insert_before_active_with_active() {
     local tab=$'\t'
-    local active_rec="active${tab}2026.01.01-10:00${tab}${tab}play${tab}${tab}0${tab}${tab}"
-    local done_rec="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local active_rec="active${tab}2026-01-01T10:00:00${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    local done_rec="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$active_rec"
     clk__insert_before_active "$done_rec"
     # done record should be at line 2, active at line 3
@@ -675,9 +683,9 @@ test_insert_before_active_with_active() {
 
 test_insert_before_active_multiple_active() {
     local tab=$'\t'
-    local active1="active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
-    local active2="active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
-    local done_rec="done${tab}2026.01.01-08:00${tab}2026.01.01-09:00${tab}old${tab}3600${tab}0${tab}${tab}"
+    local active1="active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local active2="active${tab}2026-01-01T09:30:00${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    local done_rec="done${tab}2026-01-01T08:00:00${tab}2026-01-01T09:00:00${tab}old${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$active1"
     clk__append_line "$active2"
     clk__insert_before_active "$done_rec"
@@ -693,9 +701,9 @@ test_insert_before_active_multiple_active() {
 
 test_insert_before_active_done_then_active() {
     local tab=$'\t'
-    local existing_done="done${tab}2026.01.01-07:00${tab}2026.01.01-08:00${tab}early${tab}3600${tab}0${tab}${tab}"
-    local active_rec="active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
-    local new_done="done${tab}2026.01.01-08:00${tab}2026.01.01-09:00${tab}mid${tab}3600${tab}0${tab}${tab}"
+    local existing_done="done${tab}2026-01-01T07:00:00${tab}2026-01-01T08:00:00${tab}early${tab}3600${tab}0${tab}${tab}"
+    local active_rec="active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local new_done="done${tab}2026-01-01T08:00:00${tab}2026-01-01T09:00:00${tab}mid${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$existing_done"
     clk__append_line "$active_rec"
     clk__insert_before_active "$new_done"
@@ -715,7 +723,7 @@ test_insert_before_active_done_then_active() {
 
 test_require_active_tag_explicit() {
     local tab=$'\t'
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
     clk__require_active_tag "work"
     clk_test__assert_equals "work" "$CLK_ACTIVE_TAG" "require_active_tag: explicit tag" &&
     clk_test__assert_equals "2" "$CLK_ACTIVE_LINE" "require_active_tag: explicit line"
@@ -723,7 +731,7 @@ test_require_active_tag_explicit() {
 
 test_require_active_tag_implicit_single() {
     local tab=$'\t'
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
     clk__require_active_tag ""
     clk_test__assert_equals "work" "$CLK_ACTIVE_TAG" "require_active_tag: inferred tag" &&
     clk_test__assert_equals "2" "$CLK_ACTIVE_LINE" "require_active_tag: inferred line"
@@ -739,22 +747,22 @@ test_require_active_tag_no_active_message() {
 
 test_require_active_tag_ambiguous() {
     local tab=$'\t'
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
-    clk__append_line "active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:30:00${tab}${tab}play${tab}${tab}0${tab}${tab}"
     clk_test__assert_exit 1 clk__require_active_tag ""
 }
 
 test_require_active_tag_ambiguous_lists_tags() {
     local tab=$'\t'
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
-    clk__append_line "active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:30:00${tab}${tab}play${tab}${tab}0${tab}${tab}"
     clk_test__assert_output_contains "work" clk__require_active_tag "" &&
     clk_test__assert_output_contains "play" clk__require_active_tag ""
 }
 
 test_require_active_tag_wrong_tag() {
     local tab=$'\t'
-    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T09:00:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
     clk_test__assert_exit 5 clk__require_active_tag "nope"
 }
 
@@ -764,7 +772,7 @@ test_require_active_tag_wrong_tag() {
 
 test_get_line_basic() {
     local tab=$'\t'
-    local record="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local record="done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
     clk__append_line "$record"
     local got
     got="$(clk__get_line 2)"
@@ -785,9 +793,9 @@ test_record_count_empty() {
 
 test_record_count_with_records() {
     local tab=$'\t'
-    clk__append_line "done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}a${tab}3600${tab}0${tab}${tab}"
-    clk__append_line "done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}b${tab}3600${tab}0${tab}${tab}"
-    clk__append_line "active${tab}2026.01.01-11:00${tab}${tab}c${tab}${tab}0${tab}${tab}"
+    clk__append_line "done${tab}2026-01-01T09:00:00${tab}2026-01-01T10:00:00${tab}a${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "done${tab}2026-01-01T10:00:00${tab}2026-01-01T11:00:00${tab}b${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026-01-01T11:00:00${tab}${tab}c${tab}${tab}0${tab}${tab}"
     local count
     count="$(clk__record_count)"
     clk_test__assert_equals "3" "$count" "record_count counts data lines"
@@ -846,12 +854,12 @@ test_ensure_log_idempotent() {
 #####################################################################
 
 test_in_basic() {
-    "$CLK_SCRIPT" in foo at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_log_line 1 '^active	2026.01.01-09:00		foo		0		$'
+    "$CLK_SCRIPT" in foo at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^active	2026-01-01T09:00:00		foo		0		$'
 }
 
 test_in_with_description() {
-    "$CLK_SCRIPT" in foo at 2026.01.01-09:00 on doing stuff >/dev/null 2>&1
+    "$CLK_SCRIPT" in foo at 2026-01-01T09:00:00 on doing stuff >/dev/null 2>&1
     clk_test__assert_log_line 1 'doing stuff$'
 }
 
@@ -862,22 +870,22 @@ test_in_with_minus() {
 }
 
 test_in_duplicate_tag() {
-    "$CLK_SCRIPT" in foo at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_exit 5 "$CLK_SCRIPT" in foo at 2026.01.01-10:00
+    "$CLK_SCRIPT" in foo at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" in foo at 2026-01-01T10:00:00
 }
 
 test_in_duplicate_tag_message() {
-    "$CLK_SCRIPT" in foo at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "already has an active session" "$CLK_SCRIPT" in foo at 2026.01.01-10:00
+    "$CLK_SCRIPT" in foo at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "already has an active session" "$CLK_SCRIPT" in foo at 2026-01-01T10:00:00
 }
 
 test_in_allows_different_tag() {
-    "$CLK_SCRIPT" in foo at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_exit 0 "$CLK_SCRIPT" in bar at 2026.01.01-09:30
+    "$CLK_SCRIPT" in foo at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" in bar at 2026-01-01T09:30:00
 }
 
 test_in_numeric_tag_rejected() {
-    clk_test__assert_exit 1 "$CLK_SCRIPT" in 123 at 2026.01.01-09:00
+    clk_test__assert_exit 1 "$CLK_SCRIPT" in 123 at 2026-01-01T09:00:00
 }
 
 test_in_missing_tag() {
@@ -889,7 +897,7 @@ test_in_bad_timestamp() {
 }
 
 test_in_creates_undo() {
-    "$CLK_SCRIPT" in foo at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in foo at 2026-01-01T09:00:00 >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
         printf 'FAIL: .undo file not created by clk in\n'
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
@@ -900,10 +908,10 @@ test_in_creates_undo() {
 
 test_in_confirmation_output() {
     local output
-    output="$("$CLK_SCRIPT" in foo at 2026.01.01-09:00 2>&1)"
+    output="$("$CLK_SCRIPT" in foo at 2026-01-01T09:00:00 2>&1)"
     clk_test__assert_output_contains "Started session" printf '%s' "$output" &&
     clk_test__assert_output_contains "foo" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026.01.01-09:00" printf '%s' "$output"
+    clk_test__assert_output_contains "2026-01-01T09:00:00" printf '%s' "$output"
 }
 
 #####################################################################
@@ -911,75 +919,75 @@ test_in_confirmation_output() {
 #####################################################################
 
 test_out_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     # Should have a done record: 1h = 3600s
-    clk_test__assert_log_line 1 '^done	2026.01.01-09:00	2026.01.01-10:00	work	3600	0	'
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:00:00	work	3600	0	'
 }
 
 test_out_implicit_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_exit 0 "$CLK_SCRIPT" out at 2026.01.01-10:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" out at 2026-01-01T10:00:00
 }
 
 test_out_implicit_tag_correct_record() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out at 2026-01-01T10:00:00 >/dev/null 2>&1
     clk_test__assert_log_line 1 'work	3600'
 }
 
 test_out_ambiguous_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
-    clk_test__assert_exit 1 "$CLK_SCRIPT" out at 2026.01.01-10:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" out at 2026-01-01T10:00:00
 }
 
 test_out_ambiguous_tag_message() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
-    clk_test__assert_output_contains "Multiple active sessions" "$CLK_SCRIPT" out at 2026.01.01-10:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "Multiple active sessions" "$CLK_SCRIPT" out at 2026-01-01T10:00:00
 }
 
 test_out_wrong_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_exit 5 "$CLK_SCRIPT" out nope at 2026.01.01-10:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" out nope at 2026-01-01T10:00:00
 }
 
 test_out_no_active_sessions() {
-    clk_test__assert_exit 5 "$CLK_SCRIPT" out work at 2026.01.01-10:00
+    clk_test__assert_exit 5 "$CLK_SCRIPT" out work at 2026-01-01T10:00:00
 }
 
 test_out_description_override() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 on old desc >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 on new desc >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 on old desc >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 on new desc >/dev/null 2>&1
     clk_test__assert_log_line 1 'new desc$'
 }
 
 test_out_keeps_in_description() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 on original desc >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 on original desc >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     clk_test__assert_log_line 1 'original desc$'
 }
 
 test_out_length_calculation() {
     # 2h session = 7200s
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-11:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T11:00:00 >/dev/null 2>&1
     clk_test__assert_log_line 1 '7200	0'
 }
 
 test_out_with_minus() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work minus 0 >/dev/null 2>&1
     # Should succeed (ends at now)
-    clk_test__assert_log_line 1 '^done	2026.01.01-09:00'
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00'
 }
 
 test_out_ordering_with_remaining_active() {
     # After out, done record should be before remaining active records
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     # Line 2 should be done (work), line 3 should be active (play)
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local line2 line3
@@ -999,10 +1007,10 @@ test_out_ordering_with_remaining_active() {
 }
 
 test_out_confirmation_output() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "Recorded session" "$CLK_SCRIPT" out work at 2026.01.01-10:00 &&
-    "$CLK_SCRIPT" in play at 2026.01.01-10:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "1h 0m" "$CLK_SCRIPT" out play at 2026.01.01-11:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "Recorded session" "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 &&
+    "$CLK_SCRIPT" in play at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "1h 0m" "$CLK_SCRIPT" out play at 2026-01-01T11:00:00
 }
 
 #####################################################################
@@ -1014,23 +1022,23 @@ test_status_no_active() {
 }
 
 test_status_shows_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "work" "$CLK_SCRIPT" status
 }
 
 test_status_shows_start_time() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "2026.01.01-09:00" "$CLK_SCRIPT" status
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "2026-01-01T09:00:00" "$CLK_SCRIPT" status
 }
 
 test_status_shows_active() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "active" "$CLK_SCRIPT" status
 }
 
 test_status_multiple_sessions() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" status 2>&1)"
     if ! printf '%s' "$output" | grep -q "work" || ! printf '%s' "$output" | grep -q "play"; then
@@ -1042,13 +1050,13 @@ test_status_multiple_sessions() {
 }
 
 test_status_not_shown_after_out() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "No active sessions" "$CLK_SCRIPT" status
 }
 
 test_status_alias_s() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "work" "$CLK_SCRIPT" s
 }
 
@@ -1057,8 +1065,8 @@ test_status_alias_s() {
 #####################################################################
 
 test_last_default() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last 2>&1)"
     local line_count
@@ -1067,12 +1075,12 @@ test_last_default() {
 }
 
 test_last_n() {
-    "$CLK_SCRIPT" in a at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out b at 2026.01.01-11:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in c at 2026.01.01-11:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out c at 2026.01.01-12:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in c at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out c at 2026-01-01T12:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last 2 2>&1)"
     local line_count
@@ -1081,14 +1089,14 @@ test_last_n() {
 }
 
 test_last_includes_active() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "active" "$CLK_SCRIPT" last
 }
 
 test_last_shows_index() {
-    "$CLK_SCRIPT" in a at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last 2 2>&1)"
     if ! printf '%s' "$output" | grep -q '\-1'; then
@@ -1105,8 +1113,8 @@ test_last_shows_index() {
 }
 
 test_last_alias_l() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "work" "$CLK_SCRIPT" l
 }
 
@@ -1119,9 +1127,9 @@ test_last_empty_log() {
 #####################################################################
 
 test_last_done_excludes_active() {
-    "$CLK_SCRIPT" in a at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last-done 2>&1)"
     # Should show 'a' (done) but not 'b' (active)
@@ -1131,12 +1139,12 @@ test_last_done_excludes_active() {
         return 1
     fi
     CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 )) &&
-    clk_test__assert_output_contains "2026.01.01-10:00" printf '%s' "$output"
+    clk_test__assert_output_contains "2026-01-01T10:00:00" printf '%s' "$output"
 }
 
 test_last_done_no_index() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last-done 2>&1)"
     # Should NOT have -N prefix
@@ -1149,8 +1157,8 @@ test_last_done_no_index() {
 }
 
 test_last_done_alias_ld() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "work" "$CLK_SCRIPT" ld
 }
 
@@ -1159,12 +1167,12 @@ test_last_done_empty() {
 }
 
 test_last_done_n() {
-    "$CLK_SCRIPT" in a at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out b at 2026.01.01-11:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in c at 2026.01.01-11:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out c at 2026.01.01-12:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in c at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out c at 2026-01-01T12:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last-done 2 2>&1)"
     local line_count
@@ -1178,24 +1186,24 @@ test_last_done_n() {
 
 test_lifecycle_in_out_last() {
     # Full cycle: in → out → last shows the completed record
-    "$CLK_SCRIPT" in dev at 2026.03.01-08:00 on feature work >/dev/null 2>&1
-    "$CLK_SCRIPT" out dev at 2026.03.01-10:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in dev at 2026-03-01T08:00:00 on feature work >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at 2026-03-01T10:30:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last 2>&1)"
     # Should show: dev, both timestamps, 2h 30m (9000s), description
     clk_test__assert_output_contains "dev" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026.03.01-08:00" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026.03.01-10:30" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026-03-01T08:00:00" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026-03-01T10:30:00" printf '%s' "$output" &&
     clk_test__assert_output_contains "2h 30m" printf '%s' "$output" &&
     clk_test__assert_output_contains "feature work" printf '%s' "$output"
 }
 
 test_lifecycle_multiple_sessions() {
     # Two sessions, only one active at a time
-    "$CLK_SCRIPT" in work at 2026.03.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.03.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.03.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out play at 2026.03.01-11:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-03-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-03-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-03-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out play at 2026-03-01T11:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last 2 2>&1)"
     clk_test__assert_output_contains "work" printf '%s' "$output" &&
@@ -1204,15 +1212,15 @@ test_lifecycle_multiple_sessions() {
 
 test_lifecycle_concurrent_sessions() {
     # Two active sessions simultaneously
-    "$CLK_SCRIPT" in work at 2026.03.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.03.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-03-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-03-01T09:30:00 >/dev/null 2>&1
     # Both should appear in status
     local status_out
     status_out="$("$CLK_SCRIPT" status 2>&1)"
     clk_test__assert_output_contains "work" printf '%s' "$status_out" &&
     clk_test__assert_output_contains "play" printf '%s' "$status_out" &&
     # Close one, the other should remain
-    "$CLK_SCRIPT" out work at 2026.03.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-03-01T10:00:00 >/dev/null 2>&1
     status_out="$("$CLK_SCRIPT" status 2>&1)"
     clk_test__assert_output_contains "play" printf '%s' "$status_out"
 }
@@ -1222,43 +1230,43 @@ test_lifecycle_concurrent_sessions() {
 #####################################################################
 
 test_pause_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     # PAUSED_AT (field 7) should be set to an epoch
-    clk_test__assert_log_line 1 '^active	2026.01.01-09:00		work		0	[0-9]'
+    clk_test__assert_log_line 1 '^active	2026-01-01T09:00:00		work		0	[0-9]'
 }
 
 test_pause_already_paused() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     clk_test__assert_exit 5 "$CLK_SCRIPT" pause
 }
 
 test_pause_already_paused_message() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     clk_test__assert_output_contains "already paused" "$CLK_SCRIPT" pause
 }
 
 test_pause_implicit_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" pause
 }
 
 test_pause_explicit_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" pause work
 }
 
 test_pause_ambiguous_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
     clk_test__assert_exit 1 "$CLK_SCRIPT" pause
 }
 
 test_pause_minus() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause minus 10 >/dev/null 2>&1
     # PAUSED_AT should be now_epoch - 600
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
@@ -1278,40 +1286,40 @@ test_pause_minus() {
 }
 
 test_pause_at() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" pause at 2026.01.01-10:30 >/dev/null 2>&1
-    # PAUSED_AT should be the epoch for 2026.01.01-10:30
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause at 2026-01-01T10:30:00 >/dev/null 2>&1
+    # PAUSED_AT should be the epoch for 2026-01-01T10:30:00
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local paused_at
     paused_at="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f7)"
-    # Convert 2026.01.01-10:30 to epoch for comparison
+    # Convert 2026-01-01T10:30:00 to epoch for comparison
     CLK_SOURCED=1 source "$CLK_SCRIPT"
     clk__ensure_log >/dev/null 2>&1
     local expected_epoch
-    expected_epoch="$(clk__to_epoch "2026.01.01-10:30")"
+    expected_epoch="$(clk__to_epoch "2026-01-01T10:30:00")"
     clk_test__assert_equals "$expected_epoch" "$paused_at" "pause at sets correct epoch"
 }
 
 test_pause_at_with_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
-    clk_test__assert_exit 0 "$CLK_SCRIPT" pause work at 2026.01.01-10:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" pause work at 2026-01-01T10:00:00
 }
 
 test_pause_at_confirmation_output() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "2026.01.01-10:30" "$CLK_SCRIPT" pause at 2026.01.01-10:30
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "2026-01-01T10:30:00" "$CLK_SCRIPT" pause at 2026-01-01T10:30:00
 }
 
 test_pause_confirmation_output() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "paused at" "$CLK_SCRIPT" pause &&
-    "$CLK_SCRIPT" in play at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T10:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "Active work so far" "$CLK_SCRIPT" pause play
 }
 
 test_pause_creates_undo() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
@@ -1327,7 +1335,7 @@ test_pause_no_active() {
 }
 
 test_pause_alias_p() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" p
 }
 
@@ -1336,7 +1344,7 @@ test_pause_alias_p() {
 #####################################################################
 
 test_resume_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     "$CLK_SCRIPT" resume >/dev/null 2>&1
     # PAUSED_AT (field 7) should be cleared, BREAK_SECS (field 6) should be > 0 or == 0
@@ -1354,7 +1362,7 @@ test_resume_basic() {
 }
 
 test_resume_adds_break() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     sleep 1
     "$CLK_SCRIPT" resume >/dev/null 2>&1
@@ -1370,17 +1378,17 @@ test_resume_adds_break() {
 }
 
 test_resume_not_paused() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_exit 5 "$CLK_SCRIPT" resume
 }
 
 test_resume_not_paused_message() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "not paused" "$CLK_SCRIPT" resume
 }
 
 test_resume_minus() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     sleep 1
     "$CLK_SCRIPT" resume minus 0 >/dev/null 2>&1
@@ -1397,7 +1405,7 @@ test_resume_minus() {
 }
 
 test_resume_confirmation_output() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" resume 2>&1)"
@@ -1407,7 +1415,7 @@ test_resume_confirmation_output() {
 }
 
 test_resume_alias_r() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" p >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" r
 }
@@ -1417,7 +1425,7 @@ test_resume_alias_r() {
 #####################################################################
 
 test_unpause_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     "$CLK_SCRIPT" unpause >/dev/null 2>&1
     # PAUSED_AT should be cleared
@@ -1433,7 +1441,7 @@ test_unpause_basic() {
 }
 
 test_unpause_no_break_added() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     sleep 1
     "$CLK_SCRIPT" unpause >/dev/null 2>&1
@@ -1445,24 +1453,24 @@ test_unpause_no_break_added() {
 }
 
 test_unpause_not_paused() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_exit 5 "$CLK_SCRIPT" unpause
 }
 
 test_unpause_not_paused_message() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "not paused" "$CLK_SCRIPT" unpause
 }
 
 test_unpause_confirmation() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     clk_test__assert_output_contains "Pause cancelled" "$CLK_SCRIPT" unpause
 }
 
 test_unpause_explicit_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause work >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" unpause work
 }
@@ -1472,8 +1480,8 @@ test_unpause_explicit_tag() {
 #####################################################################
 
 test_switch_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" switch play at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" switch play at 2026-01-01T10:00:00 >/dev/null 2>&1
     # work should be a done record, play should be active
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local line2 line3
@@ -1493,9 +1501,9 @@ test_switch_basic() {
 }
 
 test_switch_with_from() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
-    "$CLK_SCRIPT" switch dev from work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" switch dev from work at 2026-01-01T10:00:00 >/dev/null 2>&1
     # work should be done, play and dev should be active
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local done_count active_count
@@ -1506,32 +1514,32 @@ test_switch_with_from() {
 }
 
 test_switch_implicit_from() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_exit 0 "$CLK_SCRIPT" switch play at 2026.01.01-10:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" switch play at 2026-01-01T10:00:00
 }
 
 test_switch_ambiguous_from() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
-    clk_test__assert_exit 1 "$CLK_SCRIPT" switch dev at 2026.01.01-10:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" switch dev at 2026-01-01T10:00:00
 }
 
 test_switch_with_description() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" switch play at 2026.01.01-10:00 on finished task >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" switch play at 2026-01-01T10:00:00 on finished task >/dev/null 2>&1
     # The done record for work should have the description
     clk_test__assert_log_line 2 'finished task'
 }
 
 test_switch_same_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    clk_test__assert_exit 1 "$CLK_SCRIPT" switch work at 2026.01.01-10:00
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" switch work at 2026-01-01T10:00:00
 }
 
 test_switch_creates_single_undo() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
-    "$CLK_SCRIPT" switch play at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" switch play at 2026-01-01T10:00:00 >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
         printf 'FAIL: switch should create .undo\n'
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
@@ -1545,9 +1553,9 @@ test_switch_missing_new_tag() {
 }
 
 test_switch_confirmation_output() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     local output
-    output="$("$CLK_SCRIPT" switch play at 2026.01.01-10:00 2>&1)"
+    output="$("$CLK_SCRIPT" switch play at 2026-01-01T10:00:00 2>&1)"
     clk_test__assert_output_contains "Recorded session" printf '%s' "$output" &&
     clk_test__assert_output_contains "Started session" printf '%s' "$output"
 }
@@ -1557,18 +1565,18 @@ test_switch_confirmation_output() {
 #####################################################################
 
 test_add_session_basic() {
-    "$CLK_SCRIPT" add work for 30 at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
     # Should create done record: 30m = 1800s, start = 09:30, end = 10:00
-    clk_test__assert_log_line 1 '^done	2026.01.01-09:30	2026.01.01-10:00	work	1800	0'
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:30:00	2026-01-01T10:00:00	work	1800	0'
 }
 
 test_add_session_with_description() {
-    "$CLK_SCRIPT" add work for 60 at 2026.01.01-10:00 on coding stuff >/dev/null 2>&1
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 on coding stuff >/dev/null 2>&1
     clk_test__assert_log_line 1 'coding stuff$'
 }
 
 test_add_session_creates_undo() {
-    "$CLK_SCRIPT" add work for 30 at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
         printf 'FAIL: add session should create .undo\n'
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
@@ -1579,8 +1587,8 @@ test_add_session_creates_undo() {
 
 test_add_session_ordering_with_active() {
     # add should insert before active records
-    "$CLK_SCRIPT" in play at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" add work for 30 at 2026.01.01-08:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add work for 30 at 2026-01-01T08:30:00 >/dev/null 2>&1
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local line2 line3
     line2="$(awk 'NR==2' "$log_file")"
@@ -1599,7 +1607,7 @@ test_add_session_ordering_with_active() {
 }
 
 test_add_session_confirmation_output() {
-    clk_test__assert_output_contains "Added session" "$CLK_SCRIPT" add work for 30 at 2026.01.01-10:00
+    clk_test__assert_output_contains "Added session" "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00:00
 }
 
 test_add_session_missing_for() {
@@ -1607,7 +1615,7 @@ test_add_session_missing_for() {
 }
 
 test_add_session_numeric_tag_rejected() {
-    clk_test__assert_exit 1 "$CLK_SCRIPT" add 123 for 30 at 2026.01.01-10:00
+    clk_test__assert_exit 1 "$CLK_SCRIPT" add 123 for 30 at 2026-01-01T10:00:00
 }
 
 #####################################################################
@@ -1615,40 +1623,40 @@ test_add_session_numeric_tag_rejected() {
 #####################################################################
 
 test_add_time_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" add 15 to work >/dev/null 2>&1
     # Start time should be moved back 15 min to 08:45
-    clk_test__assert_log_line 1 '^active	2026.01.01-08:45		work'
+    clk_test__assert_log_line 1 '^active	2026-01-01T08:45:00		work'
 }
 
 test_add_time_implicit_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" add 10
 }
 
 test_add_time_implicit_tag_correct() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" add 30 >/dev/null 2>&1
-    clk_test__assert_log_line 1 '^active	2026.01.01-08:30		work'
+    clk_test__assert_log_line 1 '^active	2026-01-01T08:30:00		work'
 }
 
 test_add_time_ambiguous_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
     clk_test__assert_exit 1 "$CLK_SCRIPT" add 15
 }
 
 test_add_time_confirmation_output() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" add 15 to work 2>&1)"
     clk_test__assert_output_contains "Added 15 minutes" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026.01.01-09:00" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026.01.01-08:45" printf '%s' "$output"
+    clk_test__assert_output_contains "2026-01-01T09:00:00" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026-01-01T08:45:00" printf '%s' "$output"
 }
 
 test_add_time_creates_undo() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
     "$CLK_SCRIPT" add 10 >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
@@ -1668,7 +1676,7 @@ test_add_time_no_active() {
 #####################################################################
 
 test_add_break_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" add-break 10 >/dev/null 2>&1
     # BREAK_SECS should be 600
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
@@ -1678,7 +1686,7 @@ test_add_break_basic() {
 }
 
 test_add_break_accumulates() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" add-break 10 >/dev/null 2>&1
     "$CLK_SCRIPT" add-break 5 >/dev/null 2>&1
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
@@ -1688,20 +1696,20 @@ test_add_break_accumulates() {
 }
 
 test_add_break_while_paused() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     clk_test__assert_exit 5 "$CLK_SCRIPT" add-break 10
 }
 
 test_add_break_while_paused_message() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     clk_test__assert_output_contains "currently paused" "$CLK_SCRIPT" add-break 10
 }
 
 test_add_break_with_to_tag() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
     "$CLK_SCRIPT" add-break 10 to work >/dev/null 2>&1
     # Only work's break should be 600; play's should still be 0
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
@@ -1713,12 +1721,12 @@ test_add_break_with_to_tag() {
 }
 
 test_add_break_alias_ab() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" ab 5
 }
 
 test_add_break_confirmation_output() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" add-break 10 2>&1)"
     clk_test__assert_output_contains "Added 10m break" printf '%s' "$output" &&
@@ -1726,7 +1734,7 @@ test_add_break_confirmation_output() {
 }
 
 test_add_break_creates_undo() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
     "$CLK_SCRIPT" add-break 5 >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
@@ -1746,44 +1754,44 @@ test_add_break_missing_minutes() {
 #####################################################################
 
 test_extend_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" extend at 2026.01.01-10:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" extend at 2026-01-01T10:30:00 >/dev/null 2>&1
     # End should now be 10:30, length should be 1h30m = 5400s
-    clk_test__assert_log_line 1 '^done	2026.01.01-09:00	2026.01.01-10:30	work	5400	0'
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:30:00	work	5400	0'
 }
 
 test_extend_before_old_end() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
-    clk_test__assert_exit 1 "$CLK_SCRIPT" extend at 2026.01.01-09:30
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" extend at 2026-01-01T09:30:00
 }
 
 test_extend_before_old_end_message() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "Cannot shrink" "$CLK_SCRIPT" extend at 2026.01.01-09:30
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "Cannot shrink" "$CLK_SCRIPT" extend at 2026-01-01T09:30:00
 }
 
 test_extend_no_done_records() {
-    clk_test__assert_exit 5 "$CLK_SCRIPT" extend at 2026.01.01-10:00
+    clk_test__assert_exit 5 "$CLK_SCRIPT" extend at 2026-01-01T10:00:00
 }
 
 test_extend_confirmation_output() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
-    output="$("$CLK_SCRIPT" extend at 2026.01.01-10:30 2>&1)"
+    output="$("$CLK_SCRIPT" extend at 2026-01-01T10:30:00 2>&1)"
     clk_test__assert_output_contains "Extended session" printf '%s' "$output" &&
     clk_test__assert_output_contains "30m" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026.01.01-10:30" printf '%s' "$output"
+    clk_test__assert_output_contains "2026-01-01T10:30:00" printf '%s' "$output"
 }
 
 test_extend_creates_undo() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
-    "$CLK_SCRIPT" extend at 2026.01.01-10:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" extend at 2026-01-01T10:30:00 >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
         printf 'FAIL: extend should create .undo\n'
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
@@ -1794,10 +1802,10 @@ test_extend_creates_undo() {
 
 test_extend_preserves_break() {
     # Extend should preserve existing break time
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" add-break 10 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" extend at 2026.01.01-10:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" extend at 2026-01-01T10:30:00 >/dev/null 2>&1
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local break_secs length_secs
     break_secs="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f6)"
@@ -1810,10 +1818,10 @@ test_extend_preserves_break() {
 
 test_extend_with_active_present() {
     # extend should work even when active sessions exist
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in play at 2026.01.01-10:00 >/dev/null 2>&1
-    clk_test__assert_exit 0 "$CLK_SCRIPT" extend at 2026.01.01-10:30
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" extend at 2026-01-01T10:30:00
 }
 
 #####################################################################
@@ -1821,8 +1829,8 @@ test_extend_with_active_present() {
 #####################################################################
 
 test_remove_basic() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" remove >/dev/null 2>&1
     local count
     count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
@@ -1830,7 +1838,7 @@ test_remove_basic() {
 }
 
 test_remove_active_record() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" remove >/dev/null 2>&1
     local count
     count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
@@ -1846,8 +1854,8 @@ test_remove_empty_log_message() {
 }
 
 test_remove_shows_removed_record() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" remove 2>&1)"
     clk_test__assert_output_contains "Removed record" printf '%s' "$output" &&
@@ -1855,7 +1863,7 @@ test_remove_shows_removed_record() {
 }
 
 test_remove_creates_undo() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
     "$CLK_SCRIPT" remove >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
@@ -1867,15 +1875,15 @@ test_remove_creates_undo() {
 }
 
 test_remove_alias_pop() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" pop
 }
 
 test_remove_preserves_other_records() {
-    "$CLK_SCRIPT" in a at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026.01.01-10:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out b at 2026.01.01-11:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" remove >/dev/null 2>&1
     # Only 'a' should remain
     local count
@@ -1890,10 +1898,10 @@ test_remove_preserves_other_records() {
 
 test_undo_basic() {
     # mutate + undo → log matches pre-mutate state
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     local pre_mutate
     pre_mutate="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" undo >/dev/null 2>&1
     local post_undo
     post_undo="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
@@ -1913,8 +1921,8 @@ test_undo_nothing_exits_0() {
 }
 
 test_undo_shows_diff() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" undo 2>&1)"
     # Should show the done record being removed and active restored
@@ -1923,7 +1931,7 @@ test_undo_shows_diff() {
 }
 
 test_undo_creates_redo() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" undo >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.redo" ]; then
         printf 'FAIL: undo should create .redo\n'
@@ -1934,7 +1942,7 @@ test_undo_creates_redo() {
 }
 
 test_undo_diff_shows_removed() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" undo 2>&1)"
     # The active record should appear as removed (−)
@@ -1947,8 +1955,8 @@ test_undo_diff_shows_removed() {
 }
 
 test_undo_diff_shows_restored() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" undo 2>&1)"
     # The active record should appear as restored (+)
@@ -1966,8 +1974,8 @@ test_undo_diff_shows_restored() {
 
 test_redo_basic() {
     # mutate + undo + redo → log matches post-mutate state
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local post_mutate
     post_mutate="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
     "$CLK_SCRIPT" undo >/dev/null 2>&1
@@ -1988,7 +1996,7 @@ test_redo_nothing_exits_0() {
 }
 
 test_redo_shows_diff() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" undo >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" redo 2>&1)"
@@ -1997,7 +2005,7 @@ test_redo_shows_diff() {
 }
 
 test_redo_creates_undo() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" undo >/dev/null 2>&1
     \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
     "$CLK_SCRIPT" redo >/dev/null 2>&1
@@ -2011,8 +2019,8 @@ test_redo_creates_undo() {
 
 test_undo_redo_roundtrip() {
     # in → out → undo → redo → undo → check state matches after first undo
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" undo >/dev/null 2>&1
     local after_undo
     after_undo="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
@@ -2025,10 +2033,10 @@ test_undo_redo_roundtrip() {
 
 test_undo_overwrites_on_new_mutation() {
     # undo state should be overwritten by the next mutation
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     # Now mutate again — this should overwrite .undo
-    "$CLK_SCRIPT" in play at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T10:00:00 >/dev/null 2>&1
     # Undo should undo the 'in play', not the 'out work'
     "$CLK_SCRIPT" undo >/dev/null 2>&1
     local log_content
@@ -2049,7 +2057,7 @@ test_undo_overwrites_on_new_mutation() {
 
 test_undo_clears_redo() {
     # After undo, a new mutation should clear .redo
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" undo >/dev/null 2>&1
     # .redo should exist now
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.redo" ]; then
@@ -2058,7 +2066,7 @@ test_undo_clears_redo() {
         return 1
     fi
     # Now mutate — should clear .redo
-    "$CLK_SCRIPT" in play at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:00:00 >/dev/null 2>&1
     if [ -f "${CLK_TEST_DIR}/clk/clk.tsv.redo" ]; then
         printf 'FAIL: .redo should be cleared after new mutation\n'
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
@@ -2073,7 +2081,7 @@ test_undo_clears_redo() {
 
 test_out_while_paused() {
     # Use real "now" for both pause and out so timing is consistent
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     sleep 1
     "$CLK_SCRIPT" out work >/dev/null 2>&1
@@ -2093,7 +2101,7 @@ test_out_while_paused() {
 }
 
 test_out_while_paused_shows_break() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     sleep 1
     clk_test__assert_output_contains "break" "$CLK_SCRIPT" out work
@@ -2104,11 +2112,11 @@ test_out_while_paused_shows_break() {
 #####################################################################
 
 test_pause_resume_then_out() {
-    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause >/dev/null 2>&1
     sleep 1
     "$CLK_SCRIPT" resume >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026.01.01-11:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T11:00:00 >/dev/null 2>&1
     # Should have break time from the pause, and length should be reduced
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local break_secs length_secs
