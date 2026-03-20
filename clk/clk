@@ -1114,6 +1114,90 @@ clk_do_remove() {
     printf '\nRemoved record:\n  %s\n\n' "$formatted"
 }
 
+# --- clk__show_log_diff ---
+# Shows a human-readable diff between two log files.
+# Lines in $1 but not $2 are prefixed with "−" (removed).
+# Lines in $2 but not $1 are prefixed with "+" (restored/added).
+# Skips comment lines. Each changed record is formatted via clk__fmt_record.
+clk__show_log_diff() {
+    local before_file="$1" after_file="$2"
+
+    # Extract data lines (skip comments) from each file
+    local before_lines after_lines
+    before_lines="$(grep -v '^#' "$before_file" | grep -v '^[[:space:]]*$' || true)"
+    after_lines="$(grep -v '^#' "$after_file" | grep -v '^[[:space:]]*$' || true)"
+
+    # Lines removed (in before but not after)
+    local removed
+    removed="$(comm -23 <(printf '%s\n' "$before_lines" | sort) <(printf '%s\n' "$after_lines" | sort) || true)"
+    # Lines added (in after but not before)
+    local added
+    added="$(comm -13 <(printf '%s\n' "$before_lines" | sort) <(printf '%s\n' "$after_lines" | sort) || true)"
+
+    local line
+    if [ -n "$removed" ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local formatted
+            formatted="$(clk__fmt_record "$line")"
+            printf '  − %s\n' "$formatted"
+        done <<< "$removed"
+    fi
+    if [ -n "$added" ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local formatted
+            formatted="$(clk__fmt_record "$line")"
+            printf '  + %s\n' "$formatted"
+        done <<< "$added"
+    fi
+}
+
+# --- clk_do_undo ---
+# clk undo
+#
+# --- RATIONALE: Showing diff ---
+# A bare "Undone" message forces the user to run clk last or clk status
+# to verify what happened. Showing the diff inline gives immediate
+# confidence that the right thing was reversed.
+clk_do_undo() {
+    local undo_file="${CLK_LOG}.undo"
+    if [ ! -f "$undo_file" ]; then
+        printf 'Nothing to undo.\n'
+        return 0
+    fi
+
+    # Save current to .redo, then restore .undo
+    cp "$CLK_LOG" "${CLK_LOG}.redo" || clk__die 2 "Failed to save redo snapshot."
+    local before_file="${CLK_LOG}.redo"
+
+    cp "$undo_file" "$CLK_LOG" || clk__die 2 "Failed to restore undo snapshot."
+
+    printf 'Undone.\n'
+    clk__show_log_diff "$before_file" "$CLK_LOG"
+    printf "Use 'clk redo' to reverse.\n"
+}
+
+# --- clk_do_redo ---
+# clk redo
+clk_do_redo() {
+    local redo_file="${CLK_LOG}.redo"
+    if [ ! -f "$redo_file" ]; then
+        printf 'Nothing to redo.\n'
+        return 0
+    fi
+
+    # Save current to .undo, then restore .redo
+    cp "$CLK_LOG" "${CLK_LOG}.undo" || clk__die 2 "Failed to save undo snapshot."
+    local before_file="${CLK_LOG}.undo"
+
+    cp "$redo_file" "$CLK_LOG" || clk__die 2 "Failed to restore redo snapshot."
+
+    printf 'Redone.\n'
+    clk__show_log_diff "$before_file" "$CLK_LOG"
+    printf "Use 'clk undo' to reverse.\n"
+}
+
 #####################################################################
 # Main — guarded so the script can be sourced for testing
 #####################################################################
@@ -1477,7 +1561,20 @@ remove|pop)
     clk_do_remove
     ;;
 
-# TODO: undo, redo (step 6)
+undo)
+    clk_subcmd="undo"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk undo'"
+    clk_do_undo
+    ;;
+
+redo)
+    clk_subcmd="redo"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk redo'"
+    clk_do_redo
+    ;;
+
 # TODO: view (step 7)
 # TODO: edit (step 8)
 # TODO: log, alias (step 10)

@@ -1885,6 +1885,189 @@ test_remove_preserves_other_records() {
 }
 
 #####################################################################
+# Tests — clk undo (integration)
+#####################################################################
+
+test_undo_basic() {
+    # mutate + undo → log matches pre-mutate state
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    local pre_mutate
+    pre_mutate="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    local post_undo
+    post_undo="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
+    clk_test__assert_equals "$pre_mutate" "$post_undo" "undo restores pre-mutate state"
+}
+
+test_undo_nothing() {
+    # No prior mutation → "Nothing to undo"
+    # Ensure no .undo file exists (fresh log)
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    clk_test__assert_output_contains "Nothing to undo" "$CLK_SCRIPT" undo
+}
+
+test_undo_nothing_exits_0() {
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    clk_test__assert_exit 0 "$CLK_SCRIPT" undo
+}
+
+test_undo_shows_diff() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" undo 2>&1)"
+    # Should show the done record being removed and active restored
+    clk_test__assert_output_contains "Undone" printf '%s' "$output" &&
+    clk_test__assert_output_contains "redo" printf '%s' "$output"
+}
+
+test_undo_creates_redo() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.redo" ]; then
+        printf 'FAIL: undo should create .redo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_undo_diff_shows_removed() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" undo 2>&1)"
+    # The active record should appear as removed (−)
+    if ! printf '%s' "$output" | grep -q '−.*work'; then
+        printf 'FAIL: undo diff should show removed record\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_undo_diff_shows_restored() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" undo 2>&1)"
+    # The active record should appear as restored (+)
+    if ! printf '%s' "$output" | grep -q '+.*work.*active'; then
+        printf 'FAIL: undo diff should show restored active record\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+#####################################################################
+# Tests — clk redo (integration)
+#####################################################################
+
+test_redo_basic() {
+    # mutate + undo + redo → log matches post-mutate state
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    local post_mutate
+    post_mutate="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    "$CLK_SCRIPT" redo >/dev/null 2>&1
+    local post_redo
+    post_redo="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
+    clk_test__assert_equals "$post_mutate" "$post_redo" "redo restores post-mutate state"
+}
+
+test_redo_nothing() {
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.redo"
+    clk_test__assert_output_contains "Nothing to redo" "$CLK_SCRIPT" redo
+}
+
+test_redo_nothing_exits_0() {
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.redo"
+    clk_test__assert_exit 0 "$CLK_SCRIPT" redo
+}
+
+test_redo_shows_diff() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" redo 2>&1)"
+    clk_test__assert_output_contains "Redone" printf '%s' "$output" &&
+    clk_test__assert_output_contains "undo" printf '%s' "$output"
+}
+
+test_redo_creates_undo() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    "$CLK_SCRIPT" redo >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: redo should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_undo_redo_roundtrip() {
+    # in → out → undo → redo → undo → check state matches after first undo
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    local after_undo
+    after_undo="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
+    "$CLK_SCRIPT" redo >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    local after_second_undo
+    after_second_undo="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
+    clk_test__assert_equals "$after_undo" "$after_second_undo" "undo/redo/undo roundtrip"
+}
+
+test_undo_overwrites_on_new_mutation() {
+    # undo state should be overwritten by the next mutation
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    # Now mutate again — this should overwrite .undo
+    "$CLK_SCRIPT" in play at 2026.01.01-10:00 >/dev/null 2>&1
+    # Undo should undo the 'in play', not the 'out work'
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    local log_content
+    log_content="$(cat "$CLK_TEST_DIR/clk/clk.tsv")"
+    # Should have done work record but no active play
+    if printf '%s' "$log_content" | grep -q 'active.*play'; then
+        printf 'FAIL: undo should have removed play, not work\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$log_content" | grep -q 'done.*work'; then
+        printf 'FAIL: done work record should still exist\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_undo_clears_redo() {
+    # After undo, a new mutation should clear .redo
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+    # .redo should exist now
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.redo" ]; then
+        printf 'FAIL: .redo should exist after undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    # Now mutate — should clear .redo
+    "$CLK_SCRIPT" in play at 2026.01.01-09:00 >/dev/null 2>&1
+    if [ -f "${CLK_TEST_DIR}/clk/clk.tsv.redo" ]; then
+        printf 'FAIL: .redo should be cleared after new mutation\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+#####################################################################
 # Tests — out while paused (integration)
 #####################################################################
 
@@ -2228,6 +2411,25 @@ ALL_TESTS=(
     test_remove_creates_undo
     test_remove_alias_pop
     test_remove_preserves_other_records
+
+    # clk undo (integration)
+    test_undo_basic
+    test_undo_nothing
+    test_undo_nothing_exits_0
+    test_undo_shows_diff
+    test_undo_creates_redo
+    test_undo_diff_shows_removed
+    test_undo_diff_shows_restored
+
+    # clk redo (integration)
+    test_redo_basic
+    test_redo_nothing
+    test_redo_nothing_exits_0
+    test_redo_shows_diff
+    test_redo_creates_undo
+    test_undo_redo_roundtrip
+    test_undo_overwrites_on_new_mutation
+    test_undo_clears_redo
 
     # out while paused
     test_out_while_paused
