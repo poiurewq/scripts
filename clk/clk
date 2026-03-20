@@ -730,6 +730,159 @@ clk_do_last_done() {
     done <<< "$selected"
 }
 
+# --- clk_do_pause ---
+# clk pause [<tag>] [minus <minutes>]
+clk_do_pause() {
+    local tag="$1" minus_val="$2"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    # Guard: must not already be paused
+    if [ -n "$paused_at" ]; then
+        local paused_ts
+        paused_ts="$(clk__from_epoch "$paused_at" 2>/dev/null)" || paused_ts="$paused_at"
+        clk__die 5 "Session '$active_tag' is already paused (since ${paused_ts}). Use 'clk resume' first."
+    fi
+
+    # Calculate pause epoch
+    local pause_epoch
+    if [ -n "$minus_val" ]; then
+        local now_epoch
+        now_epoch="$(clk__now_epoch)"
+        pause_epoch=$(( now_epoch - minus_val * 60 ))
+    else
+        pause_epoch="$(clk__now_epoch)"
+    fi
+
+    clk__save_undo
+
+    # Replace record with PAUSED_AT set
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${break_secs}${CLK_TAB}${pause_epoch}${CLK_TAB}${description}"
+    clk__replace_line "$active_line" "$new_record"
+
+    local pause_ts
+    pause_ts="$(clk__from_epoch "$pause_epoch")"
+
+    # Calculate active work so far
+    local start_epoch elapsed_secs
+    start_epoch="$(clk__to_epoch "$start_ts")"
+    elapsed_secs=$(( pause_epoch - start_epoch - break_secs ))
+    if [ "$elapsed_secs" -lt 0 ]; then elapsed_secs=0; fi
+    local elapsed_str
+    elapsed_str="$(clk__fmt_duration "$elapsed_secs")"
+
+    printf '\nSession in\n  %s\n  paused at %s\n  Active work so far: %s\n\n' \
+        "$active_tag" "$pause_ts" "$elapsed_str"
+}
+
+# --- clk_do_resume ---
+# clk resume [<tag>] [minus <minutes>]
+clk_do_resume() {
+    local tag="$1" minus_val="$2"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    # Guard: must be currently paused
+    if [ -z "$paused_at" ]; then
+        clk__die 5 "Session '$active_tag' is not paused. Use 'clk pause' first."
+    fi
+
+    # Calculate resume epoch
+    local resume_epoch
+    if [ -n "$minus_val" ]; then
+        local now_epoch
+        now_epoch="$(clk__now_epoch)"
+        resume_epoch=$(( now_epoch - minus_val * 60 ))
+    else
+        resume_epoch="$(clk__now_epoch)"
+    fi
+
+    # Calculate this pause duration and new total break
+    local this_pause_secs=$(( resume_epoch - paused_at ))
+    if [ "$this_pause_secs" -lt 0 ]; then
+        local resume_ts paused_ts
+        resume_ts="$(clk__from_epoch "$resume_epoch")"
+        paused_ts="$(clk__from_epoch "$paused_at")"
+        clk__die 1 "Resume time ${resume_ts} cannot be earlier than pause time ${paused_ts}."
+    fi
+    local new_break_secs=$(( break_secs + this_pause_secs ))
+
+    clk__save_undo
+
+    # Replace record: update BREAK_SECS and clear PAUSED_AT
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${new_break_secs}${CLK_TAB}${CLK_TAB}${description}"
+    clk__replace_line "$active_line" "$new_record"
+
+    local resume_ts
+    resume_ts="$(clk__from_epoch "$resume_epoch")"
+    local this_pause_str total_break_str
+    this_pause_str="$(clk__fmt_duration "$this_pause_secs")"
+    total_break_str="$(clk__fmt_duration "$new_break_secs")"
+
+    printf '\nSession in\n  %s\n  resumed at %s\n  This pause: %s\n  Total break so far: %s\n\n' \
+        "$active_tag" "$resume_ts" "$this_pause_str" "$total_break_str"
+}
+
+# --- clk_do_unpause ---
+# clk unpause [<tag>]
+#
+# Clears PAUSED_AT without adding any time to BREAK_SECS.
+# For the "I paused by mistake" case.
+clk_do_unpause() {
+    local tag="$1"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    # Guard: must be currently paused
+    if [ -z "$paused_at" ]; then
+        clk__die 5 "Session '$active_tag' is not paused. Nothing to unpause."
+    fi
+
+    clk__save_undo
+
+    # Replace record: clear PAUSED_AT, keep BREAK_SECS unchanged
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${break_secs}${CLK_TAB}${CLK_TAB}${description}"
+    clk__replace_line "$active_line" "$new_record"
+
+    printf '\nPause cancelled for session in\n  %s\n  No break time was added.\n\n' "$active_tag"
+}
+
 #####################################################################
 # Main — guarded so the script can be sourced for testing
 #####################################################################
@@ -880,8 +1033,70 @@ last-done|ld)
     clk_do_last_done "${clk_last_n:-1}"
     ;;
 
+pause|p)
+    clk_subcmd="pause"
+    shift
+
+    # Tag is optional — peek at first arg
+    if [ $# -gt 0 ] && [ "$1" != "minus" ]; then
+        clk_tag="$1"; shift
+    fi
+
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk pause'."
+                ;;
+        esac
+    fi
+
+    clk_do_pause "$clk_tag" "$clk_minus_minutes"
+    ;;
+
+resume|r)
+    clk_subcmd="resume"
+    shift
+
+    # Tag is optional — peek at first arg
+    if [ $# -gt 0 ] && [ "$1" != "minus" ]; then
+        clk_tag="$1"; shift
+    fi
+
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk resume'."
+                ;;
+        esac
+    fi
+
+    clk_do_resume "$clk_tag" "$clk_minus_minutes"
+    ;;
+
+unpause)
+    clk_subcmd="unpause"
+    shift
+
+    # Tag is optional
+    if [ $# -gt 0 ]; then
+        clk_tag="$1"; shift
+    fi
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk unpause [<tag>]'"
+
+    clk_do_unpause "$clk_tag"
+    ;;
+
 # TODO: switch, add, add-break, extend, remove, pop (step 5)
-# TODO: pause, resume, unpause (step 4)
 # TODO: undo, redo (step 6)
 # TODO: view (step 7)
 # TODO: edit (step 8)
