@@ -1442,6 +1442,423 @@ test_unpause_explicit_tag() {
 }
 
 #####################################################################
+# Tests — clk switch (integration)
+#####################################################################
+
+test_switch_basic() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" switch play at 2026.01.01-10:00 >/dev/null 2>&1
+    # work should be a done record, play should be active
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local line2 line3
+    line2="$(awk 'NR==2' "$log_file")"
+    line3="$(awk 'NR==3' "$log_file")"
+    if ! printf '%s' "$line2" | grep -q '^done.*work'; then
+        printf 'FAIL: line 2 should be done work record\n  actual: %s\n' "$line2"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$line3" | grep -q '^active.*play'; then
+        printf 'FAIL: line 3 should be active play record\n  actual: %s\n' "$line3"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_switch_with_from() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" switch dev from work at 2026.01.01-10:00 >/dev/null 2>&1
+    # work should be done, play and dev should be active
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local done_count active_count
+    done_count="$(awk -F'\t' '$1=="done"' "$log_file" | wc -l | tr -d ' ')"
+    active_count="$(awk -F'\t' '$1=="active"' "$log_file" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$done_count" "switch from: one done record" &&
+    clk_test__assert_equals "2" "$active_count" "switch from: two active records"
+}
+
+test_switch_implicit_from() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" switch play at 2026.01.01-10:00
+}
+
+test_switch_ambiguous_from() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" switch dev at 2026.01.01-10:00
+}
+
+test_switch_with_description() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" switch play at 2026.01.01-10:00 on finished task >/dev/null 2>&1
+    # The done record for work should have the description
+    clk_test__assert_log_line 2 'finished task'
+}
+
+test_switch_same_tag() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" switch work at 2026.01.01-10:00
+}
+
+test_switch_creates_single_undo() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    "$CLK_SCRIPT" switch play at 2026.01.01-10:00 >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: switch should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_switch_missing_new_tag() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" switch
+}
+
+test_switch_confirmation_output() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" switch play at 2026.01.01-10:00 2>&1)"
+    clk_test__assert_output_contains "Recorded session" printf '%s' "$output" &&
+    clk_test__assert_output_contains "Started session" printf '%s' "$output"
+}
+
+#####################################################################
+# Tests — clk add (session) (integration)
+#####################################################################
+
+test_add_session_basic() {
+    "$CLK_SCRIPT" add work for 30 at 2026.01.01-10:00 >/dev/null 2>&1
+    # Should create done record: 30m = 1800s, start = 09:30, end = 10:00
+    clk_test__assert_log_line 1 '^done	2026.01.01-09:30	2026.01.01-10:00	work	1800	0'
+}
+
+test_add_session_with_description() {
+    "$CLK_SCRIPT" add work for 60 at 2026.01.01-10:00 on coding stuff >/dev/null 2>&1
+    clk_test__assert_log_line 1 'coding stuff$'
+}
+
+test_add_session_creates_undo() {
+    "$CLK_SCRIPT" add work for 30 at 2026.01.01-10:00 >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: add session should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_add_session_ordering_with_active() {
+    # add should insert before active records
+    "$CLK_SCRIPT" in play at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add work for 30 at 2026.01.01-08:30 >/dev/null 2>&1
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local line2 line3
+    line2="$(awk 'NR==2' "$log_file")"
+    line3="$(awk 'NR==3' "$log_file")"
+    if ! printf '%s' "$line2" | grep -q '^done.*work'; then
+        printf 'FAIL: done record should be before active\n  actual: %s\n' "$line2"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$line3" | grep -q '^active.*play'; then
+        printf 'FAIL: active record should remain at end\n  actual: %s\n' "$line3"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_add_session_confirmation_output() {
+    clk_test__assert_output_contains "Added session" "$CLK_SCRIPT" add work for 30 at 2026.01.01-10:00
+}
+
+test_add_session_missing_for() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" add work
+}
+
+test_add_session_numeric_tag_rejected() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" add 123 for 30 at 2026.01.01-10:00
+}
+
+#####################################################################
+# Tests — clk add (time to active) (integration)
+#####################################################################
+
+test_add_time_basic() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add 15 to work >/dev/null 2>&1
+    # Start time should be moved back 15 min to 08:45
+    clk_test__assert_log_line 1 '^active	2026.01.01-08:45		work'
+}
+
+test_add_time_implicit_tag() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" add 10
+}
+
+test_add_time_implicit_tag_correct() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add 30 >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^active	2026.01.01-08:30		work'
+}
+
+test_add_time_ambiguous_tag() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" add 15
+}
+
+test_add_time_confirmation_output() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" add 15 to work 2>&1)"
+    clk_test__assert_output_contains "Added 15 minutes" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026.01.01-09:00" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026.01.01-08:45" printf '%s' "$output"
+}
+
+test_add_time_creates_undo() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    "$CLK_SCRIPT" add 10 >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: add time should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_add_time_no_active() {
+    clk_test__assert_exit 5 "$CLK_SCRIPT" add 15
+}
+
+#####################################################################
+# Tests — clk add-break (integration)
+#####################################################################
+
+test_add_break_basic() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add-break 10 >/dev/null 2>&1
+    # BREAK_SECS should be 600
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local break_secs
+    break_secs="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f6)"
+    clk_test__assert_equals "600" "$break_secs" "add-break sets BREAK_SECS"
+}
+
+test_add_break_accumulates() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add-break 10 >/dev/null 2>&1
+    "$CLK_SCRIPT" add-break 5 >/dev/null 2>&1
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local break_secs
+    break_secs="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f6)"
+    clk_test__assert_equals "900" "$break_secs" "add-break accumulates"
+}
+
+test_add_break_while_paused() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" add-break 10
+}
+
+test_add_break_while_paused_message() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause >/dev/null 2>&1
+    clk_test__assert_output_contains "currently paused" "$CLK_SCRIPT" add-break 10
+}
+
+test_add_break_with_to_tag() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    "$CLK_SCRIPT" add-break 10 to work >/dev/null 2>&1
+    # Only work's break should be 600; play's should still be 0
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local work_break play_break
+    work_break="$(awk -F'\t' '$4=="work" {print $6}' "$log_file")"
+    play_break="$(awk -F'\t' '$4=="play" {print $6}' "$log_file")"
+    clk_test__assert_equals "600" "$work_break" "add-break to work" &&
+    clk_test__assert_equals "0" "$play_break" "play break unchanged"
+}
+
+test_add_break_alias_ab() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" ab 5
+}
+
+test_add_break_confirmation_output() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" add-break 10 2>&1)"
+    clk_test__assert_output_contains "Added 10m break" printf '%s' "$output" &&
+    clk_test__assert_output_contains "Total break so far" printf '%s' "$output"
+}
+
+test_add_break_creates_undo() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    "$CLK_SCRIPT" add-break 5 >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: add-break should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_add_break_missing_minutes() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" add-break
+}
+
+#####################################################################
+# Tests — clk extend (integration)
+#####################################################################
+
+test_extend_basic() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" extend at 2026.01.01-10:30 >/dev/null 2>&1
+    # End should now be 10:30, length should be 1h30m = 5400s
+    clk_test__assert_log_line 1 '^done	2026.01.01-09:00	2026.01.01-10:30	work	5400	0'
+}
+
+test_extend_before_old_end() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" extend at 2026.01.01-09:30
+}
+
+test_extend_before_old_end_message() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "Cannot shrink" "$CLK_SCRIPT" extend at 2026.01.01-09:30
+}
+
+test_extend_no_done_records() {
+    clk_test__assert_exit 5 "$CLK_SCRIPT" extend at 2026.01.01-10:00
+}
+
+test_extend_confirmation_output() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" extend at 2026.01.01-10:30 2>&1)"
+    clk_test__assert_output_contains "Extended session" printf '%s' "$output" &&
+    clk_test__assert_output_contains "30m" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026.01.01-10:30" printf '%s' "$output"
+}
+
+test_extend_creates_undo() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    "$CLK_SCRIPT" extend at 2026.01.01-10:30 >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: extend should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_extend_preserves_break() {
+    # Extend should preserve existing break time
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add-break 10 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" extend at 2026.01.01-10:30 >/dev/null 2>&1
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local break_secs length_secs
+    break_secs="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f6)"
+    length_secs="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f5)"
+    clk_test__assert_equals "600" "$break_secs" "extend preserves break" &&
+    # length = old_length (3000) + 30min (1800) = 4800
+    # old_length = (10:00-09:00)*60 - 600 = 3000
+    clk_test__assert_equals "4800" "$length_secs" "extend correct length with break"
+}
+
+test_extend_with_active_present() {
+    # extend should work even when active sessions exist
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026.01.01-10:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" extend at 2026.01.01-10:30
+}
+
+#####################################################################
+# Tests — clk remove (integration)
+#####################################################################
+
+test_remove_basic() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove >/dev/null 2>&1
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "0" "$count" "remove deletes last record"
+}
+
+test_remove_active_record() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove >/dev/null 2>&1
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "0" "$count" "remove deletes active record"
+}
+
+test_remove_empty_log() {
+    clk_test__assert_exit 5 "$CLK_SCRIPT" remove
+}
+
+test_remove_empty_log_message() {
+    clk_test__assert_output_contains "No records to remove" "$CLK_SCRIPT" remove
+}
+
+test_remove_shows_removed_record() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026.01.01-10:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" remove 2>&1)"
+    clk_test__assert_output_contains "Removed record" printf '%s' "$output" &&
+    clk_test__assert_output_contains "work" printf '%s' "$output"
+}
+
+test_remove_creates_undo() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    "$CLK_SCRIPT" remove >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: remove should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_remove_alias_pop() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" pop
+}
+
+test_remove_preserves_other_records() {
+    "$CLK_SCRIPT" in a at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026.01.01-10:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026.01.01-11:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove >/dev/null 2>&1
+    # Only 'a' should remain
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$count" "remove preserves other records" &&
+    clk_test__assert_log_line 1 'done.*a	3600'
+}
+
+#####################################################################
 # Tests — out while paused (integration)
 #####################################################################
 
@@ -1722,6 +2139,66 @@ ALL_TESTS=(
     test_unpause_not_paused_message
     test_unpause_confirmation
     test_unpause_explicit_tag
+
+    # clk switch (integration)
+    test_switch_basic
+    test_switch_with_from
+    test_switch_implicit_from
+    test_switch_ambiguous_from
+    test_switch_with_description
+    test_switch_same_tag
+    test_switch_creates_single_undo
+    test_switch_missing_new_tag
+    test_switch_confirmation_output
+
+    # clk add session (integration)
+    test_add_session_basic
+    test_add_session_with_description
+    test_add_session_creates_undo
+    test_add_session_ordering_with_active
+    test_add_session_confirmation_output
+    test_add_session_missing_for
+    test_add_session_numeric_tag_rejected
+
+    # clk add time (integration)
+    test_add_time_basic
+    test_add_time_implicit_tag
+    test_add_time_implicit_tag_correct
+    test_add_time_ambiguous_tag
+    test_add_time_confirmation_output
+    test_add_time_creates_undo
+    test_add_time_no_active
+
+    # clk add-break (integration)
+    test_add_break_basic
+    test_add_break_accumulates
+    test_add_break_while_paused
+    test_add_break_while_paused_message
+    test_add_break_with_to_tag
+    test_add_break_alias_ab
+    test_add_break_confirmation_output
+    test_add_break_creates_undo
+    test_add_break_missing_minutes
+
+    # clk extend (integration)
+    test_extend_basic
+    test_extend_before_old_end
+    test_extend_before_old_end_message
+    test_extend_no_done_records
+    test_extend_confirmation_output
+    test_extend_creates_undo
+    test_extend_preserves_break
+    test_extend_with_active_present
+
+    # clk remove (integration)
+    test_remove_basic
+    test_remove_active_record
+    test_remove_empty_log
+    test_remove_empty_log_message
+    test_remove_shows_removed_record
+    test_remove_creates_undo
+    test_remove_alias_pop
+    test_remove_preserves_other_records
 
     # out while paused
     test_out_while_paused
