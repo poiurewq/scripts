@@ -18,10 +18,10 @@
 .Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
-.Cm add Ar tag Cm for Ar minutes Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.Bro Cm add | Cm a Brc Ar tag Cm for Ar minutes Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
-.Cm add Ar minutes Op Cm to Ar tag
+.Bro Cm add | Cm a Brc Ar minutes Op Cm to Ar tag
 .br
 .Nm
 .Bro Cm add-break | Cm ab Brc Ar minutes Op Cm to Ar tag
@@ -60,19 +60,19 @@
 .Cm log
 .br
 .Nm
-.Cm view Bro Cm today | Cm yesterday Brc
+.Bro Cm view | Cm v Brc Bro Cm today | Cm yesterday Brc
 .br
 .Nm
-.Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+.Bro Cm view | Cm v Brc Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
 .br
 .Nm
-.Cm view Cm from Ar timestamp Cm until Ar timestamp
+.Bro Cm view | Cm v Brc Cm from Ar timestamp Cm until Ar timestamp
 .br
 .Nm
-.Cm edit Fl Ar n Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
+.Bro Cm edit | Cm e Brc Fl Ar n Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
 .br
 .Nm
-.Cm edit Fl Ar n Cm delete
+.Bro Cm edit | Cm e Brc Fl Ar n Cm delete
 .br
 .Nm
 .Cm alias
@@ -87,6 +87,16 @@ All durations are stored internally in seconds for precision.
 Timestamps use ISO 8601 format
 .Pq Ql %Y\-%m\-%dT%H:%M:%S
 and are always in the local time zone.
+Simplified forms are accepted wherever a
+.Ar timestamp
+is expected:
+.Ql HH:MM
+and
+.Ql HH:MM:SS
+are interpreted as times on the current date, and
+.Ql yyyy-mm-ddTHH:MM
+is treated as if seconds were
+.Ql :00 .
 Multiple sessions may be active simultaneously.
 .Pp
 .Nm

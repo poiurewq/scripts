@@ -321,6 +321,71 @@ test_validate_timestamp_error_message() {
 }
 
 #####################################################################
+# Tests — clk__normalize_timestamp
+#####################################################################
+
+test_normalize_timestamp_full_format() {
+    local result
+    result="$(clk__normalize_timestamp "2026-03-20T11:53:00")"
+    clk_test__assert_equals "2026-03-20T11:53:00" "$result" "normalize full format unchanged"
+}
+
+test_normalize_timestamp_no_seconds() {
+    local result
+    result="$(clk__normalize_timestamp "2026-03-20T11:53")"
+    clk_test__assert_equals "2026-03-20T11:53:00" "$result" "normalize yyyy-mm-ddTHH:MM appends :00"
+}
+
+test_normalize_timestamp_time_with_seconds() {
+    local result today
+    today="$(date +%Y-%m-%d)"
+    result="$(clk__normalize_timestamp "15:39:00")"
+    clk_test__assert_equals "${today}T15:39:00" "$result" "normalize HH:MM:SS prepends today"
+}
+
+test_normalize_timestamp_time_only() {
+    local result today
+    today="$(date +%Y-%m-%d)"
+    result="$(clk__normalize_timestamp "15:39")"
+    clk_test__assert_equals "${today}T15:39:00" "$result" "normalize HH:MM prepends today and appends :00"
+}
+
+test_normalize_timestamp_passthrough_invalid() {
+    # Invalid input passes through unchanged (validate catches it later)
+    local result
+    result="$(clk__normalize_timestamp "nope")"
+    clk_test__assert_equals "nope" "$result" "normalize passes through invalid input"
+}
+
+#####################################################################
+# Tests — clk__validate_timestamp with simplified formats
+#####################################################################
+
+test_validate_timestamp_no_seconds() {
+    clk_test__assert_exit 0 clk__validate_timestamp "2026-03-20T11:53"
+}
+
+test_validate_timestamp_time_only() {
+    clk_test__assert_exit 0 clk__validate_timestamp "15:39"
+}
+
+test_validate_timestamp_time_with_seconds() {
+    clk_test__assert_exit 0 clk__validate_timestamp "15:39:00"
+}
+
+test_validate_timestamp_sets_validated_ts() {
+    clk__validate_timestamp "2026-03-20T11:53"
+    clk_test__assert_equals "2026-03-20T11:53:00" "$CLK_VALIDATED_TS" "CLK_VALIDATED_TS normalized"
+}
+
+test_validate_timestamp_time_only_sets_validated_ts() {
+    local today
+    today="$(date +%Y-%m-%d)"
+    clk__validate_timestamp "15:39"
+    clk_test__assert_equals "${today}T15:39:00" "$CLK_VALIDATED_TS" "CLK_VALIDATED_TS from HH:MM"
+}
+
+#####################################################################
 # Tests — clk__validate_positive_int
 #####################################################################
 
@@ -791,6 +856,20 @@ CLK_TESTS_UNIT=(
     test_validate_timestamp_invalid_text
     test_validate_timestamp_missing_part
     test_validate_timestamp_error_message
+
+    # normalize_timestamp
+    test_normalize_timestamp_full_format
+    test_normalize_timestamp_no_seconds
+    test_normalize_timestamp_time_with_seconds
+    test_normalize_timestamp_time_only
+    test_normalize_timestamp_passthrough_invalid
+
+    # validate_timestamp with simplified formats
+    test_validate_timestamp_no_seconds
+    test_validate_timestamp_time_only
+    test_validate_timestamp_time_with_seconds
+    test_validate_timestamp_sets_validated_ts
+    test_validate_timestamp_time_only_sets_validated_ts
 
     # validate_positive_int
     test_validate_positive_int_valid

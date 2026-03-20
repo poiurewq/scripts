@@ -240,6 +240,26 @@ test_edit_bad_index() {
     clk_test__assert_exit 1 "$CLK_SCRIPT" edit -abc tag newtag
 }
 
+test_edit_alias_e() {
+    "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" e -1 tag newtag >/dev/null 2>&1
+    clk_test__assert_log_line 1 'newtag'
+}
+
+test_edit_start_simplified_timestamp() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Use yyyy-mm-ddTHH:MM format
+    "$CLK_SCRIPT" edit -1 start 2026-01-01T09:30 >/dev/null 2>&1
+    clk_test__assert_log_line 1 '2026-01-01T09:30:00'
+}
+
+test_edit_end_simplified_timestamp() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Use yyyy-mm-ddTHH:MM format
+    "$CLK_SCRIPT" edit -1 end 2026-01-01T10:30 >/dev/null 2>&1
+    clk_test__assert_log_line 1 '2026-01-01T10:30:00'
+}
+
 #####################################################################
 # Test registry
 #####################################################################
@@ -273,4 +293,7 @@ CLK_TESTS_EDIT=(
     test_edit_missing_field
     test_edit_unknown_field
     test_edit_bad_index
+    test_edit_alias_e
+    test_edit_start_simplified_timestamp
+    test_edit_end_simplified_timestamp
 )
