@@ -141,6 +141,8 @@ source "$_test_dir/clk-test-session.bash"
 source "$_test_dir/clk-test-pause.bash"
 source "$_test_dir/clk-test-mutation.bash"
 source "$_test_dir/clk-test-view.bash"
+source "$_test_dir/clk-test-edit.bash"
+source "$_test_dir/clk-test-misc.bash"
 
 #####################################################################
 # Collect all tests
@@ -152,6 +154,8 @@ ALL_TESTS=(
     "${CLK_TESTS_PAUSE[@]}"
     "${CLK_TESTS_MUTATION[@]}"
     "${CLK_TESTS_VIEW[@]}"
+    "${CLK_TESTS_EDIT[@]}"
+    "${CLK_TESTS_MISC[@]}"
 )
 
 #####################################################################

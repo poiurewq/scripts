@@ -407,7 +407,7 @@ test_append_line_preserves_existing() {
     # First line should still be version marker
     local first_line
     first_line="$(head -1 "$CLK_LOG")"
-    clk_test__assert_equals "#clk-v2" "$first_line" "append preserves header" &&
+    clk_test__assert_equals "#clk-v3" "$first_line" "append preserves header" &&
     # Should have 3 lines total
     local count
     count="$(wc -l < "$CLK_LOG" | tr -d ' ')"
@@ -663,7 +663,7 @@ test_get_line_basic() {
 test_get_line_header() {
     local got
     got="$(clk__get_line 1)"
-    clk_test__assert_equals "#clk-v2" "$got" "get_line 1 returns header"
+    clk_test__assert_equals "#clk-v3" "$got" "get_line 1 returns header"
 }
 
 test_record_count_empty() {
@@ -704,7 +704,7 @@ test_ensure_log_creates_dir_and_file() {
 test_ensure_log_has_version_marker() {
     local first_line
     first_line="$(head -1 "$CLK_LOG")"
-    clk_test__assert_equals "#clk-v2" "$first_line" "log starts with version marker"
+    clk_test__assert_equals "#clk-v3" "$first_line" "log starts with version marker"
 }
 
 test_ensure_log_strips_trailing_blanks() {
