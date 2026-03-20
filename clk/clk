@@ -149,6 +149,26 @@ clk__resolve_time() {
     fi
 }
 
+# clk__midnight_epoch(offset_days) → epoch
+# Returns the epoch for midnight (00:00:00) of today + offset_days.
+# offset_days=0 → midnight today, offset_days=-1 → midnight yesterday, etc.
+clk__midnight_epoch() {
+    local offset_days="${1:-0}"
+    local today_midnight result
+    case "$CLK_OS" in
+        Linux)
+            today_midnight="$(date -d "today 00:00:00" +'%s' 2>"$CLK_TMP_ERR")" \
+                || clk__die 4 "Failed to compute midnight" "$(cat "$CLK_TMP_ERR")"
+            ;;
+        Darwin)
+            today_midnight="$(date -j -v0H -v0M -v0S +'%s' 2>"$CLK_TMP_ERR")" \
+                || clk__die 4 "Failed to compute midnight" "$(cat "$CLK_TMP_ERR")"
+            ;;
+    esac
+    result=$(( today_midnight + offset_days * 86400 ))
+    printf '%s' "$result"
+}
+
 # clk__fmt_duration(seconds) → "Xh Ym" or "Ym"
 # Human-readable duration formatter.
 # 0     → "0m"
@@ -1198,6 +1218,153 @@ clk_do_redo() {
     printf "Use 'clk undo' to reverse.\n"
 }
 
+# --- clk_do_view ---
+# clk view today | yesterday
+# clk view past [<n>] <hour(s)|day(s)|week(s)> [before <timestamp> | before minus <minutes>]
+# clk view from <timestamp> until <timestamp>
+#
+# --- RATIONALE: view not blocked by active sessions ---
+# v1 required all sessions closed before viewing summaries. v2 excludes
+# active sessions from totals (their duration isn't finalized) and shows a
+# note. Users can check active sessions via 'status'.
+clk_do_view() {
+    local start_epoch="$1" end_epoch="$2" range_desc="$3"
+
+    local start_ts end_ts
+    start_ts="$(clk__from_epoch "$start_epoch")"
+    end_ts="$(clk__from_epoch "$end_epoch")"
+
+    # Count active sessions whose start falls within the range
+    local active_in_range=0
+    local active_lines
+    active_lines="$(clk__find_active)" || true
+    if [ -n "$active_lines" ]; then
+        local aline
+        while IFS= read -r aline; do
+            local acontent
+            acontent="$(clk__get_line "$aline")"
+            clk__read_line "$acontent"
+            local a_start_epoch
+            a_start_epoch="$(clk__to_epoch "$CLK_F2")"
+            if [ "$a_start_epoch" -ge "$start_epoch" ] && [ "$a_start_epoch" -lt "$end_epoch" ]; then
+                active_in_range=$(( active_in_range + 1 ))
+            fi
+        done <<< "$active_lines"
+    fi
+
+    # Use awk to aggregate completed records within range
+    local awk_result
+    awk_result="$(awk -F'\t' -v start="$start_epoch" -v end="$end_epoch" '
+    BEGIN {
+        total = 0
+        ntags = 0
+    }
+    $1 == "done" {
+        # Field 3 = END_TIME, field 5 = LENGTH_SECS, field 4 = TAG
+        # We need to convert END_TIME to epoch for range check.
+        # But we cannot call shell functions from awk. Instead, we filter
+        # by lexicographic comparison on timestamps (ISO 8601 sorts correctly).
+        # However, we receive epoch boundaries, so we need the timestamps.
+        # Actually, let us receive start_ts and end_ts as well.
+        next
+    }
+    ' "$CLK_LOG" 2>/dev/null)" || true
+
+    # Since awk cannot call clk__to_epoch, we do the filtering differently:
+    # extract all done records and filter in a shell loop, or pass timestamp
+    # boundaries and use lexicographic sort. ISO 8601 sorts lexicographically,
+    # so we can compare end_time strings directly.
+
+    # Collect per-tag totals using awk with timestamp string comparisons
+    local start_ts_str end_ts_str
+    start_ts_str="$start_ts"
+    end_ts_str="$end_ts"
+
+    awk_result="$(awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" '
+    $1 == "done" && $3 >= s && $3 <= e {
+        tag = $4
+        secs = $5 + 0
+        total += secs
+        if (!(tag in tagsecs)) {
+            tags[++ntags] = tag
+        }
+        tagsecs[tag] += secs
+    }
+    END {
+        # Print total first, then each tag sorted by seconds descending
+        printf "%d\n", total
+
+        # Simple insertion sort for descending order
+        for (i = 1; i <= ntags; i++) {
+            for (j = i + 1; j <= ntags; j++) {
+                if (tagsecs[tags[j]] > tagsecs[tags[i]]) {
+                    tmp = tags[i]
+                    tags[i] = tags[j]
+                    tags[j] = tmp
+                }
+            }
+        }
+
+        for (i = 1; i <= ntags; i++) {
+            printf "%s\t%d\n", tags[i], tagsecs[tags[i]]
+        }
+    }
+    ' "$CLK_LOG" 2>/dev/null)"
+
+    # Parse awk output
+    local total_secs=0
+    local line_num=0
+    local tag_names=()
+    local tag_secs=()
+
+    while IFS= read -r line; do
+        if [ "$line_num" -eq 0 ]; then
+            total_secs="$line"
+        else
+            local t s
+            t="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f1)"
+            s="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f2)"
+            tag_names+=("$t")
+            tag_secs+=("$s")
+        fi
+        line_num=$(( line_num + 1 ))
+    done <<< "$awk_result"
+
+    # Print output
+    printf '%s\n\n' "$range_desc"
+
+    if [ "$total_secs" -eq 0 ] && [ "${#tag_names[@]}" -eq 0 ]; then
+        printf 'No completed sessions in this range.\n'
+    else
+        local total_minutes total_hours_str
+        total_minutes=$(( total_secs / 60 ))
+        total_hours_str="$(awk "BEGIN { printf \"%.2f\", $total_secs / 3600 }")"
+
+        # Header
+        printf '%-18s %8s %10s %7s\n' "TAG" "MINUTES" "HOURS" "%"
+        printf '%-18s %8d %9sh\n' "TOTAL" "$total_minutes" "$total_hours_str"
+
+        local i
+        for (( i = 0; i < ${#tag_names[@]}; i++ )); do
+            local t_name="${tag_names[$i]}"
+            local t_secs="${tag_secs[$i]}"
+            local t_minutes=$(( t_secs / 60 ))
+            local t_hours_str pct_str
+            t_hours_str="$(awk "BEGIN { printf \"%.2f\", $t_secs / 3600 }")"
+            if [ "$total_secs" -gt 0 ]; then
+                pct_str="$(awk "BEGIN { printf \"%.2f\", ($t_secs / $total_secs) * 100 }")"
+                printf '%-18s %8d %9sh %6s%%\n' "$t_name" "$t_minutes" "$t_hours_str" "$pct_str"
+            else
+                printf '%-18s %8d %9sh\n' "$t_name" "$t_minutes" "$t_hours_str"
+            fi
+        done
+    fi
+
+    if [ "$active_in_range" -gt 0 ]; then
+        printf '\nNote: %d active session(s) not included in totals.\n' "$active_in_range"
+    fi
+}
+
 #####################################################################
 # Main — guarded so the script can be sourced for testing
 #####################################################################
@@ -1575,7 +1742,128 @@ redo)
     clk_do_redo
     ;;
 
-# TODO: view (step 7)
+view)
+    clk_subcmd="view"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing arguments. Usage: 'clk view today', 'clk view past <n> <unit>', or 'clk view from <ts> until <ts>'."
+    fi
+
+    view_start_epoch=""
+    view_end_epoch=""
+    view_range_desc=""
+
+    case "$1" in
+        today)
+            shift
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view today'."
+            view_start_epoch="$(clk__midnight_epoch 0)"
+            view_end_epoch="$(clk__now_epoch)"
+            view_range_desc="Today"
+            ;;
+        yesterday)
+            shift
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view yesterday'."
+            view_start_epoch="$(clk__midnight_epoch -1)"
+            view_end_epoch="$(clk__midnight_epoch 0)"
+            view_range_desc="Yesterday"
+            ;;
+        past)
+            shift
+            # past [<n>] <unit> [before <timestamp> | before minus <minutes>]
+            view_n=1
+            view_unit=""
+
+            if [ $# -eq 0 ]; then
+                clk__die 1 "Missing time unit after 'past'. Usage: 'clk view past [<n>] <hour(s)|day(s)|week(s)>'."
+            fi
+
+            # If first arg is a number, it's the count
+            if printf '%s' "$1" | grep -Eq '^[0-9]+$'; then
+                view_n="$1"; shift
+            fi
+
+            if [ $# -eq 0 ]; then
+                clk__die 1 "Missing time unit. Expected 'hour(s)', 'day(s)', or 'week(s)'."
+            fi
+
+            # --- RATIONALE: Plurality leniency in view ---
+            # hour/hours, day/days, week/weeks are all accepted. Natural language is
+            # lenient; the CLI should be too when intent is unambiguous.
+            case "$1" in
+                hour|hours) view_unit="hours"; shift ;;
+                day|days)   view_unit="days"; shift ;;
+                week|weeks) view_unit="weeks"; shift ;;
+                *) clk__die 1 "Unknown time unit '$1'. Expected 'hour(s)', 'day(s)', or 'week(s)'." ;;
+            esac
+
+            # Default anchor is now
+            view_anchor_epoch="$(clk__now_epoch)"
+
+            # Optional: before <timestamp> | before minus <minutes>
+            if [ $# -gt 0 ]; then
+                if [ "$1" = "before" ]; then
+                    shift
+                    if [ $# -eq 0 ]; then
+                        clk__die 1 "Missing value after 'before'. Expected a timestamp or 'minus <minutes>'."
+                    fi
+                    if [ "$1" = "minus" ]; then
+                        shift
+                        [ $# -ge 1 ] || clk__die 1 "Missing <minutes> after 'before minus'."
+                        clk__validate_positive_int "$1" "<minutes> after 'before minus'"
+                        before_minus_val="$1"; shift
+                        now_ep="$(clk__now_epoch)"
+                        view_anchor_epoch=$(( now_ep - before_minus_val * 60 ))
+                    else
+                        clk__validate_timestamp "$1"
+                        view_anchor_epoch="$(clk__to_epoch "$1")"; shift
+                    fi
+                else
+                    clk__die 1 "Unexpected argument '$1'. Expected 'before' or end of command."
+                fi
+            fi
+
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view past'."
+
+            duration_secs=0
+            case "$view_unit" in
+                hours) duration_secs=$(( view_n * 3600 )) ;;
+                days)  duration_secs=$(( view_n * 86400 )) ;;
+                weeks) duration_secs=$(( view_n * 604800 )) ;;
+            esac
+
+            view_end_epoch="$view_anchor_epoch"
+            view_start_epoch=$(( view_anchor_epoch - duration_secs ))
+            view_range_desc="Past ${view_n} ${view_unit}"
+            ;;
+        from)
+            shift
+            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'from'."
+            clk__validate_timestamp "$1"
+            view_start_epoch="$(clk__to_epoch "$1")"; shift
+
+            if [ $# -eq 0 ] || [ "$1" != "until" ]; then
+                clk__die 1 "Expected 'until <timestamp>' after 'from <timestamp>'."
+            fi
+            shift  # consume 'until'
+            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'until'."
+            clk__validate_timestamp "$1"
+            view_end_epoch="$(clk__to_epoch "$1")"; shift
+
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view from ... until ...'."
+
+            from_ts="$(clk__from_epoch "$view_start_epoch")"
+            until_ts="$(clk__from_epoch "$view_end_epoch")"
+            view_range_desc="${from_ts} → ${until_ts}"
+            ;;
+        *)
+            clk__die 1 "Unknown view mode '$1'. Expected 'today', 'yesterday', 'past', or 'from'."
+            ;;
+    esac
+
+    clk_do_view "$view_start_epoch" "$view_end_epoch" "$view_range_desc"
+    ;;
+
 # TODO: edit (step 8)
 # TODO: log, alias (step 10)
 
