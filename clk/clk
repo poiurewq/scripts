@@ -1,964 +1,2128 @@
 #!/usr/bin/env bash
-# clk
-#   single unified tsv for easier analysis & porting to other apps
-#   more flexible input UI, non-interactive mode only
-#     allow adding sessions directly
-#   more convenient analysis UI, non-interactive mode only
-#     since analysis is based on a unified file, there is no need to divide up a day at a certain cut-off time.
+# clk — time-tracking CLI
+#
+# v3 rewrite: functions-not-copy-paste architecture, unified record schema,
+# seconds-precision durations, multiple active sessions.
 
-#### Constants #####
-clk_fmt='%Y.%m.%d-%H:%M'
-clk_user_facing_fmt='yyyy.mm.dd-HH:MM'
+# --- RATIONALE: No set -e ---
+# set -e interacts poorly with conditionals and command substitutions in bash.
+# Errors are handled explicitly via || clk__die throughout. set -u is used
+# to catch unset variable bugs.
+set -u
 
-clk_synopsis_line1='clk'
-clk_synopsis_line2='help'
-clk_synopsis_line3='in <tag> [{minus <minutes> | at <timestamp>}]'
-clk_synopsis_line4='out <tag> [{minus <minutes> | at <timestamp>}] [on <description>]'
-clk_synopsis_line5='switch <tag> [on <description>]'
-clk_synopsis_line6='add <tag> for <minutes> [{minus <minutes> | at <timestamp>}] [on <description>]'
-clk_synopsis_line7='extend [{minus <minutes> | at <timestamp>}]'
-clk_synopsis_line8='remove | pop'
-clk_synopsis_line9='{pause | p} | {resume | r}'
-clk_synopsis_line10='log'
-clk_synopsis_line11='last | l'
-clk_synopsis_line12='past {dtn | day | week | <number> {days | weeks}} [minus <number> hour(s)]'
-clk_synopsis_line13='alias'
+#####################################################################
+# Constants & format definitions
+#####################################################################
 
-read -d '' CLK_SYN_VAR << CLK_SYN_DOC
-${clk_synopsis_line1}      [${clk_synopsis_line2}]
-         [${clk_synopsis_line3}]
-         [${clk_synopsis_line4}]
-         [${clk_synopsis_line5}]
-         [${clk_synopsis_line6}]
-         [${clk_synopsis_line7}]
-         [${clk_synopsis_line8}]
-         [${clk_synopsis_line9}]
-         [${clk_synopsis_line10}]
-         [${clk_synopsis_line11}]
-         [${clk_synopsis_line12}]
-         [${clk_synopsis_line13}]
-CLK_SYN_DOC
-
+CLK_FMT='%Y-%m-%dT%H:%M:%S'
+CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS'
 CLK_TAB='	'
-CLK_HEADER="end time${CLK_TAB}tag${CLK_TAB}length${CLK_TAB}description"
+CLK_VERSION_MARKER='#clk-v3'
 
-# Detect current operating system
-current_os="$( uname )"
-case $current_os in
-	Linux|Darwin) : ;;
-	*) printf "Clock doesn't know how to operate in the '$current_os' operating system.\n" >&2 && exit 3 ;;
+# Detect OS once; all platform differences are isolated in helper functions.
+CLK_OS="$(uname)"
+case "$CLK_OS" in
+    Linux|Darwin) : ;;
+    *) printf "clk: unsupported operating system '%s'\n" "$CLK_OS" >&2; exit 3 ;;
 esac
 
-#### Help Page #####
+# Temp file for capturing stderr from subprocesses (date, etc.)
+CLK_TMP_ERR=""
+
+# Log file paths (set by clk__ensure_log)
+CLK_DIR=""
+CLK_LOG=""
+CLK_LOG_TMP=""
+
+# Synopsis for --help / no-args display
+read -r -d '' CLK_SYNOPSIS << 'EOF' || true
+clk [help]
+    in <tag> [minus <minutes> | at <timestamp>] [on <description>]
+    out [<tag>] [minus <minutes> | at <timestamp>] [on <description>]
+    switch <new-tag> [from <old-tag>] [minus <minutes> | at <timestamp>] [on <description>]
+    add <tag> for <minutes> [minus <minutes> | at <timestamp>] [on <description>]
+    add <minutes> [to <tag>]
+    add-break | ab <minutes> [to <tag>]
+    extend [minus <minutes> | at <timestamp>]
+    remove | pop
+    pause | p [<tag>] [minus <minutes> | at <timestamp>]
+    resume | r [<tag>] [minus <minutes>]
+    unpause [<tag>]
+    undo | redo
+    status | s
+    last | l [<n>]
+    last-done | ld [<n>]
+    log
+    view today | yesterday
+    view past [<n>] <hour(s)|day(s)|week(s)> [before <timestamp> | before minus <minutes>]
+    view from <timestamp> until <timestamp>
+    edit -<n> <field> <value>
+    edit -<n> delete
+    alias
+EOF
+
+#####################################################################
+# Helper functions
+#####################################################################
+
+# --- clk__die(exit_code, message, [upstream_detail]) ---
+# Prints message to stderr. If upstream_detail is provided, appends it
+# indented below the main message. Exits with exit_code.
+clk__die() {
+    local code="$1" msg="$2"
+    printf 'clk: %s\n' "$msg" >&2
+    if [ -n "${3:-}" ]; then
+        printf '  %s\n' "$3" >&2
+    fi
+    exit "$code"
+}
+
+# --- OS shim layer ---
+# All date(1) differences between Linux and Darwin are isolated here.
+# No case "$CLK_OS" appears in business logic.
+
+# clk__to_epoch(timestamp) → epoch
+# Input:  timestamp in CLK_FMT (e.g., "2026-03-19T18:45:00")
+# Output: Unix epoch seconds on stdout
+# Exit 4 on failure, with captured date(1) stderr in the message.
+clk__to_epoch() {
+    local ts="$1" result exit_code=0
+    case "$CLK_OS" in
+        Linux)  result="$(date -d "$ts" +'%s' 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+        Darwin) result="$(date -j -f "$CLK_FMT" "$ts" +'%s' 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+    esac
+    if [ "$exit_code" -ne 0 ]; then
+        clk__die 4 "Failed to parse timestamp '$ts'" "$(cat "$CLK_TMP_ERR")"
+    fi
+    printf '%s' "$result"
+}
+
+# clk__from_epoch(epoch) → timestamp
+# Input:  Unix epoch seconds
+# Output: timestamp in CLK_FMT on stdout
+clk__from_epoch() {
+    local epoch="$1" result exit_code=0
+    case "$CLK_OS" in
+        Linux)  result="$(date -d "@$epoch" +"$CLK_FMT" 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+        Darwin) result="$(date -r "$epoch" +"$CLK_FMT" 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+    esac
+    if [ "$exit_code" -ne 0 ]; then
+        clk__die 4 "Failed to format epoch '$epoch'" "$(cat "$CLK_TMP_ERR")"
+    fi
+    printf '%s' "$result"
+}
+
+# clk__now_epoch() → epoch
+# Current time as Unix epoch seconds.
+clk__now_epoch() {
+    date +'%s'
+}
+
+# clk__now_fmt() → timestamp
+# Current time in CLK_FMT.
+clk__now_fmt() {
+    date +"$CLK_FMT"
+}
+
+# clk__resolve_time(at_val, minus_val) → timestamp
+# Resolves the at/minus/now tri-state that recurs in nearly every subcommand.
+# If at_val is set, return it. Elif minus_val is set, return now - N minutes.
+# Else return now.
+#
+# --- RATIONALE: Extracted tri-state ---
+# This tri-state recurs in in, out, switch, add, extend, pause, resume.
+# Extracting it eliminates ~80 lines of duplicated logic from v1.
+clk__resolve_time() {
+    local at_val="$1" minus_val="$2"
+    if [ -n "$at_val" ]; then
+        printf '%s' "$at_val"
+    elif [ -n "$minus_val" ]; then
+        local now_epoch
+        now_epoch="$(clk__now_epoch)"
+        clk__from_epoch "$(( now_epoch - minus_val * 60 ))"
+    else
+        clk__now_fmt
+    fi
+}
+
+# clk__midnight_epoch(offset_days) → epoch
+# Returns the epoch for midnight (00:00:00) of today + offset_days.
+# offset_days=0 → midnight today, offset_days=-1 → midnight yesterday, etc.
+clk__midnight_epoch() {
+    local offset_days="${1:-0}"
+    local today_midnight result
+    case "$CLK_OS" in
+        Linux)
+            today_midnight="$(date -d "today 00:00:00" +'%s' 2>"$CLK_TMP_ERR")" \
+                || clk__die 4 "Failed to compute midnight" "$(cat "$CLK_TMP_ERR")"
+            ;;
+        Darwin)
+            today_midnight="$(date -j -v0H -v0M -v0S +'%s' 2>"$CLK_TMP_ERR")" \
+                || clk__die 4 "Failed to compute midnight" "$(cat "$CLK_TMP_ERR")"
+            ;;
+    esac
+    result=$(( today_midnight + offset_days * 86400 ))
+    printf '%s' "$result"
+}
+
+# clk__fmt_duration(seconds) → "Xh Ym" or "Ym"
+# Human-readable duration formatter.
+# 0     → "0m"
+# 45    → "0m"    (sub-minute rounds down for display; stored value is exact)
+# 300   → "5m"
+# 3660  → "1h 1m"
+# 7200  → "2h 0m"
+#
+# --- RATIONALE: Seconds not minutes ---
+# v1 stored duration in integer minutes, losing up to 59 seconds per session.
+# Over hundreds of sessions this drift compounds. Seconds preserve full
+# precision; display helpers convert for humans.
+clk__fmt_duration() {
+    local secs="$1"
+    local mins=$(( secs / 60 ))
+    local hours=$(( mins / 60 ))
+    local rem_mins=$(( mins % 60 ))
+    if [ "$hours" -gt 0 ]; then
+        printf '%dh %dm' "$hours" "$rem_mins"
+    else
+        printf '%dm' "$mins"
+    fi
+}
+
+# --- RATIONALE: Unified record schema ---
+# v1 used different field positions for active vs completed records (e.g.,
+# field 2 was "start time" in active but "tag" in completed). v2 uses a
+# single 8-field schema where field N always means the same thing regardless
+# of status, eliminating the need to branch on record type for field access.
+
+# clk__read_line(line_content) → sets CLK_F1..CLK_F8
+# Parses a record line into global field variables.
+# Fields: STATUS START_TIME END_TIME TAG LENGTH_SECS BREAK_SECS PAUSED_AT DESCRIPTION
+clk__read_line() {
+    local line="$1"
+    # Note: bash's IFS-read collapses consecutive delimiters, losing empty
+    # fields. Use cut -d<tab> -fN instead, which preserves empty fields.
+    CLK_F1="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f1)"
+    CLK_F2="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f2)"
+    CLK_F3="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f3)"
+    CLK_F4="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f4)"
+    CLK_F5="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f5)"
+    CLK_F6="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f6)"
+    CLK_F7="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f7)"
+    CLK_F8="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f8)"
+}
+
+# clk__fmt_record(line_content) → human-readable string
+# Formats a single record for user display.
+# For completed records:
+#   <tag>  <start_time> → <end_time>  <duration>  (break: Xm)  <description>
+# For active records:
+#   <tag>  started at <start_time>  (active, <elapsed> so far)  <description>
+# Break shown only if > 0. Description shown only if non-empty.
+# Pause state shown for active records if paused.
+clk__fmt_record() {
+    local line="$1"
+    clk__read_line "$line"
+
+    local status="$CLK_F1"
+    local start_time="$CLK_F2"
+    local end_time="$CLK_F3"
+    local tag="$CLK_F4"
+    local length_secs="$CLK_F5"
+    local break_secs="$CLK_F6"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    local out=""
+
+    if [ "$status" = "done" ]; then
+        local dur_str
+        dur_str="$(clk__fmt_duration "$length_secs")"
+        out="${tag}  ${start_time} → ${end_time}  ${dur_str}"
+        if [ -n "$break_secs" ] && [ "$break_secs" -gt 0 ] 2>/dev/null; then
+            local break_str
+            break_str="$(clk__fmt_duration "$break_secs")"
+            out="${out}  (break: ${break_str})"
+        fi
+        if [ -n "$description" ]; then
+            out="${out}  ${description}"
+        fi
+    elif [ "$status" = "active" ]; then
+        out="${tag}  started at ${start_time}  (active"
+        # Calculate elapsed if possible
+        local now_epoch start_epoch elapsed_secs elapsed_str
+        now_epoch="$(clk__now_epoch)"
+        start_epoch="$(clk__to_epoch "$start_time" 2>/dev/null)" || start_epoch=""
+        if [ -n "$start_epoch" ]; then
+            elapsed_secs=$(( now_epoch - start_epoch ))
+            # Subtract finalized break time
+            if [ -n "$break_secs" ] && [ "$break_secs" -gt 0 ] 2>/dev/null; then
+                elapsed_secs=$(( elapsed_secs - break_secs ))
+            fi
+            # If currently paused, subtract ongoing pause too
+            if [ -n "$paused_at" ]; then
+                elapsed_secs=$(( elapsed_secs - (now_epoch - paused_at) ))
+            fi
+            if [ "$elapsed_secs" -lt 0 ]; then
+                elapsed_secs=0
+            fi
+            elapsed_str="$(clk__fmt_duration "$elapsed_secs")"
+            out="${out}, ${elapsed_str} so far"
+        fi
+        if [ -n "$paused_at" ]; then
+            local paused_ts
+            paused_ts="$(clk__from_epoch "$paused_at" 2>/dev/null)" || paused_ts="$paused_at"
+            out="${out}, paused since ${paused_ts}"
+        fi
+        out="${out})"
+        if [ -n "$description" ]; then
+            out="${out}  ${description}"
+        fi
+    else
+        # Unknown status, just dump it
+        out="$line"
+    fi
+
+    printf '%s' "$out"
+}
+
+# --- Validators ---
+
+# clk__validate_tag(tag)
+# Exits with error if tag is empty, numeric-only, or contains whitespace/tabs.
+clk__validate_tag() {
+    local tag="$1"
+    if [ -z "$tag" ]; then
+        clk__die 1 "Tag cannot be empty."
+    fi
+    if printf '%s' "$tag" | grep -Eq '^[0-9]+$'; then
+        # --- RATIONALE: No numeric tags ---
+        # The add subcommand is overloaded: add <tag> for <minutes> vs
+        # add <minutes> [to <tag>]. The parser disambiguates by checking if $2
+        # is numeric. If tags could be numbers, this would be ambiguous.
+        clk__die 1 "Tag '$tag' cannot be purely numeric. Use a descriptive name."
+    fi
+    if printf '%s' "$tag" | grep -Eq '[[:space:]]'; then
+        clk__die 1 "Tag '$tag' cannot contain whitespace. Use dots for hierarchy (e.g., 'pm.bills')."
+    fi
+}
+
+# clk__validate_timestamp(ts)
+# Exits with error if ts doesn't match CLK_FMT regex.
+clk__validate_timestamp() {
+    local ts="$1"
+    if ! printf '%s' "$ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'; then
+        clk__die 1 "Invalid timestamp '$ts'. Expected format: ${CLK_USER_FMT}"
+    fi
+}
+
+# clk__validate_positive_int(val, label)
+# Exits with error if val is not a positive integer.
+clk__validate_positive_int() {
+    local val="$1" label="$2"
+    if ! printf '%s' "$val" | grep -Eq '^[0-9]+$'; then
+        clk__die 1 "Expected a positive integer for ${label}, got '$val'."
+    fi
+}
+
+# --- File I/O helpers ---
+
+# clk__save_undo()
+# Snapshots the current log for single-level undo. Clears redo state.
+#
+# --- RATIONALE: Single-level undo ---
+# Multi-level undo would require a snapshot stack (disk) or reversible op log
+# (complexity). Single-level covers the common "oops" case. clk edit handles
+# surgical fixes to older records.
+clk__save_undo() {
+    cp "$CLK_LOG" "${CLK_LOG}.undo" || clk__die 2 "Failed to save undo snapshot."
+    \rm -f "${CLK_LOG}.redo"
+}
+
+# clk__append_line(content)
+# Appends a record line to the end of the log.
+clk__append_line() {
+    local content="$1"
+    printf '%s\n' "$content" >> "$CLK_LOG" || clk__die 2 "Failed to append to log."
+}
+
+# clk__replace_line(line_number, new_content)
+# Replaces a specific line in the log (1-indexed).
+clk__replace_line() {
+    local lineno="$1" new_content="$2"
+    awk -v n="$lineno" -v rep="$new_content" 'NR==n{print rep;next}{print}' \
+        "$CLK_LOG" > "$CLK_LOG_TMP" || clk__die 2 "Failed to replace line $lineno."
+    mv "$CLK_LOG_TMP" "$CLK_LOG" || clk__die 2 "Failed to update log file."
+}
+
+# clk__delete_line(line_number)
+# Deletes a specific line from the log (1-indexed).
+clk__delete_line() {
+    local lineno="$1"
+    awk -v n="$lineno" 'NR!=n' \
+        "$CLK_LOG" > "$CLK_LOG_TMP" || clk__die 2 "Failed to delete line $lineno."
+    mv "$CLK_LOG_TMP" "$CLK_LOG" || clk__die 2 "Failed to update log file."
+}
+
+# clk__insert_before_active(content)
+# Inserts a completed record just above the first active line
+# (or appends if no active lines exist). Maintains sort order.
+#
+# --- RATIONALE: Active records at end of file ---
+# Completed records are sorted by end-time for efficient range queries in
+# 'view'. Keeping active records below all completed records preserves this
+# sort order. When a session completes, its done-line is inserted just above
+# the first remaining active line.
+clk__insert_before_active() {
+    local content="$1"
+    local first_active_lineno
+    first_active_lineno="$(clk__find_active | head -1)" || true
+    if [ -n "$first_active_lineno" ]; then
+        # Insert before the first active line
+        awk -v n="$first_active_lineno" -v ins="$content" \
+            'NR==n{print ins}{print}' \
+            "$CLK_LOG" > "$CLK_LOG_TMP" || clk__die 2 "Failed to insert before active line."
+        mv "$CLK_LOG_TMP" "$CLK_LOG" || clk__die 2 "Failed to update log file."
+    else
+        # No active lines; just append
+        clk__append_line "$content"
+    fi
+}
+
+# clk__find_active([tag]) → line_number(s)
+# With no args: finds all active lines, prints line numbers (one per line).
+# With tag arg: finds the active line for that specific tag.
+# Prints line numbers to stdout. Returns 0 if found, 1 if not found.
+#
+# Implementation: awk scan for lines where field 1 == "active".
+# Since active records cluster at the end, this is fast even for large logs.
+clk__find_active() {
+    local tag="${1:-}"
+    local result
+    if [ -n "$tag" ]; then
+        result="$(awk -F'\t' -v t="$tag" '$1=="active" && $4==t {print NR}' "$CLK_LOG")"
+    else
+        result="$(awk -F'\t' '$1=="active" {print NR}' "$CLK_LOG")"
+    fi
+    if [ -z "$result" ]; then
+        return 1
+    fi
+    printf '%s\n' "$result"
+    return 0
+}
+
+# clk__require_active_tag(tag) → sets CLK_ACTIVE_LINE and CLK_ACTIVE_TAG
+# If tag is provided and has an active session, set globals and return.
+# If tag is empty and exactly one active session, infer tag and set globals.
+# If tag is empty and zero active sessions, error + exit 5.
+# If tag is empty and multiple active sessions, error listing them + exit 1.
+#
+# --- RATIONALE: Tag resolution (implicit when unambiguous) ---
+# Commands like out/pause/resume accept an optional tag. When exactly one
+# session is active, the tag is inferred. When multiple are active, the user
+# must specify. This means single-session users see zero UX change from v1.
+CLK_ACTIVE_LINE=""
+CLK_ACTIVE_TAG=""
+
+clk__require_active_tag() {
+    local tag="${1:-}"
+    CLK_ACTIVE_LINE=""
+    CLK_ACTIVE_TAG=""
+
+    if [ -n "$tag" ]; then
+        # Tag provided: find its active session
+        local lineno
+        lineno="$(clk__find_active "$tag")" || \
+            clk__die 5 "No active session for tag '$tag'."
+        CLK_ACTIVE_LINE="$lineno"
+        CLK_ACTIVE_TAG="$tag"
+        return 0
+    fi
+
+    # No tag: check how many active sessions exist
+    local lines
+    lines="$(clk__find_active)" || \
+        clk__die 5 "No active sessions. Clock in first with 'clk in <tag>'."
+
+    local count
+    count="$(printf '%s\n' "$lines" | wc -l | tr -d ' ')"
+
+    if [ "$count" -eq 1 ]; then
+        CLK_ACTIVE_LINE="$lines"
+        # Read the line to get the tag
+        local line_content
+        line_content="$(awk -v n="$lines" 'NR==n' "$CLK_LOG")"
+        clk__read_line "$line_content"
+        CLK_ACTIVE_TAG="$CLK_F4"
+        return 0
+    fi
+
+    # Multiple active sessions — list them and error
+    local msg="Multiple active sessions. Specify a tag:"
+    local lineno
+    while IFS= read -r lineno; do
+        local line_content
+        line_content="$(awk -v n="$lineno" 'NR==n' "$CLK_LOG")"
+        clk__read_line "$line_content"
+        msg="${msg}
+  ${CLK_F4}  (started at ${CLK_F2})"
+    done <<< "$lines"
+    clk__die 1 "$msg"
+}
+
+# clk__get_line(line_number) → line content
+# Reads a specific line from the log by line number.
+clk__get_line() {
+    local lineno="$1"
+    awk -v n="$lineno" 'NR==n' "$CLK_LOG"
+}
+
+# clk__record_count() → number of data lines (excluding comments)
+# Returns the count of non-comment, non-empty lines in the log.
+clk__record_count() {
+    awk -F'\t' '/^[^#]/ && NF>0' "$CLK_LOG" | wc -l | tr -d ' '
+}
+
+# --- Log management ---
+
+# clk__ensure_log()
+# Creates log dir/file if missing. Runs migration if needed (not yet implemented).
+# Strips trailing blank lines. Sets CLK_DIR, CLK_LOG, CLK_LOG_TMP, CLK_TMP_ERR.
+clk__ensure_log() {
+    CLK_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/clk"
+    CLK_LOG="${CLK_DIR}/clk.tsv"
+    CLK_LOG_TMP="${CLK_LOG}.tmp"
+    CLK_TMP_ERR="${CLK_DIR}/.clk_stderr"
+
+    if [ ! -d "$CLK_DIR" ]; then
+        mkdir -p "$CLK_DIR" || clk__die 2 "Failed to create directory '$CLK_DIR'."
+    fi
+
+    if [ ! -f "$CLK_LOG" ]; then
+        printf '%s\n' "$CLK_VERSION_MARKER" > "$CLK_LOG" || clk__die 2 "Failed to create log file '$CLK_LOG'."
+    fi
+
+    # Initialize temp error file
+    : > "$CLK_TMP_ERR" || clk__die 2 "Failed to create temp error file '$CLK_TMP_ERR'."
+
+    # Migration (step 9) was performed manually. Auto-migration is not
+    # implemented — the only user has already migrated their data.
+
+    # Strip trailing blank lines
+    if [ -s "$CLK_LOG" ]; then
+        local last_line
+        while
+            last_line="$(tail -1 "$CLK_LOG")" &&
+            { [ -z "$last_line" ] || printf '%s' "$last_line" | grep -Eq '^[[:space:]]*$'; }
+        do
+            local line_count
+            line_count=$(wc -l < "$CLK_LOG")
+            if [ "$line_count" -le 1 ]; then
+                # Only the version marker remains (or file is nearly empty)
+                break
+            fi
+            sed -e '$d' "$CLK_LOG" > "$CLK_LOG_TMP" || clk__die 2 "Failed to strip trailing blank line."
+            mv "$CLK_LOG_TMP" "$CLK_LOG" || clk__die 2 "Failed to update log file."
+        done
+    fi
+}
+
+#####################################################################
+# Subcommand functions
+#####################################################################
+
+# --- clk_do_in ---
+# clk in <tag> [minus <minutes> | at <timestamp>] [on <description>]
+#
+# --- RATIONALE: Description at clock-in ---
+# Users often know what they're about to work on when they clock in, but may
+# forget to annotate at clock-out. Allowing `on` at clock-in captures intent
+# early. The clock-out description wins if provided.
+clk_do_in() {
+    local tag="$1" at_ts="$2" minus_val="$3" description="$4"
+
+    clk__validate_tag "$tag"
+
+    # Validate that no active session for this tag already exists
+    if clk__find_active "$tag" >/dev/null 2>&1; then
+        clk__die 5 "Tag '$tag' already has an active session. Clock out first with 'clk out $tag'."
+    fi
+
+    local start_ts
+    start_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
+
+    clk__save_undo
+
+    # active \t START \t (empty) \t TAG \t (empty) \t 0 \t (empty) \t DESCRIPTION
+    local record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${tag}${CLK_TAB}${CLK_TAB}0${CLK_TAB}${CLK_TAB}${description}"
+    clk__append_line "$record"
+
+    printf '\nStarted session in\n  %s\n  at %s\n' "$tag" "$start_ts"
+    if [ -n "$description" ]; then
+        printf '  on %s\n' "$description"
+    fi
+    printf '\n'
+}
+
+# --- clk_do_out ---
+# clk out [<tag>] [minus <minutes> | at <timestamp>] [on <description>]
+#
+# --- RATIONALE: Description override at clock-out ---
+# Users often set a description at clock-in for intent, then refine it at
+# clock-out to reflect what actually happened. Clock-out description wins.
+clk_do_out() {
+    local tag="$1" at_ts="$2" minus_val="$3" description="$4"
+    # skip_undo: when called from switch, undo is already saved
+    local skip_undo="${5:-}"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    local end_ts
+    end_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local existing_desc="$CLK_F8"
+
+    # If session is currently paused, finalize pause
+    local end_epoch
+    end_epoch="$(clk__to_epoch "$end_ts")"
+    if [ -n "$paused_at" ]; then
+        break_secs=$(( break_secs + end_epoch - paused_at ))
+    fi
+
+    # Calculate length
+    local start_epoch
+    start_epoch="$(clk__to_epoch "$start_ts")"
+    local length_secs=$(( end_epoch - start_epoch - break_secs ))
+
+    if [ "$length_secs" -lt 0 ]; then
+        local total_dur
+        total_dur="$(clk__fmt_duration $(( end_epoch - start_epoch )))"
+        local break_dur
+        break_dur="$(clk__fmt_duration "$break_secs")"
+        clk__die 1 "Active time would be negative. Session span is ${total_dur} but break time is ${break_dur}."
+    fi
+
+    # Resolve description: clock-out overrides clock-in
+    local final_desc="$description"
+    if [ -z "$final_desc" ]; then
+        final_desc="$existing_desc"
+    fi
+
+    if [ "$skip_undo" != "skip_undo" ]; then
+        clk__save_undo
+    fi
+
+    # Delete the active line
+    clk__delete_line "$active_line"
+
+    # Build completed record
+    local done_record="done${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${active_tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${CLK_TAB}${final_desc}"
+
+    # Insert before remaining active lines (maintains sort order)
+    clk__insert_before_active "$done_record"
+
+    # Print confirmation
+    local dur_str
+    dur_str="$(clk__fmt_duration "$length_secs")"
+    printf '\nRecorded session in\n  %s\n  %s → %s  (%s)\n' "$active_tag" "$start_ts" "$end_ts" "$dur_str"
+    if [ "$break_secs" -gt 0 ]; then
+        local break_str
+        break_str="$(clk__fmt_duration "$break_secs")"
+        printf '  break: %s\n' "$break_str"
+    fi
+    if [ -n "$final_desc" ]; then
+        printf '  on %s\n' "$final_desc"
+    fi
+    printf '\n'
+}
+
+# --- clk_do_status ---
+# clk status | s
+clk_do_status() {
+    local lines
+    lines="$(clk__find_active)" || {
+        printf 'No active sessions.\n'
+        return 0
+    }
+
+    local lineno
+    while IFS= read -r lineno; do
+        local line_content
+        line_content="$(clk__get_line "$lineno")"
+        local formatted
+        formatted="$(clk__fmt_record "$line_content")"
+        printf '  %s\n' "$formatted"
+    done <<< "$lines"
+}
+
+# --- clk_do_last ---
+# clk last [<n>] | l [<n>]
+#
+# --- RATIONALE: clk last includes active records ---
+# last and edit -N form a pair: last shows what's there with -N indices,
+# edit -N modifies by index. If last excluded active records but edit counted
+# them, the indices would be misaligned. Alignment > separation.
+clk_do_last() {
+    local n="${1:-1}"
+    clk__validate_positive_int "$n" "<n> in 'clk last <n>'"
+
+    # Count data lines (non-comment, non-empty)
+    local total
+    total="$(clk__record_count)"
+
+    if [ "$total" -eq 0 ]; then
+        printf 'No records in log.\n'
+        return 0
+    fi
+
+    if [ "$n" -gt "$total" ]; then
+        n="$total"
+    fi
+
+    # Collect data line numbers (skipping comments)
+    local data_lines
+    data_lines="$(awk '/^[^#]/ && NF>0 {print NR}' "$CLK_LOG")"
+
+    # Get the last N data line numbers
+    local selected
+    selected="$(printf '%s\n' "$data_lines" | tail -n "$n")"
+
+    # Display in order, with -N index (N counts from end of data lines)
+    local i="$n"
+    while IFS= read -r lineno; do
+        local line_content
+        line_content="$(clk__get_line "$lineno")"
+        local formatted
+        formatted="$(clk__fmt_record "$line_content")"
+        printf -- '-%d  %s\n' "$i" "$formatted"
+        i=$(( i - 1 ))
+    done <<< "$selected"
+}
+
+# --- clk_do_last_done ---
+# clk last-done [<n>] | ld [<n>]
+#
+# --- RATIONALE: last-done omits -N index ---
+# The index would skip active records but edit -N doesn't, so showing a
+# wrong index is worse than showing none.
+clk_do_last_done() {
+    local n="${1:-1}"
+    clk__validate_positive_int "$n" "<n> in 'clk last-done <n>'"
+
+    # Collect only 'done' lines
+    local done_lines
+    done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+
+    if [ -z "$done_lines" ]; then
+        printf 'No completed records in log.\n'
+        return 0
+    fi
+
+    local total
+    total="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
+
+    if [ "$n" -gt "$total" ]; then
+        n="$total"
+    fi
+
+    local selected
+    selected="$(printf '%s\n' "$done_lines" | tail -n "$n")"
+
+    while IFS= read -r lineno; do
+        local line_content
+        line_content="$(clk__get_line "$lineno")"
+        local formatted
+        formatted="$(clk__fmt_record "$line_content")"
+        printf '  %s\n' "$formatted"
+    done <<< "$selected"
+}
+
+# --- clk_do_pause ---
+# clk pause [<tag>] [minus <minutes> | at <timestamp>]
+clk_do_pause() {
+    local tag="$1" minus_val="$2" at_ts="$3"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    # Guard: must not already be paused
+    if [ -n "$paused_at" ]; then
+        local paused_ts
+        paused_ts="$(clk__from_epoch "$paused_at" 2>/dev/null)" || paused_ts="$paused_at"
+        clk__die 5 "Session '$active_tag' is already paused (since ${paused_ts}). Use 'clk resume' first."
+    fi
+
+    # Calculate pause epoch
+    local pause_epoch
+    if [ -n "$at_ts" ]; then
+        pause_epoch="$(clk__to_epoch "$at_ts")"
+    elif [ -n "$minus_val" ]; then
+        local now_epoch
+        now_epoch="$(clk__now_epoch)"
+        pause_epoch=$(( now_epoch - minus_val * 60 ))
+    else
+        pause_epoch="$(clk__now_epoch)"
+    fi
+
+    clk__save_undo
+
+    # Replace record with PAUSED_AT set
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${break_secs}${CLK_TAB}${pause_epoch}${CLK_TAB}${description}"
+    clk__replace_line "$active_line" "$new_record"
+
+    local pause_ts
+    pause_ts="$(clk__from_epoch "$pause_epoch")"
+
+    # Calculate active work so far
+    local start_epoch elapsed_secs
+    start_epoch="$(clk__to_epoch "$start_ts")"
+    elapsed_secs=$(( pause_epoch - start_epoch - break_secs ))
+    if [ "$elapsed_secs" -lt 0 ]; then elapsed_secs=0; fi
+    local elapsed_str
+    elapsed_str="$(clk__fmt_duration "$elapsed_secs")"
+
+    printf '\nSession in\n  %s\n  paused at %s\n  Active work so far: %s\n\n' \
+        "$active_tag" "$pause_ts" "$elapsed_str"
+}
+
+# --- clk_do_resume ---
+# clk resume [<tag>] [minus <minutes>]
+clk_do_resume() {
+    local tag="$1" minus_val="$2"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    # Guard: must be currently paused
+    if [ -z "$paused_at" ]; then
+        clk__die 5 "Session '$active_tag' is not paused. Use 'clk pause' first."
+    fi
+
+    # Calculate resume epoch
+    local resume_epoch
+    if [ -n "$minus_val" ]; then
+        local now_epoch
+        now_epoch="$(clk__now_epoch)"
+        resume_epoch=$(( now_epoch - minus_val * 60 ))
+    else
+        resume_epoch="$(clk__now_epoch)"
+    fi
+
+    # Calculate this pause duration and new total break
+    local this_pause_secs=$(( resume_epoch - paused_at ))
+    if [ "$this_pause_secs" -lt 0 ]; then
+        local resume_ts paused_ts
+        resume_ts="$(clk__from_epoch "$resume_epoch")"
+        paused_ts="$(clk__from_epoch "$paused_at")"
+        clk__die 1 "Resume time ${resume_ts} cannot be earlier than pause time ${paused_ts}."
+    fi
+    local new_break_secs=$(( break_secs + this_pause_secs ))
+
+    clk__save_undo
+
+    # Replace record: update BREAK_SECS and clear PAUSED_AT
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${new_break_secs}${CLK_TAB}${CLK_TAB}${description}"
+    clk__replace_line "$active_line" "$new_record"
+
+    local resume_ts
+    resume_ts="$(clk__from_epoch "$resume_epoch")"
+    local this_pause_str total_break_str
+    this_pause_str="$(clk__fmt_duration "$this_pause_secs")"
+    total_break_str="$(clk__fmt_duration "$new_break_secs")"
+
+    printf '\nSession in\n  %s\n  resumed at %s\n  This pause: %s\n  Total break so far: %s\n\n' \
+        "$active_tag" "$resume_ts" "$this_pause_str" "$total_break_str"
+}
+
+# --- clk_do_unpause ---
+# clk unpause [<tag>]
+#
+# Clears PAUSED_AT without adding any time to BREAK_SECS.
+# For the "I paused by mistake" case.
+clk_do_unpause() {
+    local tag="$1"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    # Guard: must be currently paused
+    if [ -z "$paused_at" ]; then
+        clk__die 5 "Session '$active_tag' is not paused. Nothing to unpause."
+    fi
+
+    clk__save_undo
+
+    # Replace record: clear PAUSED_AT, keep BREAK_SECS unchanged
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${break_secs}${CLK_TAB}${CLK_TAB}${description}"
+    clk__replace_line "$active_line" "$new_record"
+
+    printf '\nPause cancelled for session in\n  %s\n  No break time was added.\n\n' "$active_tag"
+}
+
+# --- clk_do_switch ---
+# clk switch <new-tag> [from <old-tag>] [minus <minutes> | at <timestamp>] [on <description>]
+#
+# --- RATIONALE: from keyword ---
+# With multiple active sessions, the script cannot infer which session to
+# close. `from <old-tag>` is explicit without changing the existing
+# single-session syntax where `clk switch <tag>` just works.
+clk_do_switch() {
+    local new_tag="$1" from_tag="$2" at_ts="$3" minus_val="$4" description="$5"
+
+    clk__validate_tag "$new_tag"
+
+    # Resolve which session to close
+    clk__require_active_tag "$from_tag"
+    local old_tag="$CLK_ACTIVE_TAG"
+
+    # Cannot switch to the same tag
+    if [ "$new_tag" = "$old_tag" ]; then
+        clk__die 1 "Cannot switch from '$old_tag' to the same tag."
+    fi
+
+    # Single undo snapshot for the combined operation
+    clk__save_undo
+
+    # Close old session (skip_undo since we already saved)
+    clk_do_out "$old_tag" "$at_ts" "$minus_val" "$description" "skip_undo"
+
+    # Start new session at the same timestamp (no description for the new session)
+    clk_do_in "$new_tag" "$at_ts" "$minus_val" ""
+}
+
+# --- clk_do_add_session ---
+# clk add <tag> for <minutes> [minus <minutes> | at <timestamp>] [on <description>]
+# Creates a completed (done) record directly.
+clk_do_add_session() {
+    local tag="$1" for_minutes="$2" at_ts="$3" minus_val="$4" description="$5"
+
+    clk__validate_tag "$tag"
+    clk__validate_positive_int "$for_minutes" "<minutes> after 'for'"
+
+    local end_ts
+    end_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
+
+    local end_epoch start_epoch length_secs start_ts
+    end_epoch="$(clk__to_epoch "$end_ts")"
+    length_secs=$(( for_minutes * 60 ))
+    start_epoch=$(( end_epoch - length_secs ))
+    start_ts="$(clk__from_epoch "$start_epoch")"
+
+    clk__save_undo
+
+    local done_record="done${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}0${CLK_TAB}${CLK_TAB}${description}"
+    clk__insert_before_active "$done_record"
+
+    local dur_str
+    dur_str="$(clk__fmt_duration "$length_secs")"
+    printf '\nAdded session in\n  %s\n  %s → %s  (%s)\n' "$tag" "$start_ts" "$end_ts" "$dur_str"
+    if [ -n "$description" ]; then
+        printf '  on %s\n' "$description"
+    fi
+    printf '\n'
+}
+
+# --- clk_do_add_time ---
+# clk add <minutes> [to <tag>]
+# Adjusts the active session's START_TIME backwards by <minutes> minutes.
+#
+# --- RATIONALE: Adjusting start time ---
+# "Add 15 minutes" means "I was actually working 15 minutes before I
+# clocked in." Moving the start time backwards preserves the invariant
+# LENGTH = (END - START) - BREAK without a separate "bonus time" field.
+clk_do_add_time() {
+    local minutes="$1" tag="$2"
+
+    clk__validate_positive_int "$minutes" "<minutes> in 'clk add <minutes>'"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local old_start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    # Calculate new start time
+    local old_start_epoch new_start_epoch new_start_ts
+    old_start_epoch="$(clk__to_epoch "$old_start_ts")"
+    new_start_epoch=$(( old_start_epoch - minutes * 60 ))
+    new_start_ts="$(clk__from_epoch "$new_start_epoch")"
+
+    clk__save_undo
+
+    local new_record="active${CLK_TAB}${new_start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
+    clk__replace_line "$active_line" "$new_record"
+
+    printf '\nAdded %d minutes to session in\n  %s\n  %s → %s\n\n' \
+        "$minutes" "$active_tag" "$old_start_ts" "$new_start_ts"
+}
+
+# --- clk_do_add_break ---
+# clk add-break <minutes> [to <tag>]
+# clk ab <minutes> [to <tag>]
+#
+# --- RATIONALE: add-break blocked while paused ---
+# Adding manual break time while the session is paused would double-count:
+# the pause duration AND the manual addition both become break. Requiring
+# resume first keeps accounting unambiguous.
+clk_do_add_break() {
+    local minutes="$1" tag="$2"
+
+    clk__validate_positive_int "$minutes" "<minutes> in 'clk add-break <minutes>'"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    # Guard: must not be paused
+    if [ -n "$paused_at" ]; then
+        clk__die 5 "Session '$active_tag' is currently paused. Resume first with 'clk resume $active_tag'."
+    fi
+
+    local add_secs=$(( minutes * 60 ))
+    local new_break_secs=$(( break_secs + add_secs ))
+
+    clk__save_undo
+
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${new_break_secs}${CLK_TAB}${CLK_TAB}${description}"
+    clk__replace_line "$active_line" "$new_record"
+
+    local add_str total_str
+    add_str="$(clk__fmt_duration "$add_secs")"
+    total_str="$(clk__fmt_duration "$new_break_secs")"
+    printf '\nAdded %s break to session in\n  %s\n  Total break so far: %s\n\n' \
+        "$add_str" "$active_tag" "$total_str"
+}
+
+# --- clk_do_extend ---
+# clk extend [minus <minutes> | at <timestamp>]
+# Extends the last completed (done) record's end time.
+clk_do_extend() {
+    local at_ts="$1" minus_val="$2"
+
+    # Find the last done record
+    local last_done_lineno
+    last_done_lineno="$(awk -F'\t' '$1=="done" {lineno=NR} END {print lineno}' "$CLK_LOG")"
+
+    if [ -z "$last_done_lineno" ]; then
+        clk__die 5 "No completed records to extend."
+    fi
+
+    local line_content
+    line_content="$(clk__get_line "$last_done_lineno")"
+    clk__read_line "$line_content"
+
+    local tag="$CLK_F4"
+    local old_end_ts="$CLK_F3"
+    local start_ts="$CLK_F2"
+    local old_length_secs="$CLK_F5"
+    local break_secs="${CLK_F6:-0}"
+    local description="$CLK_F8"
+
+    local new_end_ts
+    new_end_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
+
+    local old_end_epoch new_end_epoch
+    old_end_epoch="$(clk__to_epoch "$old_end_ts")"
+    new_end_epoch="$(clk__to_epoch "$new_end_ts")"
+
+    if [ "$new_end_epoch" -lt "$old_end_epoch" ]; then
+        clk__die 1 "New end time ${new_end_ts} is before old end time ${old_end_ts}. Cannot shrink a session with extend."
+    fi
+
+    local extension_secs=$(( new_end_epoch - old_end_epoch ))
+    local new_length_secs=$(( old_length_secs + extension_secs ))
+
+    clk__save_undo
+
+    local new_record="done${CLK_TAB}${start_ts}${CLK_TAB}${new_end_ts}${CLK_TAB}${tag}${CLK_TAB}${new_length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${CLK_TAB}${description}"
+    clk__replace_line "$last_done_lineno" "$new_record"
+
+    local ext_str total_str
+    ext_str="$(clk__fmt_duration "$extension_secs")"
+    total_str="$(clk__fmt_duration "$new_length_secs")"
+    printf '\nExtended session in\n  %s\n  by %s (new total: %s)\n  new end: %s\n\n' \
+        "$tag" "$ext_str" "$total_str" "$new_end_ts"
+}
+
+# --- clk_do_remove ---
+# clk remove | pop
+# Removes the last record (whether active or completed).
+clk_do_remove() {
+    local total
+    total="$(clk__record_count)"
+
+    if [ "$total" -eq 0 ]; then
+        clk__die 5 "No records to remove. Log is empty."
+    fi
+
+    # Find the actual line number of the last data line
+    local last_data_lineno
+    last_data_lineno="$(awk '/^[^#]/ && NF>0 {lineno=NR} END {print lineno}' "$CLK_LOG")"
+
+    local line_content
+    line_content="$(clk__get_line "$last_data_lineno")"
+    local formatted
+    formatted="$(clk__fmt_record "$line_content")"
+
+    clk__save_undo
+    clk__delete_line "$last_data_lineno"
+
+    printf '\nRemoved record:\n  %s\n\n' "$formatted"
+}
+
+# --- clk_do_edit ---
+# clk edit -<n> tag <new-tag>
+# clk edit -<n> start <timestamp>
+# clk edit -<n> end <timestamp>
+# clk edit -<n> break <minutes>
+# clk edit -<n> pause <timestamp> | clear
+# clk edit -<n> on <description>
+# clk edit -<n> delete
+#
+# --- RATIONALE: pause editing ---
+# Occasionally the user pauses at the wrong time and minus on the initial
+# pause command wasn't used. Rather than requiring undo + pause minus,
+# direct editing of the PAUSED_AT field via edit is more surgical and
+# doesn't disturb the undo stack.
+clk_do_edit() {
+    local n="$1" field="$2"
+    shift 2
+    local value="$*"
+
+    # Resolve the -N index to a log line number
+    # N counts from end of data lines (non-comment, non-empty), 1-indexed
+    local data_lines total
+    data_lines="$(awk '/^[^#]/ && NF>0 {print NR}' "$CLK_LOG")"
+    total="$(printf '%s\n' "$data_lines" | wc -l | tr -d ' ')"
+
+    if [ "$total" -eq 0 ]; then
+        clk__die 5 "No records in log."
+    fi
+    if [ "$n" -gt "$total" ]; then
+        clk__die 1 "Index -${n} out of range. Only ${total} record(s) in log."
+    fi
+
+    # Get the actual line number: pick the (total - n + 1)th data line
+    local target_pos=$(( total - n + 1 ))
+    local lineno
+    lineno="$(printf '%s\n' "$data_lines" | awk -v p="$target_pos" 'NR==p')"
+
+    local line_content
+    line_content="$(clk__get_line "$lineno")"
+    clk__read_line "$line_content"
+
+    local status="$CLK_F1"
+    local start_ts="$CLK_F2"
+    local end_ts="$CLK_F3"
+    local tag="$CLK_F4"
+    local length_secs="$CLK_F5"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local description="$CLK_F8"
+
+    case "$field" in
+        tag)
+            [ -n "$value" ] || clk__die 1 "Missing new tag for 'edit -${n} tag <new-tag>'."
+            clk__validate_tag "$value"
+            clk__save_undo
+            tag="$value"
+            local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
+            clk__replace_line "$lineno" "$new_record"
+            ;;
+        start)
+            [ -n "$value" ] || clk__die 1 "Missing timestamp for 'edit -${n} start <timestamp>'."
+            clk__validate_timestamp "$value"
+            local new_start_epoch
+            new_start_epoch="$(clk__to_epoch "$value")"
+            if [ "$status" = "done" ]; then
+                local end_epoch
+                end_epoch="$(clk__to_epoch "$end_ts")"
+                if [ "$new_start_epoch" -gt "$end_epoch" ]; then
+                    clk__die 1 "Start time ${value} is after end time ${end_ts}."
+                fi
+                length_secs=$(( end_epoch - new_start_epoch - break_secs ))
+                if [ "$length_secs" -lt 0 ]; then
+                    clk__die 1 "Active time would be negative with start ${value} and break $(clk__fmt_duration "$break_secs")."
+                fi
+            fi
+            clk__save_undo
+            start_ts="$value"
+            local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
+            clk__replace_line "$lineno" "$new_record"
+            ;;
+        end)
+            if [ "$status" = "active" ]; then
+                clk__die 1 "Cannot set end time on an active record. Use 'clk out' instead."
+            fi
+            [ -n "$value" ] || clk__die 1 "Missing timestamp for 'edit -${n} end <timestamp>'."
+            clk__validate_timestamp "$value"
+            local new_end_epoch start_epoch
+            new_end_epoch="$(clk__to_epoch "$value")"
+            start_epoch="$(clk__to_epoch "$start_ts")"
+            if [ "$new_end_epoch" -lt "$start_epoch" ]; then
+                clk__die 1 "End time ${value} is before start time ${start_ts}."
+            fi
+            length_secs=$(( new_end_epoch - start_epoch - break_secs ))
+            if [ "$length_secs" -lt 0 ]; then
+                clk__die 1 "Active time would be negative with end ${value} and break $(clk__fmt_duration "$break_secs")."
+            fi
+            clk__save_undo
+            end_ts="$value"
+            local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
+            clk__replace_line "$lineno" "$new_record"
+            ;;
+        break)
+            [ -n "$value" ] || clk__die 1 "Missing minutes for 'edit -${n} break <minutes>'."
+            clk__validate_positive_int "$value" "<minutes> in 'edit -${n} break'"
+            local new_break_secs=$(( value * 60 ))
+            if [ "$status" = "done" ]; then
+                local start_epoch end_epoch
+                start_epoch="$(clk__to_epoch "$start_ts")"
+                end_epoch="$(clk__to_epoch "$end_ts")"
+                local span=$(( end_epoch - start_epoch ))
+                if [ "$new_break_secs" -gt "$span" ]; then
+                    clk__die 1 "Break time (${value}m) exceeds session span ($(clk__fmt_duration "$span"))."
+                fi
+                length_secs=$(( span - new_break_secs ))
+            fi
+            clk__save_undo
+            break_secs="$new_break_secs"
+            local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
+            clk__replace_line "$lineno" "$new_record"
+            ;;
+        pause)
+            if [ "$status" != "active" ]; then
+                clk__die 1 "Cannot set pause on a completed record. 'pause' only applies to active records."
+            fi
+            [ -n "$value" ] || clk__die 1 "Missing value for 'edit -${n} pause <timestamp|clear>'."
+            if [ "$value" = "clear" ]; then
+                paused_at=""
+            else
+                clk__validate_timestamp "$value"
+                paused_at="$(clk__to_epoch "$value")"
+            fi
+            clk__save_undo
+            local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
+            clk__replace_line "$lineno" "$new_record"
+            ;;
+        on)
+            [ -n "$value" ] || clk__die 1 "Missing description for 'edit -${n} on <description>'."
+            clk__save_undo
+            description="$value"
+            local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
+            clk__replace_line "$lineno" "$new_record"
+            ;;
+        delete)
+            clk__save_undo
+            clk__delete_line "$lineno"
+            local formatted
+            formatted="$(clk__fmt_record "$line_content")"
+            printf '\nDeleted record:\n  %s\n\n' "$formatted"
+            return 0
+            ;;
+        *)
+            clk__die 1 "Unknown field '${field}'. Expected: tag, start, end, break, pause, on, delete."
+            ;;
+    esac
+
+    # Print updated record (all non-delete paths)
+    local updated_line
+    updated_line="$(clk__get_line "$lineno")"
+    local formatted
+    formatted="$(clk__fmt_record "$updated_line")"
+    printf '\nUpdated record -%d:\n  %s\n\n' "$n" "$formatted"
+}
+
+# --- clk_do_log ---
+# clk log — opens the log file in an editor.
+#
+# --- RATIONALE: $VISUAL before $EDITOR ---
+# POSIX convention. $VISUAL is for full-screen editors; $EDITOR is for
+# line editors. Falling back to vi ensures the command always works.
+clk_do_log() {
+    "${VISUAL:-${EDITOR:-vi}}" "$CLK_LOG"
+}
+
+# --- clk_do_alias ---
+# clk alias — adds `alias c='clk'` to the user's shell rc file.
+clk_do_alias() {
+    local rc_file
+    case "${SHELL:-/bin/bash}" in
+        */zsh)  rc_file="$HOME/.zshrc" ;;
+        */bash) rc_file="$HOME/.bashrc" ;;
+        *)      rc_file="$HOME/.profile" ;;
+    esac
+
+    local alias_line="alias c='clk'"
+    if grep -qF "$alias_line" "$rc_file" 2>/dev/null; then
+        printf 'Alias already exists in %s\n' "$rc_file"
+        return 0
+    fi
+
+    printf '\n%s\n' "$alias_line" >> "$rc_file" || clk__die 2 "Failed to write to '$rc_file'."
+    printf 'Added "%s" to %s\n' "$alias_line" "$rc_file"
+    printf 'Reload your shell or run: source %s\n' "$rc_file"
+}
+
+# --- clk__show_log_diff ---
+# Shows a human-readable diff between two log files.
+# Lines in $1 but not $2 are prefixed with "−" (removed).
+# Lines in $2 but not $1 are prefixed with "+" (restored/added).
+# Skips comment lines. Each changed record is formatted via clk__fmt_record.
+clk__show_log_diff() {
+    local before_file="$1" after_file="$2"
+
+    # Extract data lines (skip comments) from each file
+    local before_lines after_lines
+    before_lines="$(grep -v '^#' "$before_file" | grep -v '^[[:space:]]*$' || true)"
+    after_lines="$(grep -v '^#' "$after_file" | grep -v '^[[:space:]]*$' || true)"
+
+    # Lines removed (in before but not after)
+    local removed
+    removed="$(comm -23 <(printf '%s\n' "$before_lines" | sort) <(printf '%s\n' "$after_lines" | sort) || true)"
+    # Lines added (in after but not before)
+    local added
+    added="$(comm -13 <(printf '%s\n' "$before_lines" | sort) <(printf '%s\n' "$after_lines" | sort) || true)"
+
+    local line
+    if [ -n "$removed" ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local formatted
+            formatted="$(clk__fmt_record "$line")"
+            printf '  − %s\n' "$formatted"
+        done <<< "$removed"
+    fi
+    if [ -n "$added" ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local formatted
+            formatted="$(clk__fmt_record "$line")"
+            printf '  + %s\n' "$formatted"
+        done <<< "$added"
+    fi
+}
+
+# --- clk_do_undo ---
+# clk undo
+#
+# --- RATIONALE: Showing diff ---
+# A bare "Undone" message forces the user to run clk last or clk status
+# to verify what happened. Showing the diff inline gives immediate
+# confidence that the right thing was reversed.
+clk_do_undo() {
+    local undo_file="${CLK_LOG}.undo"
+    if [ ! -f "$undo_file" ]; then
+        printf 'Nothing to undo.\n'
+        return 0
+    fi
+
+    # Save current to .redo, then restore .undo
+    cp "$CLK_LOG" "${CLK_LOG}.redo" || clk__die 2 "Failed to save redo snapshot."
+    local before_file="${CLK_LOG}.redo"
+
+    cp "$undo_file" "$CLK_LOG" || clk__die 2 "Failed to restore undo snapshot."
+
+    printf 'Undone.\n'
+    clk__show_log_diff "$before_file" "$CLK_LOG"
+    printf "Use 'clk redo' to reverse.\n"
+}
+
+# --- clk_do_redo ---
+# clk redo
+clk_do_redo() {
+    local redo_file="${CLK_LOG}.redo"
+    if [ ! -f "$redo_file" ]; then
+        printf 'Nothing to redo.\n'
+        return 0
+    fi
+
+    # Save current to .undo, then restore .redo
+    cp "$CLK_LOG" "${CLK_LOG}.undo" || clk__die 2 "Failed to save undo snapshot."
+    local before_file="${CLK_LOG}.undo"
+
+    cp "$redo_file" "$CLK_LOG" || clk__die 2 "Failed to restore redo snapshot."
+
+    printf 'Redone.\n'
+    clk__show_log_diff "$before_file" "$CLK_LOG"
+    printf "Use 'clk undo' to reverse.\n"
+}
+
+# --- clk_do_view ---
+# clk view today | yesterday
+# clk view past [<n>] <hour(s)|day(s)|week(s)> [before <timestamp> | before minus <minutes>]
+# clk view from <timestamp> until <timestamp>
+#
+# --- RATIONALE: view not blocked by active sessions ---
+# v1 required all sessions closed before viewing summaries. v2 excludes
+# active sessions from totals (their duration isn't finalized) and shows a
+# note. Users can check active sessions via 'status'.
+clk_do_view() {
+    local start_epoch="$1" end_epoch="$2" range_desc="$3"
+
+    local start_ts end_ts
+    start_ts="$(clk__from_epoch "$start_epoch")"
+    end_ts="$(clk__from_epoch "$end_epoch")"
+
+    # Count active sessions whose start falls within the range
+    local active_in_range=0
+    local active_lines
+    active_lines="$(clk__find_active)" || true
+    if [ -n "$active_lines" ]; then
+        local aline
+        while IFS= read -r aline; do
+            local acontent
+            acontent="$(clk__get_line "$aline")"
+            clk__read_line "$acontent"
+            local a_start_epoch
+            a_start_epoch="$(clk__to_epoch "$CLK_F2")"
+            if [ "$a_start_epoch" -ge "$start_epoch" ] && [ "$a_start_epoch" -lt "$end_epoch" ]; then
+                active_in_range=$(( active_in_range + 1 ))
+            fi
+        done <<< "$active_lines"
+    fi
+
+    # Use awk to aggregate completed records within range
+    local awk_result
+    awk_result="$(awk -F'\t' -v start="$start_epoch" -v end="$end_epoch" '
+    BEGIN {
+        total = 0
+        ntags = 0
+    }
+    $1 == "done" {
+        # Field 3 = END_TIME, field 5 = LENGTH_SECS, field 4 = TAG
+        # We need to convert END_TIME to epoch for range check.
+        # But we cannot call shell functions from awk. Instead, we filter
+        # by lexicographic comparison on timestamps (ISO 8601 sorts correctly).
+        # However, we receive epoch boundaries, so we need the timestamps.
+        # Actually, let us receive start_ts and end_ts as well.
+        next
+    }
+    ' "$CLK_LOG" 2>/dev/null)" || true
+
+    # Since awk cannot call clk__to_epoch, we do the filtering differently:
+    # extract all done records and filter in a shell loop, or pass timestamp
+    # boundaries and use lexicographic sort. ISO 8601 sorts lexicographically,
+    # so we can compare end_time strings directly.
+
+    # Collect per-tag totals using awk with timestamp string comparisons
+    local start_ts_str end_ts_str
+    start_ts_str="$start_ts"
+    end_ts_str="$end_ts"
+
+    awk_result="$(awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" '
+    $1 == "done" && $3 >= s && $3 <= e {
+        tag = $4
+        secs = $5 + 0
+        total += secs
+        if (!(tag in tagsecs)) {
+            tags[++ntags] = tag
+        }
+        tagsecs[tag] += secs
+    }
+    END {
+        # Print total first, then each tag sorted by seconds descending
+        printf "%d\n", total
+
+        # Simple insertion sort for descending order
+        for (i = 1; i <= ntags; i++) {
+            for (j = i + 1; j <= ntags; j++) {
+                if (tagsecs[tags[j]] > tagsecs[tags[i]]) {
+                    tmp = tags[i]
+                    tags[i] = tags[j]
+                    tags[j] = tmp
+                }
+            }
+        }
+
+        for (i = 1; i <= ntags; i++) {
+            printf "%s\t%d\n", tags[i], tagsecs[tags[i]]
+        }
+    }
+    ' "$CLK_LOG" 2>/dev/null)"
+
+    # Parse awk output
+    local total_secs=0
+    local line_num=0
+    local tag_names=()
+    local tag_secs=()
+
+    while IFS= read -r line; do
+        if [ "$line_num" -eq 0 ]; then
+            total_secs="$line"
+        else
+            local t s
+            t="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f1)"
+            s="$(printf '%s' "$line" | cut -d"$CLK_TAB" -f2)"
+            tag_names+=("$t")
+            tag_secs+=("$s")
+        fi
+        line_num=$(( line_num + 1 ))
+    done <<< "$awk_result"
+
+    # Print output
+    printf '%s\n\n' "$range_desc"
+
+    if [ "$total_secs" -eq 0 ] && [ "${#tag_names[@]}" -eq 0 ]; then
+        printf 'No completed sessions in this range.\n'
+    else
+        local total_minutes total_hours_str
+        total_minutes=$(( total_secs / 60 ))
+        total_hours_str="$(awk "BEGIN { printf \"%.2f\", $total_secs / 3600 }")"
+
+        # Header
+        printf '%-18s %8s %10s %7s\n' "TAG" "MINUTES" "HOURS" "%"
+        printf '%-18s %8d %9sh\n' "TOTAL" "$total_minutes" "$total_hours_str"
+
+        local i
+        for (( i = 0; i < ${#tag_names[@]}; i++ )); do
+            local t_name="${tag_names[$i]}"
+            local t_secs="${tag_secs[$i]}"
+            local t_minutes=$(( t_secs / 60 ))
+            local t_hours_str pct_str
+            t_hours_str="$(awk "BEGIN { printf \"%.2f\", $t_secs / 3600 }")"
+            if [ "$total_secs" -gt 0 ]; then
+                pct_str="$(awk "BEGIN { printf \"%.2f\", ($t_secs / $total_secs) * 100 }")"
+                printf '%-18s %8d %9sh %6s%%\n' "$t_name" "$t_minutes" "$t_hours_str" "$pct_str"
+            else
+                printf '%-18s %8d %9sh\n' "$t_name" "$t_minutes" "$t_hours_str"
+            fi
+        done
+    fi
+
+    if [ "$active_in_range" -gt 0 ]; then
+        printf '\nNote: %d active session(s) not included in totals.\n' "$active_in_range"
+    fi
+}
+
+#####################################################################
+# Main — guarded so the script can be sourced for testing
+#####################################################################
+
+# When sourced with CLK_SOURCED=1, skip main execution so tests can
+# call helpers directly.
+if [ "${CLK_SOURCED:-0}" = "1" ]; then
+    return 0 2>/dev/null || true
+fi
+
+# No-args: show synopsis
 if [ "$#" -eq 0 ]; then
-	printf "\n${CLK_SYN_VAR}\n\n"
-	exit
+    printf '\n%s\n\n' "$CLK_SYNOPSIS"
+    exit 0
 fi
 
+# Help
 if [ "$1" = 'help' ]; then
-	man clk 2>/dev/null || {
-		clk_self_dir="$(cd "$(dirname "$0")" && pwd)"
-		if [ -f "$clk_self_dir/clk.1" ]; then
-			man "$clk_self_dir/clk.1"
-		else
-			printf "Man page not found. Install via 'brew install poiurewq/tools/clk' for full documentation.\n" >&2
-			printf "\n${CLK_SYN_VAR}\n\n"
-		fi
-	}
-	exit
+    man clk 2>/dev/null || {
+        clk_self_dir="$(cd "$(dirname "$0")" && pwd)"
+        if [ -f "$clk_self_dir/clk.1" ]; then
+            man "$clk_self_dir/clk.1"
+        else
+            printf "Man page not found. Install via 'brew install poiurewq/tools/clk' for full documentation.\n" >&2
+            printf '\n%s\n\n' "$CLK_SYNOPSIS"
+        fi
+    }
+    exit 0
 fi
 
-#### Parse & check input without performing functions #####
-clk_subfunction="" # in, out, add, undo, log, review
-clk_tag="" # any one-word alphanumeric
-clk_minus_minutes="" # any positive integer
-clk_at_timestamp="" # in clk_fmt
-clk_for_minutes="" # any positive integer
-clk_add_end_timestamp="" # in clk_fmt
-clk_past_days="" # any positive integer
-clk_past_minus_hours=0 # any positive integer; default to 0
-clk_dtn="" # day-to-now toggle; default to empty
+# Initialize log
+clk__ensure_log
 
-if [ -z "$1" ]; then printf "Missing option for clk\n" >&2 && exit 1; fi
+#####################################################################
+# Argument parsing and subcommand dispatch
+#####################################################################
+
+# Shared option-parsing helpers used by subcommand parsers.
+# These consume arguments from the caller's positional params via
+# variable names rather than shift (since we parse in a while loop).
+
+clk_subcmd=""
+clk_tag=""
+clk_at_timestamp=""
+clk_minus_minutes=""
+clk_description=""
+clk_for_minutes=""
+clk_from_tag=""
+clk_last_n=""
 
 case "$1" in
-in|out|switch)
-	clk_subfunction="$1"
 
-	if [ -z "$2" ]; then printf "Missing <tag> in 'clk $1 <tag>'\n" >&2 && exit 1; fi
+in)
+    clk_subcmd="in"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing <tag> in 'clk in <tag>'. Run 'clk' for usage."
+    fi
+    clk_tag="$1"; shift
 
-	clk_tag="$2"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$2"; shift 2
+                ;;
+            on)
+                [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
+                shift  # consume 'on'
+                clk_description="$*"
+                break  # 'on' consumes all remaining args
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk in ${clk_tag}'."
+                ;;
+        esac
+    done
 
-	while [ -n "$3" ]; do
-		case "$3" in
-		minus)
-			if [ -z "$4" ]; then printf "Missing <minutes> in 'clk $1 $2 $3 <minutes>'\n" >&2 && exit 1; fi
-			if [ -n "$4" ] && ! printf '%s' "$4" | grep -Eq '^[0-9]+$'; then printf "Please provide a positive integer for <minutes> in 'clk $1 $2 $3 <minutes>'\n" >&2 && exit 1; fi
-			clk_minus_minutes=$4
-			shift; shift; # consume minus <minutes>
-			;;
+    clk_do_in "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    ;;
 
-		at)
-			if [ -z "$4" ]; then printf "Missing <timestamp> in 'clk $1 $2 $3 <timestamp>'\n" >&2 && exit 1; fi
-			if [ -n "$4" ] && ! printf '%s' "$4" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{2}:[0-9]{2}$'; then printf "Please provide a valid timestamp in the format '${clk_user_facing_fmt}' for <timestamp> in 'clk $1 $2 $3 <timestamp>'\n" >&2 && exit 1; fi
-			clk_at_timestamp="$4"
-			shift; shift; # consume at <timestamp>
-			;;
+out)
+    clk_subcmd="out"
+    shift
 
-		on)
-			if [ "$1" = 'in' ]; then printf "Unknown suboption '$3' after 'clk $1 $2'\n" >&2 && exit 1; fi
-			if [ -z "$4" ]; then printf "Missing <description> in 'clk $1 $2 $3 <description>'\n" >&2 && exit 1; fi
-			description_args="${@:4}"
-			if [ -n "${description_args}" ] && printf '%s' "${description_args}" | grep -q "$CLK_TAB"; then printf "Please provide a valid description that does not include a tab for <description> in 'clk $1 $2 $3 <description>'\n" >&2 && exit 1; fi
-			if [ -n "${description_args}" ] && printf '%s' "${description_args}" | grep -Eq '^minus|at$'; then printf "Please provide a valid description that does not include 'minus' or 'at' in 'clk $1 $2 $3 <description>'\n" >&2 && exit 1; fi
-			clk_on_description="${description_args}"
-			break; # after on, do not process any more suboptions
-			;;
-		
-		*) 	printf "Unknown suboption '$3' after 'clk $1 $2'\n" >&2 && exit 1
-			;;
-		esac
-	done
+    # Tag is optional — peek at first arg to see if it's a tag or an option
+    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ] && [ "$1" != "on" ]; then
+        clk_tag="$1"; shift
+    fi
 
-	;;
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$2"; shift 2
+                ;;
+            on)
+                [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
+                shift
+                clk_description="$*"
+                break
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk out'."
+                ;;
+        esac
+    done
 
-extend)
-	clk_subfunction="$1"
-	
-	if [ -n "$2" ]; then
-		case "$2" in
-		minus)
-			if [ -z "$3" ]; then printf "Missing <minutes> in 'clk $1 $2 <minutes>'\n" >&2 && exit 1; fi
-			if [ -n "$3" ] && ! printf '%s' "$3" | grep -Eq '^[0-9]+$'; then printf "Please provide a positive integer for <minutes> in 'clk $1 $2 <minutes>'\n" >&2 && exit 1; fi
-			clk_minus_minutes=$3
-			;;
+    clk_do_out "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    ;;
 
-		at)
-			if [ -z "$3" ]; then printf "Missing <timestamp> in 'clk $1 $2 <timestamp>'\n" >&2 && exit 1; fi
-			if [ -n "$3" ] && ! printf '%s' "$3" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{2}:[0-9]{2}$'; then printf "Please provide a valid timestamp in the format '${clk_user_facing_fmt}' for <timestamp> in 'clk $1 $2 <timestamp>'\n" >&2 && exit 1; fi
-			clk_at_timestamp="$3"
-			;;
+status|s)
+    clk_subcmd="status"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk status'"
+    clk_do_status
+    ;;
 
-		*) 	printf "Unknown suboption '$2' after 'clk $1'\n" >&2 && exit 1
-			;;
-		esac
-	fi
-	;;
+last|l)
+    clk_subcmd="last"
+    shift
+    if [ $# -gt 0 ]; then
+        clk__validate_positive_int "$1" "<n> in 'clk last <n>'"
+        clk_last_n="$1"
+    fi
+    clk_do_last "${clk_last_n:-1}"
+    ;;
+
+last-done|ld)
+    clk_subcmd="last-done"
+    shift
+    if [ $# -gt 0 ]; then
+        clk__validate_positive_int "$1" "<n> in 'clk last-done <n>'"
+        clk_last_n="$1"
+    fi
+    clk_do_last_done "${clk_last_n:-1}"
+    ;;
+
+pause|p)
+    clk_subcmd="pause"
+    shift
+
+    # Tag is optional — peek at first arg
+    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ]; then
+        clk_tag="$1"; shift
+    fi
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$2"; shift 2
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk pause'."
+                ;;
+        esac
+    done
+
+    clk_do_pause "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
+    ;;
+
+resume|r)
+    clk_subcmd="resume"
+    shift
+
+    # Tag is optional — peek at first arg
+    if [ $# -gt 0 ] && [ "$1" != "minus" ]; then
+        clk_tag="$1"; shift
+    fi
+
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk resume'."
+                ;;
+        esac
+    fi
+
+    clk_do_resume "$clk_tag" "$clk_minus_minutes"
+    ;;
+
+unpause)
+    clk_subcmd="unpause"
+    shift
+
+    # Tag is optional
+    if [ $# -gt 0 ]; then
+        clk_tag="$1"; shift
+    fi
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk unpause [<tag>]'"
+
+    clk_do_unpause "$clk_tag"
+    ;;
+
+switch)
+    clk_subcmd="switch"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing <new-tag> in 'clk switch <new-tag>'. Run 'clk' for usage."
+    fi
+    clk_tag="$1"; shift
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            from)
+                [ $# -ge 2 ] || clk__die 1 "Missing <old-tag> after 'from'."
+                clk_from_tag="$2"; shift 2
+                ;;
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$2"; shift 2
+                ;;
+            on)
+                [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
+                shift
+                clk_description="$*"
+                break
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk switch ${clk_tag}'."
+                ;;
+        esac
+    done
+
+    clk_do_switch "$clk_tag" "$clk_from_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    ;;
 
 add)
-	clk_subfunction="$1"
-	
-	if [ -z "$2" ]; then printf "Missing <tag> in 'clk $1 <tag> for <minutes>'\n" >&2 && exit 1; fi
+    clk_subcmd="add"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing arguments. Usage: 'clk add <tag> for <minutes>' or 'clk add <minutes> [to <tag>]'."
+    fi
 
-	clk_tag="$2"
+    # Disambiguate: if $1 is a positive integer, it's "add <minutes> [to <tag>]"
+    if printf '%s' "$1" | grep -Eq '^[0-9]+$'; then
+        # Form: add <minutes> [to <tag>]
+        clk_for_minutes="$1"; shift
+        if [ $# -gt 0 ] && [ "$1" = "to" ]; then
+            [ $# -ge 2 ] || clk__die 1 "Missing <tag> after 'to'."
+            clk_tag="$2"; shift 2
+        fi
+        [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk add $clk_for_minutes'."
+        clk_do_add_time "$clk_for_minutes" "$clk_tag"
+    else
+        # Form: add <tag> for <minutes> [minus <minutes> | at <timestamp>] [on <description>]
+        clk_tag="$1"; shift
+        if [ $# -eq 0 ] || [ "$1" != "for" ]; then
+            clk__die 1 "Expected 'for <minutes>' after 'clk add ${clk_tag}'. Run 'clk' for usage."
+        fi
+        shift  # consume 'for'
+        [ $# -ge 1 ] || clk__die 1 "Missing <minutes> after 'for'."
+        clk__validate_positive_int "$1" "<minutes> after 'for'"
+        clk_for_minutes="$1"; shift
 
-	if [ -z "$3" ]; then printf "Missing 'for' keyword in 'clk $1 $2 for <minutes>'\n" >&2 && exit 1; fi
-	if [ "$3" != 'for' ]; then printf "Expecting 'for <minutes>' as in 'clk $1 $2 for <minutes>'\n" >&2 && exit 1; fi
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                minus)
+                    [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                    clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                    clk_minus_minutes="$2"; shift 2
+                    ;;
+                at)
+                    [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                    clk__validate_timestamp "$2"
+                    clk_at_timestamp="$2"; shift 2
+                    ;;
+                on)
+                    [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
+                    shift
+                    clk_description="$*"
+                    break
+                    ;;
+                *)
+                    clk__die 1 "Unknown option '$1' after 'clk add ${clk_tag} for ${clk_for_minutes}'."
+                    ;;
+            esac
+        done
 
-	case "$3" in
-	for)
-		if [ -z "$4" ]; then printf "Missing <minutes> in 'clk $1 $2 $3 <minutes>'\n" >&2 && exit 1; fi
-		if [ -n "$4" ] && ! printf '%s' "$4" | grep -Eq '^[0-9]+$'; then printf "Please provide a positive integer for <minutes> in 'clk $1 $2 $3 <minutes>'\n" >&2 && exit 1; fi
-		clk_for_minutes="$4"
+        clk_do_add_session "$clk_tag" "$clk_for_minutes" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    fi
+    ;;
 
-		while [ -n "$5" ]; do
-			case "$5" in
-			minus)
-				if [ -z "$6" ]; then printf "Missing <minutes> in 'clk $1 $2 $3 $4 $5 <minutes>'\n" >&2 && exit 1; fi
-				if ! printf '%s' "$6" | grep -Eq '^[0-9]+$'; then printf "Please provide a positive integer for <minutes> in 'clk $1 $2 $3 $4 $5 <minutes>'\n" >&2 && exit 1; fi
-				clk_minus_minutes=$6
-				shift; shift; # consume minus <minutes>
-				;;
+add-break|ab)
+    clk_subcmd="add-break"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing <minutes> in 'clk add-break <minutes>'. Run 'clk' for usage."
+    fi
+    clk__validate_positive_int "$1" "<minutes> in 'clk add-break <minutes>'"
+    clk_for_minutes="$1"; shift
 
-			at)
-				if [ -z "$6" ]; then printf "Missing <timestamp> in 'clk $1 $2 $3 $4 $5 <timestamp>'\n" >&2 && exit 1; fi
-				if ! printf '%s' "$6" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{2}:[0-9]{2}$'; then printf "Please provide a valid timestamp in the format '${clk_user_facing_fmt}' for <timestamp> in 'clk $1 $2 $3 $4 $5 <timestamp>'\n" >&2 && exit 1; fi
-				clk_add_end_timestamp="$6"
-				shift; shift; # consume at <timestamp>
-				;;
+    if [ $# -gt 0 ] && [ "$1" = "to" ]; then
+        [ $# -ge 2 ] || clk__die 1 "Missing <tag> after 'to'."
+        clk_tag="$2"; shift 2
+    fi
+    [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1'. Usage: 'clk add-break <minutes> [to <tag>]'."
 
-			on)
-				if [ -z "$6" ]; then printf "Missing <description> in 'clk $1 $2 $3 $4 $5 <description>'\n" >&2 && exit 1; fi
-				description_args="${@:6}"
-				if [ -n "${description_args}" ] && printf '%s' "${description_args}" | grep -q "$CLK_TAB"; then printf "Please provide a valid description that does not include a tab for <description> in 'clk $1 $2 $3 $4 $5 <description>'\n" >&2 && exit 1; fi
-				if [ -n "${description_args}" ] && printf '%s' "${description_args}" | grep -Eq '^minus|at$'; then printf "Please provide a valid description that does not include 'minus' or 'at' in 'clk $1 $2 $3 $4 $5 <description>'\n" >&2 && exit 1; fi
-				clk_add_on_description="${description_args}"
-				break; # after on, do not process any more suboptions
-				;;
+    clk_do_add_break "$clk_for_minutes" "$clk_tag"
+    ;;
 
-			*) 	printf "Unknown suboption '$5' after 'clk $1 $2 $3 $4'\n" >&2 && exit 1
-				;;
-			esac
-		done
+extend)
+    clk_subcmd="extend"
+    shift
 
-		;;
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$2"; shift 2
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk extend'."
+                ;;
+        esac
+    done
 
-	*) 	printf "Unknown suboption '$3' after 'clk $1 $2'\n" >&2 && exit 1
-		;;
-	esac
+    clk_do_extend "$clk_at_timestamp" "$clk_minus_minutes"
+    ;;
 
-	;;
+remove|pop)
+    clk_subcmd="remove"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk remove'"
+    clk_do_remove
+    ;;
 
-remove|pop|pause|p|resume|r|log|last|l|alias)
-	if [ "$#" -gt 1 ]; then
-		printf "Too many arguments. Usage: 'clk $1'\n"
-		exit 1
-	fi
-	
-	clk_subfunction="$1"
+undo)
+    clk_subcmd="undo"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk undo'"
+    clk_do_undo
+    ;;
 
-	case "${clk_subfunction}" in
-	p) clk_subfunction='pause' ;;
-	r) clk_subfunction='resume' ;;
-	esac
-	;;
+redo)
+    clk_subcmd="redo"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk redo'"
+    clk_do_redo
+    ;;
 
-past)
-	clk_subfunction="$1"
+view)
+    clk_subcmd="view"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing arguments. Usage: 'clk view today', 'clk view past <n> <unit>', or 'clk view from <ts> until <ts>'."
+    fi
 
-	if [ -z "$2" ]; then printf "Missing second word in '${clk_synopsis_line12}'\n" >&2 && exit 1; fi
+    view_start_epoch=""
+    view_end_epoch=""
+    view_range_desc=""
 
-	case "$2" in
-	dtn|day|week)
-		case "$2" in
-		dtn) clk_dtn=true ;;
-		day) clk_past_days=1 ;;
-		week) clk_past_days=7 ;;
-		esac
+    case "$1" in
+        today)
+            shift
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view today'."
+            view_start_epoch="$(clk__midnight_epoch 0)"
+            view_end_epoch="$(clk__now_epoch)"
+            view_range_desc="Today"
+            ;;
+        yesterday)
+            shift
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view yesterday'."
+            view_start_epoch="$(clk__midnight_epoch -1)"
+            view_end_epoch="$(clk__midnight_epoch 0)"
+            view_range_desc="Yesterday"
+            ;;
+        past)
+            shift
+            # past [<n>] <unit> [before <timestamp> | before minus <minutes>]
+            view_n=1
+            view_unit=""
 
-		if [ -n "$3" ]; then
-			case "$3" in
-			minus)
-				if [ -z "$4" ]; then printf "Missing <number> in 'clk $1 $2 $3 <number> hour(s)'\n" >&2 && exit 1; fi
-				if ! printf '%s' "$4" | grep -Eq '^[0-9]+$'; then printf "Please provide a positive integer for <number> in 'clk $1 $2 $3 <number> hour(s)'\n" >&2 && exit 1; fi
+            if [ $# -eq 0 ]; then
+                clk__die 1 "Missing time unit after 'past'. Usage: 'clk view past [<n>] <hour(s)|day(s)|week(s)>'."
+            fi
 
-				if [ -z "$5" ]; then printf "Missing hour(s) keyword after 'clk $1 $2 $3 $4'\n" >&2 && exit 1; fi
-				case "$5" in
-				hour|hours)
-					clk_past_minus_hours="$4"
-					;;
-				*) printf "Unknown suboption '$5' after 'clk $1 $2 $3 $4'\n" >&2 && exit 1
-					;;
-				esac
-				;;
+            # If first arg is a number, it's the count
+            if printf '%s' "$1" | grep -Eq '^[0-9]+$'; then
+                view_n="$1"; shift
+            fi
 
-			*) 	printf "Unknown suboption '$3' after 'clk $1 $2'\n" >&2 && exit 1
-				;;
-			esac
-		fi
-		;;
-	*)
-		if printf '%s' "$2" | grep -Eq '^[0-9]+$'; then
+            if [ $# -eq 0 ]; then
+                clk__die 1 "Missing time unit. Expected 'hour(s)', 'day(s)', or 'week(s)'."
+            fi
 
-			if [ -z "$3" ]; then printf "Missing 'days' or 'weeks' keyword after 'clk $1 $2'\n" >&2 && exit 1; fi
+            # --- RATIONALE: Plurality leniency in view ---
+            # hour/hours, day/days, week/weeks are all accepted. Natural language is
+            # lenient; the CLI should be too when intent is unambiguous.
+            case "$1" in
+                hour|hours) view_unit="hours"; shift ;;
+                day|days)   view_unit="days"; shift ;;
+                week|weeks) view_unit="weeks"; shift ;;
+                *) clk__die 1 "Unknown time unit '$1'. Expected 'hour(s)', 'day(s)', or 'week(s)'." ;;
+            esac
 
-			case "$3" in
-			days) 
-				clk_past_days="$2"
-				;;
-			weeks)
-				clk_past_days="$(( $2 * 7 ))"
-				;;
-			*) printf "Unknown suboption '$3' after 'clk $1 $2'\n" >&2 && exit 1
-				;;
-			esac
+            # Default anchor is now
+            view_anchor_epoch="$(clk__now_epoch)"
 
-			if [ -n "$4" ]; then
-				case "$4" in
-				minus)
-					if [ -z "$5" ]; then printf "Missing <number> in 'clk $1 $2 $3 $4 <number> hour(s)'\n" >&2 && exit 1; fi
-					if ! printf '%s' "$5" | grep -Eq '^[0-9]+$'; then printf "Please provide a positive integer for <number> in 'clk $1 $2 $3 $4 <number> hour(s)'\n" >&2 && exit 1; fi
+            # Optional: before <timestamp> | before minus <minutes>
+            if [ $# -gt 0 ]; then
+                if [ "$1" = "before" ]; then
+                    shift
+                    if [ $# -eq 0 ]; then
+                        clk__die 1 "Missing value after 'before'. Expected a timestamp or 'minus <minutes>'."
+                    fi
+                    if [ "$1" = "minus" ]; then
+                        shift
+                        [ $# -ge 1 ] || clk__die 1 "Missing <minutes> after 'before minus'."
+                        clk__validate_positive_int "$1" "<minutes> after 'before minus'"
+                        before_minus_val="$1"; shift
+                        now_ep="$(clk__now_epoch)"
+                        view_anchor_epoch=$(( now_ep - before_minus_val * 60 ))
+                    else
+                        clk__validate_timestamp "$1"
+                        view_anchor_epoch="$(clk__to_epoch "$1")"; shift
+                    fi
+                else
+                    clk__die 1 "Unexpected argument '$1'. Expected 'before' or end of command."
+                fi
+            fi
 
-					if [ -z "$6" ]; then printf "Missing hour(s) keyword after 'clk $1 $2 $3 $4 $5'\n" >&2 && exit 1; fi
-					case "$6" in
-					hour|hours)
-						clk_past_minus_hours="$5"
-						;;
-					*) printf "Unknown suboption '$6' after 'clk $1 $2 $3 $4 $5'\n" >&2 && exit 1
-						;;
-					esac
-					;;
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view past'."
 
-				*) 	printf "Unknown suboption '$4' after 'clk $1 $2 $3'\n" >&2 && exit 1
-					;;
-				esac
-			fi
+            duration_secs=0
+            case "$view_unit" in
+                hours) duration_secs=$(( view_n * 3600 )) ;;
+                days)  duration_secs=$(( view_n * 86400 )) ;;
+                weeks) duration_secs=$(( view_n * 604800 )) ;;
+            esac
 
-		else
-			printf "Unknown suboption '$2' after 'clk $1'\n" >&2 && exit 1
-		fi
-		;;
-	esac
-	;;
+            view_end_epoch="$view_anchor_epoch"
+            view_start_epoch=$(( view_anchor_epoch - duration_secs ))
+            # Singularize unit when count is 1
+            view_unit_display="$view_unit"
+            if [ "$view_n" -eq 1 ]; then
+                view_unit_display="${view_unit%s}"
+            fi
+            view_range_desc="Past ${view_n} ${view_unit_display}"
+            ;;
+        from)
+            shift
+            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'from'."
+            clk__validate_timestamp "$1"
+            view_start_epoch="$(clk__to_epoch "$1")"; shift
 
-*)	printf "Unknown option '$1' after 'clk'\n" >&2 && exit 1
-;;
+            if [ $# -eq 0 ] || [ "$1" != "until" ]; then
+                clk__die 1 "Expected 'until <timestamp>' after 'from <timestamp>'."
+            fi
+            shift  # consume 'until'
+            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'until'."
+            clk__validate_timestamp "$1"
+            view_end_epoch="$(clk__to_epoch "$1")"; shift
+
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view from ... until ...'."
+
+            from_ts="$(clk__from_epoch "$view_start_epoch")"
+            until_ts="$(clk__from_epoch "$view_end_epoch")"
+            view_range_desc="${from_ts} → ${until_ts}"
+            ;;
+        *)
+            clk__die 1 "Unknown view mode '$1'. Expected 'today', 'yesterday', 'past', or 'from'."
+            ;;
+    esac
+
+    clk_do_view "$view_start_epoch" "$view_end_epoch" "$view_range_desc"
+    ;;
+
+edit)
+    clk_subcmd="edit"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing index. Usage: 'clk edit -<n> <field> <value>'."
+    fi
+
+    # Parse -N index
+    clk_edit_n=""
+    if printf '%s' "$1" | grep -Eq '^-[0-9]+$'; then
+        clk_edit_n="${1#-}"; shift
+    else
+        clk__die 1 "Expected -<n> index, got '$1'. Usage: 'clk edit -<n> <field> <value>'."
+    fi
+    clk__validate_positive_int "$clk_edit_n" "<n> in 'clk edit -<n>'"
+
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing field. Usage: 'clk edit -${clk_edit_n} <field> <value>'."
+    fi
+
+    clk_edit_field="$1"; shift
+
+    # For 'on', collect all remaining args as the description
+    # For 'delete', no value needed
+    # For others, take next arg as value
+    clk_edit_value=""
+    case "$clk_edit_field" in
+        on)
+            [ $# -ge 1 ] || clk__die 1 "Missing <description> after 'on'."
+            clk_edit_value="$*"
+            ;;
+        delete)
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'delete'."
+            ;;
+        tag|start|end|break|pause)
+            [ $# -ge 1 ] || clk__die 1 "Missing value for 'edit -${clk_edit_n} ${clk_edit_field}'."
+            clk_edit_value="$1"; shift
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk edit -${clk_edit_n} ${clk_edit_field} ${clk_edit_value}'."
+            ;;
+        *)
+            clk__die 1 "Unknown field '${clk_edit_field}'. Expected: tag, start, end, break, pause, on, delete."
+            ;;
+    esac
+
+    clk_do_edit "$clk_edit_n" "$clk_edit_field" "$clk_edit_value"
+    ;;
+
+log)
+    clk_subcmd="log"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk log'"
+    clk_do_log
+    ;;
+
+alias)
+    clk_subcmd="alias"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk alias'"
+    clk_do_alias
+    ;;
+
+*)
+    clk__die 1 "Unknown command '$1'. Run 'clk' with no arguments for usage."
+    ;;
+
 esac
-
-#### Make sure clock log exists ####
-clk_dir="${XDG_DATA_HOME:-$HOME/.local/share}/clk"
-if ! [ -d "$clk_dir" ]; then
-	printf "\nCreating clock log directory at %s\n" "$clk_dir"
-	mkdir -p "$clk_dir"
-fi
-clk_log=${clk_dir}/clk.tsv
-if ! [ -f $clk_log ]; then 
-	printf "Creating clock log file at %s\n" "$clk_log"
-	touch $clk_log
-fi
-## Ensure that the clock log always ends with the last non-empty line ##
-clk_log_tmp=${clk_log}.tmp
-# -s checks for file size > 0
-while
-	[ -s "$clk_log" ] && 
-	last_line=$(tail -1 "$clk_log") &&
-	[ -z "$last_line" ] || 
-	printf '%s' "$last_line" | grep -Eq '^ *$' ||
-	printf '%s' "$last_line" | grep -Eq '^	$'
-do
-	if [ $( wc -l "$clk_log" | cut -d' ' -f1 ) -eq 1 ]; then
-		printf "\nClearing clock log of unaccounted-for control characters\n"
-		> "$clk_log"
-	else
-		printf "\nRemoving trailing blank line in clock log\n"
-		sed -e '$d' "$clk_log" > $clk_log_tmp || exit 2
-		mv $clk_log_tmp $clk_log || exit 2
-	fi
-done
-# At this point the last_line variable should hold the last line content.
-
-#### Perform log validity check for in, extend, add, past ####
-if [ "$clk_subfunction" = 'in' ] || [ "$clk_subfunction" = 'extend' ] || [ "$clk_subfunction" = 'add' ] || [ "$clk_subfunction" = 'past' ] ; then
-	# If file is empty skip this guard. 
-	# If file is non-empty and last line is still in 'started' format, then interactively prompt user to give a session length for the started session or remove the partial record.
-	if [ -n "$last_line" ] && [ "$(printf "$last_line" | cut -d"$CLK_TAB" -f1)" = 'started' ]; then
-		start_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f2)"
-		start_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
-
-		# first exit early if 'extend' option, since we want to prevent unintended behavior
-		if [ "$clk_subfunction" = 'extend' ]; then
-			printf "Cannot extend when there is still an ongoing session in\n  %s\n  that started at\n  %s\n" "${start_tag}" "${start_timestamp}"
-			exit 1
-		fi
-
-		repeat_prompt='true'
-		while [ "$repeat_prompt" = 'true' ]; do
-			
-			printf "\nPlease provide a length in minutes for the session in\n  ${start_tag}\n  that began at\n  ${start_timestamp}\nor type 'r' to remove the record.\n\n"
-			read -p "Session length: " user_input_session_mins
-
-			if [ "$user_input_session_mins" = 'r' ]; then
-				sed -e '$d' $clk_log > $clk_log_tmp || exit 2
-				mv $clk_log_tmp $clk_log || exit 2
-				printf "\nRemoved partial record\n"
-				printf "  ${last_line}\n"
-				repeat_prompt='false'
-
-			elif printf '%s' "$user_input_session_mins" | grep -Eq '^[0-9]+$'; then
-				# Calculate end timestamp based on start timestamp and user-provided session length
-				end_timestamp=""
-				case "$current_os" in
-					Linux)
-						# timestamp format in clk_fmt
-						start_epochtime="$( date -d "$start_timestamp" +'%s' )" || exit 4
-						end_epochtime="$(( $start_epochtime + $user_input_session_mins * 60 ))"
-						end_timestamp="$( date -d @"$end_epochtime" +$clk_fmt )" || exit 4
-						;;
-					Darwin)
-						end_timestamp="$( date -j -v+${user_input_session_mins}M -f $clk_fmt "$start_timestamp" +$clk_fmt )" || exit 4
-						;;
-				esac
-
-				new_record="${end_timestamp}${CLK_TAB}${start_tag}${CLK_TAB}${user_input_session_mins}"
-				sed -e '$d' $clk_log > $clk_log_tmp || exit 2
-				printf "${new_record}\n" >> $clk_log_tmp || exit 2
-				mv $clk_log_tmp $clk_log || exit 2
-
-				printf "\nReplaced partial session with a full session in\n  ${start_tag}\n  that was active for\n  ${user_input_session_mins} minutes\n  and ended at\n  ${end_timestamp}.\n"
-
-				printf "\nIn addition:\n"
-
-				repeat_prompt='false'
-
-			else
-				printf "\nInvalid user input '$user_input_session_mins'. Please try again.\n"
-			fi
-
-		done
-
-	fi
-
-fi
-
-#### Perform 'in' option ####
-# Note that pre-in log validity check has already been performed
-if [ "$clk_subfunction" = 'in' ]; then
-	## Add 'in' portion of session to log ##
-	# if needed, calculate adjusted timestamp for start time
-	start_timestamp=""
-	if [ -n "$clk_at_timestamp" ]; then
-		start_timestamp="$clk_at_timestamp"
-	else
-		if [ -n "$clk_minus_minutes" ]; then
-			case "$current_os" in
-				Linux)
-					current_epochtime="$(date +'%s')"
-					adjusted_epochtime=$(( $current_epochtime - $clk_minus_minutes * 60 ))
-					start_timestamp="$( date -d @$adjusted_epochtime +$clk_fmt )"
-					;;
-				Darwin)
-					start_timestamp="$(date -v -${clk_minus_minutes}M +$clk_fmt)"
-					;;
-			esac
-		else
-			start_timestamp="$(date +$clk_fmt)"
-		fi
-	fi
-
-	total_paused_seconds=0
-	last_paused_at=""
-
-	printf "started\t${start_timestamp}\t${clk_tag}\t${total_paused_seconds}\t${last_paused_at}\n" >> $clk_log &&
-		printf "\nAdded new session in\n  ${clk_tag}\n  that started at\n  ${start_timestamp}\n" ||
-		exit 2
-
-	printf '\n'
-	exit 0
-fi
-
-#### Perform 'extend' option ####
-# With minor tweaks, this is a copy-and-paste from clock-out subfunction.
-if [ "$clk_subfunction" = 'extend' ]; then
-	# Guard-check that the file is non-empty
-	if [ -z "$last_line" ]; then
-		printf "Clock log is empty. Cannot extend last session.\n" >&2 && exit 5
-	fi
-
-	# Calculate adjusted timestamp for extended_end_timestamp
-	extended_end_timestamp=""
-	if [ -n "$clk_at_timestamp" ]; then
-		extended_end_timestamp="$clk_at_timestamp"
-	else
-		if [ -n "$clk_minus_minutes" ]; then
-			case "$current_os" in
-				Linux)
-					current_epochtime="$(date +'%s')"
-					adjusted_epochtime=$(( $current_epochtime - $clk_minus_minutes * 60 ))
-					extended_end_timestamp="$( date -d @$adjusted_epochtime +$clk_fmt )"
-					;;
-				Darwin)
-					extended_end_timestamp="$(date -v -${clk_minus_minutes}M +$clk_fmt)"
-					;;
-			esac
-		else
-			extended_end_timestamp="$(date +$clk_fmt)"
-		fi
-	fi
-
-	# Obtain previous end-timestamp
-	prev_end_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f1)"
-
-	# Calculate session extension length based on (adjusted) end timestamp and last sesh end timestamp
-	prev_end_epochtime=""
-	extended_end_epochtime=""
-	case "$current_os" in
-		Linux)
-			# timestamp format in clk_fmt
-			prev_end_epochtime="$( date -d "$prev_end_timestamp" +'%s' )" || exit 4
-			extended_end_epochtime="$( date -d "$extended_end_timestamp" +'%s' )" || exit 4
-			;;
-		Darwin)
-			prev_end_epochtime="$( date -j -f $clk_fmt "$prev_end_timestamp" +'%s' )" || exit 4
-			extended_end_epochtime="$( date -j -f $clk_fmt "$extended_end_timestamp" +'%s' )" || exit 4
-			;;
-	esac
-
-	difference_in_seconds=$(( $extended_end_epochtime - $prev_end_epochtime ))
-
-	# if the difference is negative, inform the user end time is invalid.
-	if printf '%s' "$difference_in_seconds" | grep -Eq '^-'; then
-		printf "Clock-extend time\n  ${extended_end_timestamp}\n  cannot be earlier than previous clock-out time\n  ${prev_end_timestamp}\n" && exit 1
-	fi
-
-	# Obtain previous length & calculate extended length
-	prev_length="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
-	extension_length=$(( $difference_in_seconds / 60 ))
-	updated_length=$(( $prev_length + $extension_length ))
-
-	# obtain previous session tag
-	prev_sesh_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f2)"
-
-	# obtain previous session description
-	prev_sesh_desc="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
-
-	# Replace last completed-session record with new completed-session record
-	new_record="${extended_end_timestamp}${CLK_TAB}${prev_sesh_tag}${CLK_TAB}${updated_length}${CLK_TAB}${prev_sesh_desc}"
-	sed -e '$d' $clk_log > $clk_log_tmp || exit 2
-	printf "${new_record}\n" >> $clk_log_tmp || exit 2
-	mv $clk_log_tmp $clk_log || exit 2
-
-	# set description string
-	description_string=""
-	if [ -n "${prev_sesh_desc}" ]; then
-		description_string="  on ${prev_sesh_desc}"
-		description_string+=$'\n'
-	fi
-
-	printf "\nExtended last session in\n  %s\n%s  by\n  %s minutes\n  for a total session length of\n  %d minutes\n  ending at\n  %s.\n" "${prev_sesh_tag}" "${description_string}" "${extension_length}" "${updated_length}" "${extended_end_timestamp}"
-
-	printf '\n'
-	exit 0
-fi
-
-#### Perform log validity check for out, switch, pause, resume ####
-if [ "$clk_subfunction" = 'out' ] || [ "$clk_subfunction" = 'switch' ] || [ "$clk_subfunction" = 'pause' ] || [ "$clk_subfunction" = 'resume' ] ; then
-	# If file is empty, or 
-	# if file is non-empty and last line is NOT in 'started' format, then quit and ask user to clock in first.
-	if [ -z "$last_line" ] || ! [ "$(printf "$last_line" | cut -d"$CLK_TAB" -f1)" = 'started' ]; then
-		printf "No latest clock-in record found. Please clock in first.\n" >&2 && exit 5
-	fi
-fi
-
-#### Perform 'out' option ####
-if [ "$clk_subfunction" = 'out' ]; then
-	## Guard - Check if latest partial record has the same tag ##
-	start_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
-	if ! [ "$clk_tag" = "$start_tag" ]; then
-		printf "The clock-out work tag '$clk_tag' does not match the clock-in work tag '$start_tag'\n" >&2 && exit 1
-	fi
-
-	## Add 'out' portion of session to log ##
-	# if needed, calculate adjusted timestamp for end time
-	end_timestamp=""
-	if [ -n "$clk_at_timestamp" ]; then
-		end_timestamp="$clk_at_timestamp"
-	else
-		if [ -n "$clk_minus_minutes" ]; then
-			case "$current_os" in
-				Linux)
-					current_epochtime="$(date +'%s')"
-					adjusted_epochtime=$(( $current_epochtime - $clk_minus_minutes * 60 ))
-					end_timestamp="$( date -d @$adjusted_epochtime +$clk_fmt )"
-					;;
-				Darwin)
-					end_timestamp="$(date -v -${clk_minus_minutes}M +$clk_fmt)"
-					;;
-			esac
-		else
-			end_timestamp="$(date +$clk_fmt)"
-		fi
-	fi
-
-	# calculate session length based on (adjusted) end timestamp and start timestamp
-	start_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f2)"
-	start_epochtime=""
-	end_epochtime=""
-	case "$current_os" in
-		Linux)
-			# timestamp format in clk_fmt
-			start_epochtime="$( date -d "$start_timestamp" +'%s' )" || exit 4
-			end_epochtime="$( date -d "$end_timestamp" +'%s' )" || exit 4
-			;;
-		Darwin)
-			start_epochtime="$( date -j -f $clk_fmt "$start_timestamp" +'%s' )" || exit 4
-			end_epochtime="$( date -j -f $clk_fmt "$end_timestamp" +'%s' )" || exit 4
-			;;
-	esac
-
-	difference_in_seconds=$(( $end_epochtime - $start_epochtime ))
-
-	# if the difference is negative, inform the user end time is invalid.
-	if printf '%s' "$difference_in_seconds" | grep -Eq '^-'; then
-		printf "Clock-out time\n  ${end_timestamp}\n  cannot be earlier than clock-in time\n  ${start_timestamp}\n" && exit 1
-	fi
-
-	# now obtain and subtract paused seconds
-	paused_seconds="$( printf "$last_line" | cut -d"$CLK_TAB" -f4 )"
-	# if session is currently paused, add time from last pause to now
-	last_paused_at="$( printf "$last_line" | cut -d"$CLK_TAB" -f5 )"
-	if [ -n "$last_paused_at" ]; then
-		now_epoch="$(date +%s)"
-		paused_seconds=$(( $paused_seconds + $now_epoch - $last_paused_at ))
-	fi
-	session_length=$(( ($difference_in_seconds - $paused_seconds) / 60 ))
-
-	# if the session length is negative due to too much paused time, inform the user
-	if printf '%s' "$session_length" | grep -Eq '^-'; then
-		no_pause_session_length=$(( $difference_in_seconds / 60 ))
-		paused_minutes_display=$(( $paused_seconds / 60 ))
-		printf 'Current session paused time of %d minutes\n  cannot exceed total session length of %d minutes.\n' ${paused_minutes_display} ${no_pause_session_length} && exit 1
-	fi
-
-	# Replace start-session record with completed-session record
-	new_record="${end_timestamp}${CLK_TAB}${clk_tag}${CLK_TAB}${session_length}${CLK_TAB}${clk_on_description}"
-	sed -e '$d' $clk_log > $clk_log_tmp || exit 2
-	printf "${new_record}\n" >> $clk_log_tmp || exit 2
-	mv $clk_log_tmp $clk_log || exit 2
-
-	paused_string=""
-	if [ "$paused_seconds" -gt 0 ]; then
-		paused_minutes_display=$(( $paused_seconds / 60 ))
-		paused_string="was paused for"
-		paused_string+=$'\n'
-		paused_string+="  ${paused_minutes_display} minutes"
-		paused_string+=$'\n  and '
-	fi
-
-	# set description string
-	description_string=""
-	if [ -n "$clk_on_description" ]; then
-		description_string="  on ${clk_on_description}"
-		description_string+=$'\n'
-	fi
-
-	printf "\nRecorded full session in\n  %s\n  starting at\n  %s\n%s  that %swas active for\n  %d minutes\n  and ended at\n  %s.\n" "${clk_tag}" "${start_timestamp}" "${description_string}" "${paused_string}" "${session_length}" "${end_timestamp}"
-
-	printf '\n'
-	exit 0
-fi
-
-### Perform 'switch' option ####
-# The first half of this procedure copies from clock out (excluding the same-tag guard); the second half copies from clock in.
-if [ "$clk_subfunction" = 'switch' ]; then
-
-	# if needed, calculate adjusted timestamp for switch time
-	switch_timestamp=""
-	if [ -n "$clk_at_timestamp" ]; then
-		switch_timestamp="$clk_at_timestamp"
-	else
-		if [ -n "$clk_minus_minutes" ]; then
-			case "$current_os" in
-				Linux)
-					current_epochtime="$(date +'%s')"
-					adjusted_epochtime=$(( $current_epochtime - $clk_minus_minutes * 60 ))
-					switch_timestamp="$( date -d @$adjusted_epochtime +$clk_fmt )"
-					;;
-				Darwin)
-					switch_timestamp="$(date -v -${clk_minus_minutes}M +$clk_fmt)"
-					;;
-			esac
-		else
-			switch_timestamp="$(date +$clk_fmt)"
-		fi
-	fi
-
-	## Add previous session to log ##
-	# calculate previous session length based on (adjusted) end timestamp and prev sesh start timestamp
-	prev_sesh_start_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f2)"
-	start_epochtime=""
-	end_epochtime=""
-	case "$current_os" in
-		Linux)
-			# timestamp format in clk_fmt
-			start_epochtime="$( date -d "$prev_sesh_start_timestamp" +'%s' )" || exit 4
-			end_epochtime="$( date -d "$switch_timestamp" +'%s' )" || exit 4
-			;;
-		Darwin)
-			start_epochtime="$( date -j -f $clk_fmt "$prev_sesh_start_timestamp" +'%s' )" || exit 4
-			end_epochtime="$( date -j -f $clk_fmt "$switch_timestamp" +'%s' )" || exit 4
-			;;
-	esac
-
-	difference_in_seconds=$(( $end_epochtime - $start_epochtime ))
-
-	# if the difference is negative, inform the user end time is invalid.
-	if printf '%s' "$difference_in_seconds" | grep -Eq '^-'; then
-		printf "Clock-switch time\n  ${switch_timestamp}\n  cannot be earlier than previous session's clock-in time\n  ${prev_sesh_start_timestamp}\n" && exit 1
-	fi
-
-	# obtain and subtract paused seconds from previous session
-	prev_sesh_paused_seconds="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
-	prev_sesh_last_paused_at="$(printf "$last_line" | cut -d"$CLK_TAB" -f5)"
-	if [ -n "$prev_sesh_last_paused_at" ]; then
-		prev_sesh_paused_seconds=$(( $prev_sesh_paused_seconds + $end_epochtime - $prev_sesh_last_paused_at ))
-	fi
-	session_length=$(( ($difference_in_seconds - $prev_sesh_paused_seconds) / 60 ))
-
-	# obtain previous session tag
-	prev_sesh_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
-
-	# replace start-session record with completed-session record
-	if [ -n "${clk_on_description}" ]; then
-		new_record="${switch_timestamp}${CLK_TAB}${prev_sesh_tag}${CLK_TAB}${session_length}${CLK_TAB}${clk_on_description}"
-	else
-		new_record="${switch_timestamp}${CLK_TAB}${prev_sesh_tag}${CLK_TAB}${session_length}${CLK_TAB}"
-	fi
-	sed -e '$d' $clk_log > $clk_log_tmp || exit 2
-	printf "${new_record}\n" >> $clk_log_tmp || exit 2
-	mv $clk_log_tmp $clk_log || exit 2
-
-	# set description string
-	description_string=""
-	if [ -n "$clk_on_description" ]; then
-		description_string="  on ${clk_on_description}"
-		description_string+=$'\n'
-	fi
-
-	paused_string=""
-	if [ "$prev_sesh_paused_seconds" -gt 0 ]; then
-		paused_minutes_display=$(( $prev_sesh_paused_seconds / 60 ))
-		paused_string="was paused for"
-		paused_string+=$'\n'
-		paused_string+="  ${paused_minutes_display} minutes"
-		paused_string+=$'\n  and '
-	fi
-
-	printf "\nRecorded full session in\n  %s\n%s  that %swas active for\n  %d minutes\n  and ended at\n  %s.\n" "${prev_sesh_tag}" "${description_string}" "${paused_string}" "${session_length}" "${switch_timestamp}"
-
-	## Add start of new session to log ##
-
-	total_paused_seconds=0
-	last_paused_at=""
-
-	printf "started\t${switch_timestamp}\t${clk_tag}\t${total_paused_seconds}\t${last_paused_at}\n" >> $clk_log &&
-		printf "\nAdded new session in\n  ${clk_tag}\n  that started at\n  ${switch_timestamp}\n" ||
-		exit 2
-	
-	printf '\n'
-	exit 0
-fi
-
-#### Perform 'add' option ####
-# Note that pre-add log validity check has already been performed
-if [ "$clk_subfunction" = 'add' ]; then
-	## Add full session to log ##
-	# if needed, calculate adjusted timestamp for end time
-	if [ -z "$clk_add_end_timestamp" ]; then
-		clk_add_end_timestamp=""
-		if [ -n "$clk_minus_minutes" ]; then
-			case "$current_os" in
-				Linux)
-					current_epochtime="$(date +'%s')"
-					adjusted_epochtime=$(( $current_epochtime - $clk_minus_minutes * 60 ))
-					clk_add_end_timestamp="$( date -d @$adjusted_epochtime +$clk_fmt )"
-					;;
-				Darwin)
-					clk_add_end_timestamp="$(date -v -${clk_minus_minutes}M +$clk_fmt)"
-					;;
-			esac
-		else
-			clk_add_end_timestamp="$(date +$clk_fmt)"
-		fi
-	fi
-
-	# add record
-	add_record="${clk_add_end_timestamp}${CLK_TAB}${clk_tag}${CLK_TAB}${clk_for_minutes}${CLK_TAB}${clk_add_on_description}"
-	printf "${add_record}\n" >> $clk_log || exit 2
-
-	# set description string
-	description_string=""
-	if [ -n "$clk_add_on_description" ]; then
-		description_string="  on ${clk_add_on_description}"
-		description_string+=$'\n'
-	fi
-
-	printf "\nRecorded full session in\n  %s\n%s  that was active for\n  %d minutes\n  and ended at\n  %s\n" "${clk_tag}" "${description_string}" "${clk_for_minutes}" "${clk_add_end_timestamp}"
-
-	printf '\n'
-	exit 0
-fi
-
-#### Perform 'remove' or 'pop' option ####
-if [ "$clk_subfunction" = 'remove' ] || [ "$clk_subfunction" = 'pop' ]; then
-	clk_verb="${clk_subfunction}"
-	## Guard - Check if current log is pre-remove valid ##
-	if [ -z "$last_line" ]; then
-		printf "No clock record found. Cannot ${clk_verb} any record.\n" >&2 && exit 5
-	fi
-
-	## Remove last log item & print it ##
-	sed -e '$d' $clk_log > $clk_log_tmp || exit 2
-	mv $clk_log_tmp $clk_log || exit 2
-	if [ "$clk_subfunction" = 'remove' ]; then 
-		clk_verb='Removed'
-	elif [ "$clk_subfunction" = 'pop' ]; then
-		clk_verb='Popped'
-	fi
-	printf "\n${clk_verb} record\n"
-	printf "  ${last_line}\n"
-
-	printf '\n'
-	exit 0
-fi
-
-#### Perform 'pause' option ####
-if [ "$clk_subfunction" = 'pause' ]; then
-	# obtain existing fields
-	start_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f2)"
-	current_sesh_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
-	current_sesh_paused_secs="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
-	current_sesh_paused_at="$(printf "$last_line" | cut -d"$CLK_TAB" -f5)"
-	if [ -n "$current_sesh_paused_at" ]; then
-		pause_display="$(date -r "$current_sesh_paused_at" +$clk_fmt 2>/dev/null || printf '%s' "$current_sesh_paused_at")"
-		printf 'Cannot pause current session, as it was already paused at %s\n' "${pause_display}"
-		exit 5
-	fi
-	# replace record with new one where paused time field is set to epoch timestamp
-	pause_epoch="$(date +%s)"
-	pause_display="$(date +$clk_fmt)"
-	new_record="started${CLK_TAB}${start_timestamp}${CLK_TAB}${current_sesh_tag}${CLK_TAB}${current_sesh_paused_secs}${CLK_TAB}${pause_epoch}"
-	sed -e '$d' $clk_log > $clk_log_tmp || exit 2
-	printf "${new_record}\n" >> $clk_log_tmp || exit 2
-	mv $clk_log_tmp $clk_log || exit 2
-	# report the pause
-	printf '\nThe current session in\n  %s\n  has been paused at\n  %s\n\n' "${current_sesh_tag}" "${pause_display}"
-	exit 0
-fi
-
-#### Perform 'resume' option ####
-if [ "$clk_subfunction" = 'resume' ]; then
-	## obtain existing fields
-	start_timestamp="$(printf "$last_line" | cut -d"$CLK_TAB" -f2)"
-	sesh_tag="$(printf "$last_line" | cut -d"$CLK_TAB" -f3)"
-	sesh_prev_paused_secs="$(printf "$last_line" | cut -d"$CLK_TAB" -f4)"
-	if ! printf '%s' "${sesh_prev_paused_secs}" | grep -Eq '^[0-9]+$'; then
-		printf 'Current session paused seconds field (4th field) is not an integer. Please fix in log.\n'
-		exit 5
-	fi
-	paused_epoch="$(printf "$last_line" | cut -d"$CLK_TAB" -f5)"
-	# obtain epoch now
-	now_epoch="$(date +%s)"
-
-	## calculate new paused seconds
-	difference_in_seconds=$(( $now_epoch - $paused_epoch ))
-
-	# if the difference is negative, inform the user
-	if printf '%s' "$difference_in_seconds" | grep -Eq '^-'; then
-		now_display="$(date +$clk_fmt)"
-		paused_display="$(date -r "$paused_epoch" +$clk_fmt 2>/dev/null || printf '%s' "$paused_epoch")"
-		printf "Resume time\n  ${now_display}\n  cannot be earlier than paused time\n  ${paused_display}\n" && exit 1
-	fi
-	# increment paused seconds
-	sesh_new_paused_secs=$(( $sesh_prev_paused_secs + $difference_in_seconds ))
-
-	## update record
-	# update paused seconds and clear paused time field
-	new_record="started${CLK_TAB}${start_timestamp}${CLK_TAB}${sesh_tag}${CLK_TAB}${sesh_new_paused_secs}${CLK_TAB}"
-	sed -e '$d' $clk_log > $clk_log_tmp || exit 2
-	printf "${new_record}\n" >> $clk_log_tmp || exit 2
-	mv $clk_log_tmp $clk_log || exit 2
-	# report resume
-	paused_display_mins=$(( $sesh_new_paused_secs / 60 ))
-	printf '\nThe current session in\n  %s\n  has been resumed.\n  Total paused: %d seconds (%d minutes)\n\n' "${sesh_tag}" "${sesh_new_paused_secs}" "${paused_display_mins}"
-	exit 0
-fi
-
-#### Perform 'log' option ####
-if [ "$clk_subfunction" = 'log' ]; then
-	vi $clk_log
-	exit 0
-fi
-
-#### Perform 'last' option ####
-if [ "$clk_subfunction" = 'last' ] || [ "$clk_subfunction" = 'l' ]; then
-	printf "${last_line}\n"
-	exit 0
-fi
-
-#### Perform 'alias' option ####
-if [ "$clk_subfunction" = 'alias' ]; then
-	# Detect default shell
-	clk_alias_shell="$(basename "$SHELL")"
-	case "$clk_alias_shell" in
-		bash) clk_alias_rc="$HOME/.bashrc" ;;
-		zsh)  clk_alias_rc="$HOME/.zshrc" ;;
-		*)
-			printf "Unsupported shell '%s'. Only bash and zsh are supported.\\n" "$clk_alias_shell" >&2
-			exit 1
-			;;
-	esac
-
-	# Check if 'c' is already defined (alias, function, or executable)
-	# Spawn an interactive shell so aliases from rc files and sourced configs are visible
-	existing_c="$("$SHELL" -ic 'command -v c' 2>/dev/null)"
-	if [ -n "$existing_c" ]; then
-		case "$existing_c" in
-			*clk|*clk\'|*clk\")
-				printf "'c' already points to clk.\\n"
-				exit 0
-				;;
-			*)
-				printf "'c' is already defined in your environment:\\n  %s\\nPlease remove it before running 'clk alias'.\\n" "$existing_c" >&2
-				exit 1
-				;;
-		esac
-	fi
-
-	# Append alias to rc file
-	printf "\\nalias c='clk' # Added by clk\\n" >> "$clk_alias_rc" || exit 2
-
-	printf "\\nAdded alias c='clk' to %s\\n" "$clk_alias_rc"
-	printf "\\nTo enable it now, run:\\n  source %s\\n\\n" "$clk_alias_rc"
-	exit 0
-fi
-
-#### Perform 'past' option ####
-if [ "$clk_subfunction" = 'past' ]; then
-	## Guard - Check if current log is pre-past valid ##
-	if [ -z "$last_line" ]; then
-		printf "No clock record found. Cannot perform summary.\n" >&2 && exit 5
-	fi
-
-	## Calculate cut-off epoch ##
-	if ! [ "$clk_dtn" = 'true' ]; then
-		clk_past_hours_with_minus=$(( $clk_past_days * 24 + $clk_past_minus_hours ))
-	fi
-
-	# printf >&2 "clk_past_hours_with_minus: $clk_past_hours_with_minus\n"
-	# printf >&2 "clk_past_minus_hours: $clk_past_minus_hours\n"
-	# exit
-	case "$current_os" in
-		Linux)
-			current_epochtime="$(date +'%s')"
-			if [ "$clk_dtn" = 'true' ]; then
-				startcut_epochtime="$( date -d "$( date +'%Y.%m.%d' )" +'%s' )"
-				endcut_epochtime="$current_epochtime"
-			else
-				startcut_epochtime=$(( $current_epochtime - $clk_past_hours_with_minus * 3600 ))
-				endcut_epochtime=$(( $current_epochtime - $clk_past_minus_hours * 3600 ))
-			fi
-			;;
-		Darwin)
-			if [ "$clk_dtn" = 'true' ]; then
-				startcut_epochtime="$( date -j -f '%m-%d:%H:%M:%S' "$(date +%m-%d):00:00:00" +%s )"
-				endcut_epochtime="$(date +%s)"
-			else
-				startcut_epochtime="$(date -v -${clk_past_hours_with_minus}H +'%s')"
-				endcut_epochtime="$(date -v -${clk_past_minus_hours}H +'%s')"
-			fi
-			;;
-	esac
-
-	## Convert cutoff epochs to clk_fmt strings for lexicographic comparison ##
-	case "$current_os" in
-		Linux)  startcut_str="$(date -d @"$startcut_epochtime" +"$clk_fmt")"
-			endcut_str="$(date -d @"$endcut_epochtime" +"$clk_fmt")" ;;
-		Darwin) startcut_str="$(date -r "$startcut_epochtime" +"$clk_fmt")"
-			endcut_str="$(date -r "$endcut_epochtime" +"$clk_fmt")" ;;
-	esac
-
-	## Summarize records within [startcut_str, endcut_str] using string comparison ##
-	sorted_log="$(sort "$clk_log")"
-
-	printf "\n-- Top-level tags --\n"
-	printf '%s\n' "$sorted_log" | awk -F'\t' -v s="$startcut_str" -v e="$endcut_str" \
-		'$1 >= s && $1 <= e { split($2, tc, "."); TOP[tc[1]] += $3; total += $3 }
-		 END {
-			if (!total) { print "No clock records found within the desired time range." > "/dev/stderr"; exit 0 }
-			printf "%-17s%-7d%7.2fh\n", "TOTAL", total, (total/60);
-			for (tl in TOP) printf "%-17s%-7d%7.2fh   %06.3f%%\n", tl, TOP[tl], (TOP[tl]/60), TOP[tl]/total*100
-		 }' | sort -k2 -n -r || exit 6
-
-	printf "\n-- Original tags --\n"
-	printf '%s\n' "$sorted_log" | awk -F'\t' -v s="$startcut_str" -v e="$endcut_str" \
-		'$1 >= s && $1 <= e { TAG[$2] += $3; total += $3 }
-		 END {
-			printf "%-17s%-7d%7.2fh\n", "TOTAL", total, (total/60);
-			for (t in TAG) printf "%-17s%-7d%7.2fh   %06.3f%%\n", t, TAG[t], (TAG[t]/60), TAG[t]/total*100
-		 }' | sort -k2 -n -r || exit 6
-
-	printf '\n'
-	exit 0
-fi
-
-

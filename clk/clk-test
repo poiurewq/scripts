@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# clk-test — automated tests for clk
+#
+# Usage:
+#   ./clk-test              # run all tests
+#   ./clk-test test_name    # run a specific test
+#
+# Test files:
+#   clk-test-unit.bash      — unit tests for internal helpers
+#   clk-test-session.bash   — integration tests: in, out, status, last, last-done, lifecycle
+#   clk-test-pause.bash     — integration tests: pause, resume, unpause, switch
+#   clk-test-mutation.bash  — integration tests: add, add-break, extend, remove, undo, redo
+#   clk-test-view.bash      — integration tests: view, script invocation
+
+set -u
+
+#####################################################################
+# Test harness
+#####################################################################
+
+CLK_TEST_PASS=0
+CLK_TEST_FAIL=0
+CLK_TEST_DIR=""
+CLK_SCRIPT=""
+
+# Resolve path to clk script (same directory as this test file)
+CLK_SCRIPT="$(cd "$(dirname "$0")" && pwd)/clk"
+
+if [ ! -f "$CLK_SCRIPT" ]; then
+    printf 'ERROR: clk script not found at %s\n' "$CLK_SCRIPT" >&2
+    exit 1
+fi
+
+clk_test__setup() {
+    CLK_TEST_DIR="$(mktemp -d)"
+    export XDG_DATA_HOME="$CLK_TEST_DIR"
+    # Source clk to get access to helpers
+    CLK_SOURCED=1 source "$CLK_SCRIPT"
+    # Initialize the log (sets CLK_DIR, CLK_LOG, CLK_TMP_ERR, etc.)
+    clk__ensure_log
+}
+
+clk_test__teardown() {
+    \rm -rf "$CLK_TEST_DIR"
+}
+
+clk_test__assert_exit() {
+    # $1: expected exit code, $2+: command to run
+    local expected="$1"; shift
+    # Run in subshell to capture exit code without dying
+    local actual=0
+    ("$@") >/dev/null 2>&1 || actual=$?
+    if [ "$actual" -ne "$expected" ]; then
+        printf 'FAIL: expected exit %d, got %d: %s\n' "$expected" "$actual" "$*"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__assert_output_contains() {
+    # $1: expected substring, $2+: command to run
+    local expected="$1"; shift
+    local output
+    output="$("$@" 2>&1)" || true
+    if ! printf '%s' "$output" | grep -qF "$expected"; then
+        printf 'FAIL: output missing "%s": %s\n' "$expected" "$*"
+        printf '  actual output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__assert_output_equals() {
+    # $1: expected output (exact), $2+: command to run
+    local expected="$1"; shift
+    local output
+    output="$("$@" 2>&1)" || true
+    if [ "$output" != "$expected" ]; then
+        printf 'FAIL: output mismatch: %s\n' "$*"
+        printf '  expected: "%s"\n' "$expected"
+        printf '  actual:   "%s"\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__assert_log_line() {
+    # $1: line number (from end, 1-indexed), $2: expected regex
+    local n="$1" pattern="$2"
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local line
+    line="$(tail -n "$n" "$log_file" | head -1)"
+    if ! printf '%s' "$line" | grep -Eq "$pattern"; then
+        printf 'FAIL: log line -%d does not match /%s/\n' "$n" "$pattern"
+        printf '  actual: %s\n' "$line"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__assert_equals() {
+    # $1: expected, $2: actual, $3: description
+    local expected="$1" actual="$2" desc="$3"
+    if [ "$expected" != "$actual" ]; then
+        printf 'FAIL: %s\n' "$desc"
+        printf '  expected: "%s"\n' "$expected"
+        printf '  actual:   "%s"\n' "$actual"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__run() {
+    local test_name="$1"
+    printf '  %s ... ' "$test_name"
+    clk_test__setup
+    local result=0
+    if "$test_name"; then
+        printf 'ok\n'
+    else
+        printf 'FAILED\n'
+        result=1
+    fi
+    clk_test__teardown
+    return "$result"
+}
+
+#####################################################################
+# Source test files
+#####################################################################
+
+_test_dir="$(cd "$(dirname "$0")" && pwd)"
+
+source "$_test_dir/clk-test-unit.bash"
+source "$_test_dir/clk-test-session.bash"
+source "$_test_dir/clk-test-pause.bash"
+source "$_test_dir/clk-test-mutation.bash"
+source "$_test_dir/clk-test-view.bash"
+source "$_test_dir/clk-test-edit.bash"
+source "$_test_dir/clk-test-misc.bash"
+
+#####################################################################
+# Collect all tests
+#####################################################################
+
+ALL_TESTS=(
+    "${CLK_TESTS_UNIT[@]}"
+    "${CLK_TESTS_SESSION[@]}"
+    "${CLK_TESTS_PAUSE[@]}"
+    "${CLK_TESTS_MUTATION[@]}"
+    "${CLK_TESTS_VIEW[@]}"
+    "${CLK_TESTS_EDIT[@]}"
+    "${CLK_TESTS_MISC[@]}"
+)
+
+#####################################################################
+# Test runner
+#####################################################################
+
+printf 'clk test suite\n'
+
+# Support running a specific test
+if [ "${1:-}" != "" ]; then
+    found=0
+    for t in "${ALL_TESTS[@]}"; do
+        if [ "$t" = "$1" ]; then
+            found=1
+            clk_test__run "$t"
+            break
+        fi
+    done
+    if [ "$found" -eq 0 ]; then
+        printf 'Unknown test: %s\n' "$1" >&2
+        exit 1
+    fi
+else
+    for t in "${ALL_TESTS[@]}"; do
+        clk_test__run "$t"
+    done
+fi
+
+printf '\nResults: %d passed, %d failed\n' "$CLK_TEST_PASS" "$CLK_TEST_FAIL"
+
+if [ "$CLK_TEST_FAIL" -gt 0 ]; then
+    exit 1
+fi
+exit 0

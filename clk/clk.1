@@ -1,4 +1,4 @@
-.Dd February 24, 2026
+.Dd March 20, 2026
 .Dt CLK 1
 .Os
 .Sh NAME
@@ -8,177 +8,316 @@
 .Nm
 .Op Cm help
 .br
-.Op Cm in Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp
+.Nm
+.Cm in Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
 .br
-.Op Cm out Ar tag Oo Bro Cm minus Ar minutes | Cm at Ar timestamp Brc Oc Op Cm on Ar description
+.Nm
+.Cm out Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
 .br
-.Op Cm switch Ar tag Op Cm on Ar description
+.Nm
+.Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
 .br
-.Op Cm add Ar tag Cm for Ar minutes Oo Bro Cm minus Ar minutes | Cm at Ar timestamp Brc Oc Op Cm on Ar description
+.Nm
+.Cm add Ar tag Cm for Ar minutes Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
 .br
-.Op Cm extend Op Brq Cm minus Ar minutes | Cm at Ar timestamp
+.Nm
+.Cm add Ar minutes Op Cm to Ar tag
 .br
-.Op Cm remove | pop
+.Nm
+.Bro Cm add-break | Cm ab Brc Ar minutes Op Cm to Ar tag
 .br
-.Op Bro Cm pause | p Brc | Bro Cm resume | r Brc
+.Nm
+.Cm extend Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
-.Op Cm log
+.Nm
+.Bro Cm remove | Cm pop Brc
 .br
-.Op Cm last | l
+.Nm
+.Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
-.Op Cm past Bro Cm dtn | day | week | Ar number Bro Cm days | weeks Brc Brc Op Cm minus Ar number Cm hour(s)
+.Nm
+.Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes
 .br
-.Op Cm alias
+.Nm
+.Cm unpause Op Ar tag
+.br
+.Nm
+.Cm undo
+.br
+.Nm
+.Cm redo
+.br
+.Nm
+.Bro Cm status | Cm s Brc
+.br
+.Nm
+.Bro Cm last | Cm l Brc Op Ar n
+.br
+.Nm
+.Bro Cm last-done | Cm ld Brc Op Ar n
+.br
+.Nm
+.Cm log
+.br
+.Nm
+.Cm view Bro Cm today | Cm yesterday Brc
+.br
+.Nm
+.Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+.br
+.Nm
+.Cm view Cm from Ar timestamp Cm until Ar timestamp
+.br
+.Nm
+.Cm edit Fl Ar n Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
+.br
+.Nm
+.Cm edit Fl Ar n Cm delete
+.br
+.Nm
+.Cm alias
 .Sh DESCRIPTION
 .Nm
-lets you clock in and out of work, tracking how many minutes you've spent working each day.
-.Nm
-is designed for minimal overhead so that you can focus on work and still accurately track your time.
-Consistent with this mission,
-.Nm
-offers an alias
-.Sq c
-that you can type even more quickly for maximal efficiency.
-Use
-.Ql clk alias
-to inject it into your shell rc file.
+is a time-tracking CLI that lets you clock in and out of work sessions,
+tracking how long you spend on each task.
+It is designed for minimal overhead so that you can focus on work and
+still accurately track your time.
 .Pp
-Options include:
+All durations are stored internally in seconds for precision.
+Timestamps use ISO 8601 format
+.Pq Ql %Y\-%m\-%dT%H:%M:%S
+and are always in the local time zone.
+Multiple sessions may be active simultaneously.
+.Pp
+.Nm
+offers a shell alias
+.Sq c
+that you can inject via
+.Ql clk alias
+for faster invocation.
+.Ss Clock in/out
+.Bl -tag -width indent
+.It Cm in Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+Clock in to a work session labeled with
+.Ar tag .
+Tags are single tokens
+.Pq no spaces or tabs
+and may use
+.Ql .\&
+as a hierarchical separator
+.Pq e.g., Ql pm.bills .
+Tags must not be purely numeric.
+.Pp
+Optionally specify when the session started via
+.Cm minus Ar minutes
+.Pq that many minutes ago
+or
+.Cm at Ar timestamp
+.Pq an exact ISO 8601 timestamp .
+Optionally attach a description with
+.Cm on Ar description .
+The
+.Cm on
+keyword consumes all remaining arguments.
+.Pp
+If a session for the same tag is already active, the command fails.
+Sessions with different tags may be active concurrently.
+.It Cm out Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+Clock out of the active session for
+.Ar tag .
+If exactly one session is active,
+.Ar tag
+may be omitted and is inferred automatically.
+If multiple sessions are active,
+.Ar tag
+is required.
+.Pp
+If a description is provided via
+.Cm on ,
+it overrides any description set at clock-in.
+If the session is currently paused, the pause is finalized
+.Pq pause duration added to break time
+before computing the session length.
+.It Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+End one session and start another atomically.
+The switch timestamp is both the end time of the old session and the
+start time of the new one.
+.Pp
+.Cm from Ar old-tag
+specifies which active session to close.
+If omitted and exactly one session is active, it is inferred.
+.Cm on Ar description
+applies to the session being closed.
+.El
+.Ss Adding and modifying sessions
+.Bl -tag -width indent
+.It Cm add Ar tag Cm for Ar minutes Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+Add a completed session of
+.Ar minutes
+length directly to the log, ending at the current time
+.Pq or at the time specified by Cm minus No or Cm at .
+The start time is back-calculated from the end time and duration.
+.It Cm add Ar minutes Op Cm to Ar tag
+Add
+.Ar minutes
+of time to an active session by moving its start time backwards.
+If
+.Cm to Ar tag
+is omitted and exactly one session is active, it is inferred.
+.It Bro Cm add-break | Cm ab Brc Ar minutes Op Cm to Ar tag
+Add
+.Ar minutes
+of break time to an active session.
+The session must not be currently paused.
+If
+.Cm to Ar tag
+is omitted, the tag is inferred when unambiguous.
+.It Cm extend Op Cm minus Ar minutes | Cm at Ar timestamp
+Extend the last completed session to the current time, or to the time
+specified by
+.Cm minus
+or
+.Cm at .
+The new end time must be at or after the original end time.
+.It Bro Cm remove | Cm pop Brc
+Remove the last record from the log
+.Pq whether active or completed
+and display the removed record.
+.El
+.Ss Pause and resume
+.Bl -tag -width indent
+.It Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+Pause an active session.
+The session must not already be paused.
+.Cm minus Ar minutes
+sets the pause start to that many minutes ago.
+If
+.Ar tag
+is omitted and exactly one session is active, it is inferred.
+.It Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes
+Resume a paused session.
+The pause duration is added to the session's accumulated break time.
+.Cm minus Ar minutes
+sets the resume point to that many minutes ago.
+.It Cm unpause Op Ar tag
+Cancel a pause without adding break time.
+Useful when a pause was started by mistake.
+Does not affect the undo stack.
+.El
+.Ss Undo and redo
+.Bl -tag -width indent
+.It Cm undo
+Undo the last mutating operation.
+Displays a human-readable diff of the change.
+Only one level of undo is supported; each new mutation overwrites the
+undo snapshot.
+.It Cm redo
+Redo the last undone operation.
+Displays a human-readable diff of the change.
+.El
+.Ss Viewing records
+.Bl -tag -width indent
+.It Bro Cm status | Cm s Brc
+Show all active sessions with their tag, start time, elapsed active time,
+break time, pause state, and description.
+If no sessions are active, prints
+.Dq \&No active sessions .
+.It Bro Cm last | Cm l Brc Op Ar n
+Print the last
+.Ar n
+records from the log
+.Pq default 1 .
+Includes both active and completed records.
+Each record is prefixed with a
+.Fl Ar N
+index that corresponds to the index used by
+.Cm edit .
+.It Bro Cm last-done | Cm ld Brc Op Ar n
+Print the last
+.Ar n
+completed records
+.Pq default 1 .
+Unlike
+.Cm last ,
+active records are excluded and no index prefix is shown.
+.It Cm log
+Open the log file in
+.Ev VISUAL ,
+.Ev EDITOR ,
+or
+.Xr vi 1 .
+.El
+.Ss Analysis
+.Bl -tag -width indent
+.It Cm view Cm today
+Summarize sessions from midnight today until now.
+.It Cm view Cm yesterday
+Summarize sessions from midnight yesterday until midnight today.
+.It Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+Summarize sessions over the past
+.Ar n
+hours, days, or weeks
+.Pq default 1 .
+Both singular and plural unit forms are accepted
+.Pq e.g., Cm day No or Cm days .
+.Pp
+The
+.Cm before
+modifier anchors the lookback window to a point other than now:
+.Cm before Ar timestamp
+anchors to the given timestamp, and
+.Cm before Cm minus Ar minutes
+anchors to that many minutes ago.
+.It Cm view Cm from Ar timestamp Cm until Ar timestamp
+Summarize sessions in an explicit time range.
+.El
+.Pp
+All
+.Cm view
+forms display a table of tags with total minutes, hours, and percentages.
+Active sessions whose start time falls within the range are excluded
+from totals and noted separately.
+.Ss Editing records
+.Bl -tag -width indent
+.It Cm edit Fl Ar n Cm tag Ar new-tag
+Change the tag of record
+.Fl Ar n .
+.It Cm edit Fl Ar n Cm start Ar timestamp
+Change the start time.
+Recalculates length on completed records.
+.It Cm edit Fl Ar n Cm end Ar timestamp
+Change the end time.
+Only valid on completed records; recalculates length.
+.It Cm edit Fl Ar n Cm break Ar minutes
+Set break time to
+.Ar minutes .
+Recalculates length on completed records.
+.It Cm edit Fl Ar n Cm pause Bro Ar timestamp | Cm clear Brc
+Set or clear the paused-at timestamp on an active record.
+.It Cm edit Fl Ar n Cm on Ar description
+Change the description.
+All arguments after
+.Cm on
+are collected as the description.
+.It Cm edit Fl Ar n Cm delete
+Delete the record entirely.
+.El
+.Pp
+The
+.Fl Ar n
+index counts from the end of the log:
+.Fl 1
+is the last record,
+.Fl 2
+is second-to-last, and so on.
+This index matches the one shown by
+.Cm last .
+All edit operations save an undo snapshot.
+.Ss Miscellaneous
 .Bl -tag -width indent
 .It Cm help
-Print this help page.
-.It Cm in Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp
-Clock in to work labeled with a single-word
-.Ar tag .
-The
-.Ar tag
-is of the form
-.Ar top Ns Op . Ns Ar nextLevel ...
-where
-.Ar top
-is a top-level tag and
-.Ar nextLevel
-are next-level tags under the
-.Ar top
-tag.
-At summary time (see
-.Cm past
-option),
-.Ar top
-tags are summarized in a dedicated section.
-Optionally specify the number of
-.Ar minutes
-ago at which the clock in happened.
-Clock automatically calculates the number of minutes in the session and records it to the log.
-Clock always records time in the locally-set time zone.
-Behind the scenes, clocking in adds a temporary record of the starting time and tag for a session in the format
-.Ql started<tab>start time<tab>tag<tab>paused seconds<tab>paused epoch
-where
-.Ql started
-is simply a keyword and <tab> is a tab character.
-.It Cm out Ar tag Op Brq Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
-Clock out from work labeled with a single-word
-.Ar tag .
-See
-.Cm in
-option above for the
-.Ar tag
-format.
-Optionally specify either the number of
-.Ar minutes
-ago or the
-.Ar timestamp
-at which the session ended.
-The
-.Ar timestamp
-should be in the format
-.Ql yyyy.mm.dd-HH:MM .
-Optionally specify what you worked on by typing
-.Cm on
-followed by a description of what you worked on.
-Note that the
-.Cm on
-suboption must be the last suboption passed in, as all subsequent words are parsed as a part of the description.
-Clock automatically calculates the number of minutes in the session and records it to the log.
-The clock-in record is overridden upon clocking out by a permanent record of the format
-.Ql end time<tab>tag<tab>length<tab>description .
-.It Cm switch Ar tag Op Cm on Ar description
-As syntactic sugar, the
-.Cm switch
-option clocks out of the current session and clocks in to a new session in
-.Ar tag
-at the same time.
-Optionally specify what you worked on in the previous session by typing
-.Cm on
-followed by a description of what you worked on.
-Note that the
-.Cm on
-suboption must be the last suboption passed in, as all subsequent words are parsed as a part of the description.
-.It Cm add Ar tag Cm for Ar minutes Op Brq Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
-Manually add a session of
-.Ar minutes
-length to the log, ending at the time of command call.
-Optionally specify either the number of
-.Ar minutes
-ago or the
-.Ar timestamp
-at which the session ended.
-The
-.Ar timestamp
-should be in the format
-.Ql yyyy.mm.dd-HH:MM .
-Optionally specify what you worked on by typing
-.Cm on
-followed by a description of what you worked on.
-Note that the
-.Cm on
-suboption must be the last suboption passed in, as all subsequent words are parsed as a part of the description.
-.It Cm extend Op Brq Cm minus Ar minutes | Cm at Ar timestamp
-Extend the last session (only if complete) record in the log to the current time or, optionally, to an earlier time as specified by
-.Cm minus Ar minutes
-or
-.Cm at Ar timestamp .
-.It Cm remove | pop
-Remove the last session record, whether incomplete or complete, and see what was removed.
-A synonym for
-.Cm remove
-is
-.Cm pop .
-.It Cm pause | p | resume | r
-Pause or resume the current session.
-Behind the scenes,
-.Cm pause
-updates the
-.Ql paused epoch
-field to the current epoch timestamp, while
-.Cm resume
-clears the
-.Ql paused epoch
-field and updates the
-.Ql paused seconds
-field as appropriate.
-.It Cm log
-Open the clock log file itself.
-It is helpful for manually editing session details.
-The clock log records work sessions as rows.
-Its implicit header is
-.Ql end time<tab>tag<tab>length<tab>description .
-.It Cm last | l
-Prints the last entry of the clock log.
-.It Cm past Brq Cm dtn | day | week | Ar number Brq Cm days | weeks Op Cm minus Ar number Cm hour(s)
-Prints a useful summary of clock records over the past
-.Ar number
-of day(s) or week(s), grouping the results by tag.
-.Cm dtn
-returns a summary of the day since midnight while
-.Cm day
-returns a summary of the past 24 hours.
-If no
-.Ar number
-is given, the number is assumed to be 1.
-Optionally specify the starting point of the look-back summary via the
-.Cm minus Ar number Cm hour(s)
-suboption.
+Show this man page.
+Falls back to a synopsis if the man page is not installed.
 .It Cm alias
 Inject an alias
 .Sq c
@@ -192,12 +331,35 @@ to
 (bash) or
 .Pa ~/.zshrc
 (zsh).
-Only bash and zsh are supported.
 If
 .Sq c
-is already defined as a command, function, or alias in the environment,
+is already defined as a command, function, or alias,
 .Nm
-will report the conflict and exit.
+reports the conflict and exits.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width indent
+.It Ev XDG_DATA_HOME
+Log file location.
+Defaults to
+.Pa ~/.local/share .
+The log is stored at
+.Pa ${XDG_DATA_HOME}/clk/clk.tsv .
+.It Ev VISUAL , Ev EDITOR
+Editor used by
+.Cm log .
+Falls back to
+.Xr vi 1 .
+.El
+.Sh FILES
+.Bl -tag -width indent
+.It Pa ${XDG_DATA_HOME}/clk/clk.tsv
+The time-tracking log.
+Tab-separated, eight fields per record.
+.It Pa ${XDG_DATA_HOME}/clk/clk.tsv.undo
+Snapshot before the last mutating operation.
+.It Pa ${XDG_DATA_HOME}/clk/clk.tsv.redo
+Snapshot before the last undo.
 .El
 .Sh EXIT STATUS
 .Bl -tag -width indent
