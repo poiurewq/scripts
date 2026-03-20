@@ -239,6 +239,26 @@ test_view_from_bad_timestamp() {
     clk_test__assert_exit 1 "$CLK_SCRIPT" view from 'nope' until '2026-03-20T23:59:59'
 }
 
+test_view_alias_v() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-15T12:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" v from 2026-01-15T00:00:00 until 2026-01-15T23:59:59
+}
+
+test_view_alias_v_today() {
+    clk_test__assert_exit 0 "$CLK_SCRIPT" v today
+}
+
+test_view_from_simplified_timestamp() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-15T12:00:00 >/dev/null 2>&1
+    # Use yyyy-mm-ddTHH:MM format (no seconds)
+    clk_test__assert_exit 0 "$CLK_SCRIPT" view from 2026-01-15T00:00 until 2026-01-15T23:59
+}
+
+test_view_before_simplified_timestamp() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-15T12:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" view past 1 day before 2026-01-16T00:00
+}
+
 #####################################################################
 # Test list
 #####################################################################
@@ -277,4 +297,8 @@ CLK_TESTS_VIEW=(
     test_view_past_bad_unit
     test_view_from_missing_until
     test_view_from_bad_timestamp
+    test_view_alias_v
+    test_view_alias_v_today
+    test_view_from_simplified_timestamp
+    test_view_before_simplified_timestamp
 )

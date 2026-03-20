@@ -63,6 +63,22 @@ test_add_session_numeric_tag_rejected() {
     clk_test__assert_exit 1 "$CLK_SCRIPT" add 123 for 30 at 2026-01-01T10:00:00
 }
 
+test_add_session_alias_a() {
+    "$CLK_SCRIPT" a work for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:30:00	2026-01-01T10:00:00	work	1800	0'
+}
+
+test_add_time_alias_a() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" a 10 to work >/dev/null 2>&1
+    clk_test__assert_log_line 1 'active	2026-01-01T08:50:00'
+}
+
+test_add_session_simplified_timestamp_no_seconds() {
+    "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00 >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:30:00	2026-01-01T10:00:00	work	1800	0'
+}
+
 #####################################################################
 # Tests — clk add (time to active) (integration)
 #####################################################################
@@ -533,6 +549,9 @@ CLK_TESTS_MUTATION=(
     test_add_session_confirmation_output
     test_add_session_missing_for
     test_add_session_numeric_tag_rejected
+    test_add_session_alias_a
+    test_add_time_alias_a
+    test_add_session_simplified_timestamp_no_seconds
 
     # clk add (time to active)
     test_add_time_basic
