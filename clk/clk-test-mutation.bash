@@ -112,8 +112,8 @@ test_add_time_confirmation_output() {
     local output
     output="$("$CLK_SCRIPT" add 15 to work 2>&1)"
     clk_test__assert_output_contains "Added 15 minutes" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026-01-01T09:00:00" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026-01-01T08:45:00" printf '%s' "$output"
+    clk_test__assert_output_contains "2026-01-01 09:00" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026-01-01 08:45" printf '%s' "$output"
 }
 
 test_add_time_creates_undo() {
@@ -245,7 +245,7 @@ test_extend_confirmation_output() {
     output="$("$CLK_SCRIPT" extend at 2026-01-01T10:30:00 2>&1)"
     clk_test__assert_output_contains "Extended session" printf '%s' "$output" &&
     clk_test__assert_output_contains "30m" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026-01-01T10:30:00" printf '%s' "$output"
+    clk_test__assert_output_contains "2026-01-01 10:30" printf '%s' "$output"
 }
 
 test_extend_creates_undo() {

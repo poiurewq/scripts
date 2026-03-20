@@ -231,8 +231,8 @@ test_fmt_record_done_basic() {
     local result
     result="$(clk__fmt_record "$line")"
     clk_test__assert_output_contains "work" printf '%s' "$result" &&
-    clk_test__assert_output_contains "2026-03-19T09:00:00" printf '%s' "$result" &&
-    clk_test__assert_output_contains "2026-03-19T10:00:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "2026-03-19 09:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "2026-03-19 10:00" printf '%s' "$result" &&
     clk_test__assert_output_contains "1h 0m" printf '%s' "$result"
 }
 
@@ -258,7 +258,7 @@ test_fmt_record_active_basic() {
     local result
     result="$(clk__fmt_record "$line")"
     clk_test__assert_output_contains "work" printf '%s' "$result" &&
-    clk_test__assert_output_contains "started at 2026-03-19T09:00:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "started at 2026-03-19 09:00" printf '%s' "$result" &&
     clk_test__assert_output_contains "(active" printf '%s' "$result"
 }
 
@@ -305,7 +305,7 @@ test_validate_timestamp_valid() {
 }
 
 test_validate_timestamp_invalid_format() {
-    clk_test__assert_exit 1 clk__validate_timestamp "2026-03-19 14:30"
+    clk_test__assert_exit 1 clk__validate_timestamp "2026/03/19 14:30"
 }
 
 test_validate_timestamp_invalid_text() {
@@ -357,6 +357,18 @@ test_normalize_timestamp_passthrough_invalid() {
     clk_test__assert_equals "nope" "$result" "normalize passes through invalid input"
 }
 
+test_normalize_timestamp_space_format() {
+    local result
+    result="$(clk__normalize_timestamp "2026-03-19 12:16")"
+    clk_test__assert_equals "2026-03-19T12:16:00" "$result" "normalize yyyy-mm-dd HH:MM to full format"
+}
+
+test_normalize_timestamp_date_only() {
+    local result
+    result="$(clk__normalize_timestamp "2026-03-19")"
+    clk_test__assert_equals "2026-03-19T00:00:00" "$result" "normalize yyyy-mm-dd to midnight"
+}
+
 #####################################################################
 # Tests — clk__validate_timestamp with simplified formats
 #####################################################################
@@ -383,6 +395,50 @@ test_validate_timestamp_time_only_sets_validated_ts() {
     today="$(date +%Y-%m-%d)"
     clk__validate_timestamp "15:39"
     clk_test__assert_equals "${today}T15:39:00" "$CLK_VALIDATED_TS" "CLK_VALIDATED_TS from HH:MM"
+}
+
+test_validate_timestamp_space_format() {
+    clk_test__assert_exit 0 clk__validate_timestamp "2026-03-19 12:16"
+}
+
+test_validate_timestamp_space_format_sets_validated_ts() {
+    clk__validate_timestamp "2026-03-19 12:16"
+    clk_test__assert_equals "2026-03-19T12:16:00" "$CLK_VALIDATED_TS" "CLK_VALIDATED_TS from space format"
+}
+
+test_validate_timestamp_date_only() {
+    clk_test__assert_exit 0 clk__validate_timestamp "2026-03-19"
+}
+
+test_validate_timestamp_date_only_sets_validated_ts() {
+    clk__validate_timestamp "2026-03-19"
+    clk_test__assert_equals "2026-03-19T00:00:00" "$CLK_VALIDATED_TS" "CLK_VALIDATED_TS from date-only"
+}
+
+#####################################################################
+# Tests — clk__fmt_ts_display
+#####################################################################
+
+test_fmt_ts_display_non_today() {
+    local result
+    result="$(clk__fmt_ts_display "2026-01-15T14:30:07")"
+    clk_test__assert_equals "2026-01-15 14:30" "$result" "non-today: drops seconds and T"
+}
+
+test_fmt_ts_display_today() {
+    local today
+    today="$(date +%Y-%m-%d)"
+    local result
+    result="$(clk__fmt_ts_display "${today}T09:45:00")"
+    clk_test__assert_equals "09:45" "$result" "today: shows only HH:MM"
+}
+
+test_fmt_ts_display_raw_mode() {
+    CLK_FMT_RAW=1
+    local result
+    result="$(clk__fmt_ts_display "2026-01-15T14:30:07")"
+    CLK_FMT_RAW=0
+    clk_test__assert_equals "2026-01-15T14:30:07" "$result" "raw mode: unchanged"
 }
 
 #####################################################################
@@ -863,6 +919,8 @@ CLK_TESTS_UNIT=(
     test_normalize_timestamp_time_with_seconds
     test_normalize_timestamp_time_only
     test_normalize_timestamp_passthrough_invalid
+    test_normalize_timestamp_space_format
+    test_normalize_timestamp_date_only
 
     # validate_timestamp with simplified formats
     test_validate_timestamp_no_seconds
@@ -870,6 +928,15 @@ CLK_TESTS_UNIT=(
     test_validate_timestamp_time_with_seconds
     test_validate_timestamp_sets_validated_ts
     test_validate_timestamp_time_only_sets_validated_ts
+    test_validate_timestamp_space_format
+    test_validate_timestamp_space_format_sets_validated_ts
+    test_validate_timestamp_date_only
+    test_validate_timestamp_date_only_sets_validated_ts
+
+    # fmt_ts_display
+    test_fmt_ts_display_non_today
+    test_fmt_ts_display_today
+    test_fmt_ts_display_raw_mode
 
     # validate_positive_int
     test_validate_positive_int_valid

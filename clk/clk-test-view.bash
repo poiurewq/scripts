@@ -57,9 +57,9 @@ test_view_from_until() {
 }
 
 test_view_from_until_range_desc() {
-    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
-    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
-    clk_test__assert_output_contains "2026-03-20T00:00:00" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59'
+    "$CLK_SCRIPT" in dev at '2026-01-15T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-01-15T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "2026-01-15 00:00" "$CLK_SCRIPT" view from '2026-01-15T00:00:00' until '2026-01-15T23:59:59'
 }
 
 test_view_from_until_correct_totals() {
@@ -228,7 +228,7 @@ test_view_past_missing_unit() {
 }
 
 test_view_past_bad_unit() {
-    clk_test__assert_exit 1 "$CLK_SCRIPT" view past 3 months
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view past 3 fortnights
 }
 
 test_view_from_missing_until() {
@@ -257,6 +257,353 @@ test_view_from_simplified_timestamp() {
 test_view_before_simplified_timestamp() {
     "$CLK_SCRIPT" add work for 60 at 2026-01-15T12:00:00 >/dev/null 2>&1
     clk_test__assert_exit 0 "$CLK_SCRIPT" view past 1 day before 2026-01-16T00:00
+}
+
+#####################################################################
+# Tests — clk view month(s) unit
+#####################################################################
+
+test_view_past_months() {
+    "$CLK_SCRIPT" in dev at '2026-02-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-02-20T11:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "dev" "$CLK_SCRIPT" view past 2 months before '2026-03-20T00:00:00'
+}
+
+test_view_past_month_singular() {
+    "$CLK_SCRIPT" in dev at '2026-03-01T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-01T10:00:00' >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" view past 1 month before '2026-03-20T00:00:00'
+}
+
+test_view_past_month_range_desc() {
+    "$CLK_SCRIPT" in dev at '2026-03-01T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-01T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "Past 1 month" "$CLK_SCRIPT" view past 1 month before '2026-03-20T00:00:00'
+}
+
+test_view_past_months_plural_range_desc() {
+    "$CLK_SCRIPT" in dev at '2026-01-01T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-01-01T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "Past 3 months" "$CLK_SCRIPT" view past 3 months before '2026-03-20T00:00:00'
+}
+
+#####################################################################
+# Tests — clk view from ... to ... (alias for until)
+#####################################################################
+
+test_view_from_to() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "dev" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
+}
+
+test_view_from_to_exit_0() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
+}
+
+test_view_from_to_totals() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "90" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
+}
+
+#####################################################################
+# Tests — clk view for <tag> (tag filter)
+#####################################################################
+
+test_view_for_tag_filter() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "dev" \
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev
+}
+
+test_view_for_tag_excludes_other() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev 2>&1)"
+    if printf '%s' "$output" | grep -qw "pm"; then
+        printf 'FAIL: "pm" should not appear when filtering for "dev"\n'
+        printf '  output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_view_for_tag_correct_total() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
+    # Filtering for dev: should show 60 minutes total (not 120)
+    clk_test__assert_output_contains "1.00h" \
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev
+}
+
+test_view_for_tag_shows_filter_label() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "Filtered by tag: dev" \
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev
+}
+
+test_view_for_tag_with_past() {
+    "$CLK_SCRIPT" in exercise at '2026-03-19T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T11:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at '2026-03-19T13:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at '2026-03-19T15:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "exercise" \
+        "$CLK_SCRIPT" view past 1 day before '2026-03-20T00:00:00' for exercise
+}
+
+test_view_for_tag_no_match() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "No completed sessions" \
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for nonexistent
+}
+
+test_view_for_missing_tag() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view today for
+}
+
+test_view_for_tag_no_active_note_other_tag() {
+    # Active session for "other-tag" should not produce the active note
+    # when filtering for "dev"
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in other-tag at '2026-03-20T14:00:00' >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev 2>&1)"
+    if printf '%s' "$output" | grep -qF "active session(s)"; then
+        printf 'FAIL: should not show active note when active session is for a different tag\n'
+        printf '  actual output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_view_for_tag_active_note_same_tag() {
+    # Active session for the filtered tag SHOULD show the note
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in dev at '2026-03-20T14:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "1 active session(s) not included" \
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev
+}
+
+#####################################################################
+# Tests — clk view by <day|week> (grouped bar chart)
+#####################################################################
+
+test_view_by_day() {
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day 2>&1)"
+    # Should show both dates and minute values
+    if ! printf '%s' "$output" | grep -q "2026-03-18" || ! printf '%s' "$output" | grep -q "2026-03-19"; then
+        printf 'FAIL: expected both dates in bar chart output\n'
+        printf '  output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_view_by_day_shows_minutes() {
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "60m" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_shows_bars() {
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    # Bar chart should contain block characters
+    clk_test__assert_output_contains "█" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_week() {
+    # Sessions in two different weeks
+    "$CLK_SCRIPT" in work at '2026-03-09T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at '2026-03-09T11:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at '2026-03-16T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at '2026-03-16T12:00:00' >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" view past 2 weeks before '2026-03-20T00:00:00' for work by week 2>&1)"
+    # Should show week labels (Monday dates)
+    if ! printf '%s' "$output" | grep -q "2026-03-09" || ! printf '%s' "$output" | grep -q "2026-03-16"; then
+        printf 'FAIL: expected both week-start dates in bar chart output\n'
+        printf '  output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_view_by_week_minutes() {
+    "$CLK_SCRIPT" in work at '2026-03-16T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at '2026-03-16T12:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "180m" \
+        "$CLK_SCRIPT" view past 1 week before '2026-03-20T00:00:00' for work by week
+}
+
+test_view_by_requires_for() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view today by day
+}
+
+test_view_by_requires_for_message() {
+    clk_test__assert_output_contains "requires a tag filter" "$CLK_SCRIPT" view today by day
+}
+
+test_view_by_bad_group() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view today for dev by year
+}
+
+test_view_by_day_shows_header() {
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "by day" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_stats_mean() {
+    # Two days: 60m and 30m → mean = 45.0m
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "mean" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_stats_median() {
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "median" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_stats_stddev() {
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "stddev" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_stats_skew() {
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "skew" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_stats_values() {
+    # 60m and 30m → mean = 45.0m, median = 45.0m
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "45.0m" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_week_stats() {
+    "$CLK_SCRIPT" in work at '2026-03-09T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at '2026-03-09T11:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at '2026-03-16T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at '2026-03-16T12:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "mean" \
+        "$CLK_SCRIPT" view past 2 weeks before '2026-03-20T00:00:00' for work by week
+}
+
+#####################################################################
+# Tests — clk view all
+#####################################################################
+
+test_view_all() {
+    "$CLK_SCRIPT" in dev at '2025-01-01T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2025-01-01T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out pm at '2026-03-20T10:00:00' >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" view all 2>&1)"
+    # Should show both tags from very different dates
+    if ! printf '%s' "$output" | grep -q "dev" || ! printf '%s' "$output" | grep -q "pm"; then
+        printf 'FAIL: expected both "dev" and "pm" in view all output\n'
+        printf '  output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_view_all_range_desc() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "All time" "$CLK_SCRIPT" view all
+}
+
+test_view_all_exit_0() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" view all
+}
+
+test_view_all_empty_log() {
+    clk_test__assert_output_contains "No completed sessions" "$CLK_SCRIPT" view all
+}
+
+test_view_all_for_tag() {
+    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "Filtered by tag: dev" "$CLK_SCRIPT" view all for dev
+}
+
+test_view_all_for_tag_by_day() {
+    "$CLK_SCRIPT" in dev at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in dev at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-03-19T11:00:00' >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" view all for dev by day 2>&1)"
+    if ! printf '%s' "$output" | grep -q "2026-03-18" || ! printf '%s' "$output" | grep -q "2026-03-19"; then
+        printf 'FAIL: expected both dates in view all for dev by day\n'
+        printf '  output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_view_by_day_from_to() {
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    # Use 'to' instead of 'until' with 'for' and 'by'
+    clk_test__assert_exit 0 \
+        "$CLK_SCRIPT" view from '2026-03-17T00:00:00' to '2026-03-20T00:00:00' for exercise by day
 }
 
 #####################################################################
@@ -301,4 +648,52 @@ CLK_TESTS_VIEW=(
     test_view_alias_v_today
     test_view_from_simplified_timestamp
     test_view_before_simplified_timestamp
+
+    # clk view past month(s)
+    test_view_past_months
+    test_view_past_month_singular
+    test_view_past_month_range_desc
+    test_view_past_months_plural_range_desc
+
+    # clk view from ... to ... (alias for until)
+    test_view_from_to
+    test_view_from_to_exit_0
+    test_view_from_to_totals
+
+    # clk view for <tag>
+    test_view_for_tag_filter
+    test_view_for_tag_excludes_other
+    test_view_for_tag_correct_total
+    test_view_for_tag_shows_filter_label
+    test_view_for_tag_with_past
+    test_view_for_tag_no_match
+    test_view_for_missing_tag
+    test_view_for_tag_no_active_note_other_tag
+    test_view_for_tag_active_note_same_tag
+
+    # clk view by <day|week>
+    test_view_by_day
+    test_view_by_day_shows_minutes
+    test_view_by_day_shows_bars
+    test_view_by_week
+    test_view_by_week_minutes
+    test_view_by_requires_for
+    test_view_by_requires_for_message
+    test_view_by_bad_group
+    test_view_by_day_shows_header
+    test_view_by_day_from_to
+    test_view_by_day_stats_mean
+    test_view_by_day_stats_median
+    test_view_by_day_stats_stddev
+    test_view_by_day_stats_skew
+    test_view_by_day_stats_values
+    test_view_by_week_stats
+
+    # clk view all
+    test_view_all
+    test_view_all_range_desc
+    test_view_all_exit_0
+    test_view_all_empty_log
+    test_view_all_for_tag
+    test_view_all_for_tag_by_day
 )

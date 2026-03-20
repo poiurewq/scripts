@@ -88,7 +88,7 @@ test_pause_at_with_tag() {
 
 test_pause_at_confirmation_output() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "2026-01-01T10:30:00" "$CLK_SCRIPT" pause at 2026-01-01T10:30:00
+    clk_test__assert_output_contains "2026-01-01 10:30" "$CLK_SCRIPT" pause at 2026-01-01T10:30:00
 }
 
 test_pause_confirmation_output() {

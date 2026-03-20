@@ -225,6 +225,48 @@ test_edit_confirmation_output() {
     clk_test__assert_output_contains "Updated record" "$CLK_SCRIPT" edit -1 tag newtag
 }
 
+test_edit_shows_before_after() {
+    "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" edit -1 tag newtag 2>&1)"
+    # Should show both before and after lines
+    if ! printf '%s' "$output" | grep -q "before:"; then
+        printf 'FAIL: edit output should include "before:" line\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$output" | grep -q "after:"; then
+        printf 'FAIL: edit output should include "after:" line\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    # Before line should contain old tag, after line should contain new tag
+    clk_test__assert_output_contains "work" printf '%s' "$(printf '%s' "$output" | grep 'before:')" &&
+    clk_test__assert_output_contains "newtag" printf '%s' "$(printf '%s' "$output" | grep 'after:')"
+}
+
+test_edit_before_after_shows_full_timestamps() {
+    "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" edit -1 start 2026-01-01T09:45:00 2>&1)"
+    # Both before and after lines should show full timestamps (raw format)
+    clk_test__assert_output_contains "2026-01-01T09:30:00" printf '%s' "$(printf '%s' "$output" | grep 'before:')" &&
+    clk_test__assert_output_contains "2026-01-01T09:45:00" printf '%s' "$(printf '%s' "$output" | grep 'after:')"
+}
+
+test_edit_delete_no_before_after() {
+    "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" edit -1 delete 2>&1)"
+    # Delete should show "Deleted record", not "before/after"
+    if printf '%s' "$output" | grep -q "before:"; then
+        printf 'FAIL: delete should not show before/after\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    clk_test__assert_output_contains "Deleted record" printf '%s' "$output"
+}
+
 test_edit_missing_field() {
     "$CLK_SCRIPT" add work for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
     clk_test__assert_exit 1 "$CLK_SCRIPT" edit -1
@@ -260,6 +302,13 @@ test_edit_end_simplified_timestamp() {
     clk_test__assert_log_line 1 '2026-01-01T10:30:00'
 }
 
+test_edit_start_date_only_timestamp() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Use yyyy-mm-dd format (midnight)
+    "$CLK_SCRIPT" edit -1 start 2026-01-01 >/dev/null 2>&1
+    clk_test__assert_log_line 1 '2026-01-01T00:00:00'
+}
+
 #####################################################################
 # Test registry
 #####################################################################
@@ -290,10 +339,14 @@ CLK_TESTS_EDIT=(
     test_edit_index_out_of_range
     test_edit_second_record
     test_edit_confirmation_output
+    test_edit_shows_before_after
+    test_edit_before_after_shows_full_timestamps
+    test_edit_delete_no_before_after
     test_edit_missing_field
     test_edit_unknown_field
     test_edit_bad_index
     test_edit_alias_e
     test_edit_start_simplified_timestamp
     test_edit_end_simplified_timestamp
+    test_edit_start_date_only_timestamp
 )
