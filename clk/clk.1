@@ -63,7 +63,7 @@
 .Cm log
 .br
 .Nm
-.Bro Cm view | Cm v Brc Bro Cm today | Cm yesterday Brc Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
+.Bro Cm view | Cm v Brc Bro Cm all | Cm today | Cm yesterday Brc Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
 .br
 .Nm
 .Bro Cm view | Cm v Brc Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
@@ -292,6 +292,8 @@ or
 .El
 .Ss Analysis
 .Bl -tag -width indent
+.It Cm view Cm all
+Summarize all sessions in the log.
 .It Cm view Cm today
 Summarize sessions from midnight today until now.
 .It Cm view Cm yesterday
@@ -330,6 +332,7 @@ Group results into a horizontal bar chart by day or week.
 Requires
 .Cm for Ar tag
 to be specified first.
+Displays summary statistics (mean, median, stddev, skewness) below the chart.
 .El
 .Pp
 Without
