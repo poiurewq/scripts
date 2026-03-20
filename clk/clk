@@ -87,12 +87,10 @@ clk__die() {
 # Exit 4 on failure, with captured date(1) stderr in the message.
 clk__to_epoch() {
     local ts="$1" result exit_code=0
-    result=$(
-        case "$CLK_OS" in
-            Linux)  date -d "$ts" +'%s' 2>"$CLK_TMP_ERR" ;;
-            Darwin) date -j -f "$CLK_FMT" "$ts" +'%s' 2>"$CLK_TMP_ERR" ;;
-        esac
-    ) || exit_code=$?
+    case "$CLK_OS" in
+        Linux)  result="$(date -d "$ts" +'%s' 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+        Darwin) result="$(date -j -f "$CLK_FMT" "$ts" +'%s' 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+    esac
     if [ "$exit_code" -ne 0 ]; then
         clk__die 4 "Failed to parse timestamp '$ts'" "$(cat "$CLK_TMP_ERR")"
     fi
@@ -104,12 +102,10 @@ clk__to_epoch() {
 # Output: timestamp in CLK_FMT on stdout
 clk__from_epoch() {
     local epoch="$1" result exit_code=0
-    result=$(
-        case "$CLK_OS" in
-            Linux)  date -d "@$epoch" +"$CLK_FMT" 2>"$CLK_TMP_ERR" ;;
-            Darwin) date -r "$epoch" +"$CLK_FMT" 2>"$CLK_TMP_ERR" ;;
-        esac
-    ) || exit_code=$?
+    case "$CLK_OS" in
+        Linux)  result="$(date -d "@$epoch" +"$CLK_FMT" 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+        Darwin) result="$(date -r "$epoch" +"$CLK_FMT" 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+    esac
     if [ "$exit_code" -ne 0 ]; then
         clk__die 4 "Failed to format epoch '$epoch'" "$(cat "$CLK_TMP_ERR")"
     fi
