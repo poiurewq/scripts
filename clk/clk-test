@@ -1,0 +1,641 @@
+#!/usr/bin/env bash
+# clk-test — automated tests for clk
+#
+# Usage:
+#   ./clk-test              # run all tests
+#   ./clk-test test_name    # run a specific test
+
+set -u
+
+#####################################################################
+# Test harness
+#####################################################################
+
+CLK_TEST_PASS=0
+CLK_TEST_FAIL=0
+CLK_TEST_DIR=""
+CLK_SCRIPT=""
+
+# Resolve path to clk script (same directory as this test file)
+CLK_SCRIPT="$(cd "$(dirname "$0")" && pwd)/clk"
+
+if [ ! -f "$CLK_SCRIPT" ]; then
+    printf 'ERROR: clk script not found at %s\n' "$CLK_SCRIPT" >&2
+    exit 1
+fi
+
+clk_test__setup() {
+    CLK_TEST_DIR="$(mktemp -d)"
+    export XDG_DATA_HOME="$CLK_TEST_DIR"
+    # Source clk to get access to helpers
+    CLK_SOURCED=1 source "$CLK_SCRIPT"
+    # Initialize the log (sets CLK_DIR, CLK_LOG, CLK_TMP_ERR, etc.)
+    clk__ensure_log
+}
+
+clk_test__teardown() {
+    \rm -rf "$CLK_TEST_DIR"
+}
+
+clk_test__assert_exit() {
+    # $1: expected exit code, $2+: command to run
+    local expected="$1"; shift
+    # Run in subshell to capture exit code without dying
+    local actual=0
+    ("$@") >/dev/null 2>&1 || actual=$?
+    if [ "$actual" -ne "$expected" ]; then
+        printf 'FAIL: expected exit %d, got %d: %s\n' "$expected" "$actual" "$*"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__assert_output_contains() {
+    # $1: expected substring, $2+: command to run
+    local expected="$1"; shift
+    local output
+    output="$("$@" 2>&1)" || true
+    if ! printf '%s' "$output" | grep -qF "$expected"; then
+        printf 'FAIL: output missing "%s": %s\n' "$expected" "$*"
+        printf '  actual output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__assert_output_equals() {
+    # $1: expected output (exact), $2+: command to run
+    local expected="$1"; shift
+    local output
+    output="$("$@" 2>&1)" || true
+    if [ "$output" != "$expected" ]; then
+        printf 'FAIL: output mismatch: %s\n' "$*"
+        printf '  expected: "%s"\n' "$expected"
+        printf '  actual:   "%s"\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__assert_log_line() {
+    # $1: line number (from end, 1-indexed), $2: expected regex
+    local n="$1" pattern="$2"
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local line
+    line="$(tail -n "$n" "$log_file" | head -1)"
+    if ! printf '%s' "$line" | grep -Eq "$pattern"; then
+        printf 'FAIL: log line -%d does not match /%s/\n' "$n" "$pattern"
+        printf '  actual: %s\n' "$line"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__assert_equals() {
+    # $1: expected, $2: actual, $3: description
+    local expected="$1" actual="$2" desc="$3"
+    if [ "$expected" != "$actual" ]; then
+        printf 'FAIL: %s\n' "$desc"
+        printf '  expected: "%s"\n' "$expected"
+        printf '  actual:   "%s"\n' "$actual"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+clk_test__run() {
+    local test_name="$1"
+    printf '  %s ... ' "$test_name"
+    clk_test__setup
+    local result=0
+    if "$test_name"; then
+        printf 'ok\n'
+    else
+        printf 'FAILED\n'
+        result=1
+    fi
+    clk_test__teardown
+    return "$result"
+}
+
+#####################################################################
+# Tests — clk__die
+#####################################################################
+
+test_die_exit_code() {
+    clk_test__assert_exit 1 clk__die 1 "test error" &&
+    clk_test__assert_exit 4 clk__die 4 "date error"
+}
+
+test_die_message() {
+    clk_test__assert_output_contains "clk: something broke" clk__die 1 "something broke"
+}
+
+test_die_upstream_detail() {
+    clk_test__assert_output_contains "date: illegal" clk__die 4 "parse failed" "date: illegal time format"
+}
+
+#####################################################################
+# Tests — clk__to_epoch / clk__from_epoch round-trip
+#####################################################################
+
+test_to_epoch_valid() {
+    local epoch
+    epoch="$(clk__to_epoch "2026.01.01-00:00")"
+    # Just check it's a reasonable epoch (non-empty integer)
+    if ! printf '%s' "$epoch" | grep -Eq '^[0-9]+$'; then
+        printf 'FAIL: clk__to_epoch returned non-integer: "%s"\n' "$epoch"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_to_epoch_invalid() {
+    clk_test__assert_exit 4 clk__to_epoch "not-a-date"
+}
+
+test_epoch_roundtrip() {
+    local ts="2026.03.19-14:30"
+    local epoch result
+    epoch="$(clk__to_epoch "$ts")"
+    result="$(clk__from_epoch "$epoch")"
+    clk_test__assert_equals "$ts" "$result" "epoch round-trip for $ts"
+}
+
+test_epoch_roundtrip_midnight() {
+    local ts="2026.01.01-00:00"
+    local epoch result
+    epoch="$(clk__to_epoch "$ts")"
+    result="$(clk__from_epoch "$epoch")"
+    clk_test__assert_equals "$ts" "$result" "epoch round-trip for midnight"
+}
+
+test_epoch_roundtrip_end_of_day() {
+    local ts="2026.12.31-23:59"
+    local epoch result
+    epoch="$(clk__to_epoch "$ts")"
+    result="$(clk__from_epoch "$epoch")"
+    clk_test__assert_equals "$ts" "$result" "epoch round-trip for end of day"
+}
+
+#####################################################################
+# Tests — clk__now_epoch / clk__now_fmt
+#####################################################################
+
+test_now_epoch_is_integer() {
+    local epoch
+    epoch="$(clk__now_epoch)"
+    if ! printf '%s' "$epoch" | grep -Eq '^[0-9]+$'; then
+        printf 'FAIL: clk__now_epoch returned non-integer: "%s"\n' "$epoch"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_now_fmt_matches_format() {
+    local ts
+    ts="$(clk__now_fmt)"
+    if ! printf '%s' "$ts" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{2}:[0-9]{2}$'; then
+        printf 'FAIL: clk__now_fmt returned invalid format: "%s"\n' "$ts"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_now_roundtrip() {
+    # now_epoch and now_fmt should agree (within the same minute)
+    local epoch fmt_epoch fmt_ts
+    fmt_ts="$(clk__now_fmt)"
+    fmt_epoch="$(clk__to_epoch "$fmt_ts")"
+    epoch="$(clk__now_epoch)"
+    # They should be within 60 seconds of each other
+    local diff=$(( epoch - fmt_epoch ))
+    if [ "$diff" -lt 0 ]; then diff=$(( -diff )); fi
+    if [ "$diff" -gt 60 ]; then
+        printf 'FAIL: now_epoch and now_fmt differ by %d seconds\n' "$diff"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+#####################################################################
+# Tests — clk__resolve_time
+#####################################################################
+
+test_resolve_time_at() {
+    local result
+    result="$(clk__resolve_time "2026.03.19-10:00" "")"
+    clk_test__assert_equals "2026.03.19-10:00" "$result" "resolve_time with at value"
+}
+
+test_resolve_time_minus() {
+    # resolve_time with minus should return now - N minutes
+    local result now_epoch expected_epoch expected_ts
+    now_epoch="$(clk__now_epoch)"
+    expected_epoch=$(( now_epoch - 30 * 60 ))
+    expected_ts="$(clk__from_epoch "$expected_epoch")"
+    result="$(clk__resolve_time "" "30")"
+    clk_test__assert_equals "$expected_ts" "$result" "resolve_time with minus 30"
+}
+
+test_resolve_time_now() {
+    # resolve_time with both empty should return now
+    local result now_ts
+    now_ts="$(clk__now_fmt)"
+    result="$(clk__resolve_time "" "")"
+    clk_test__assert_equals "$now_ts" "$result" "resolve_time with neither at nor minus"
+}
+
+test_resolve_time_at_takes_precedence() {
+    # If both at and minus are set, at wins
+    local result
+    result="$(clk__resolve_time "2026.03.19-10:00" "30")"
+    clk_test__assert_equals "2026.03.19-10:00" "$result" "resolve_time: at takes precedence over minus"
+}
+
+#####################################################################
+# Tests — clk__fmt_duration
+#####################################################################
+
+test_fmt_duration_zero() {
+    local result
+    result="$(clk__fmt_duration 0)"
+    clk_test__assert_equals "0m" "$result" "fmt_duration(0)"
+}
+
+test_fmt_duration_sub_minute() {
+    local result
+    result="$(clk__fmt_duration 45)"
+    clk_test__assert_equals "0m" "$result" "fmt_duration(45) rounds down"
+}
+
+test_fmt_duration_exact_minutes() {
+    local result
+    result="$(clk__fmt_duration 300)"
+    clk_test__assert_equals "5m" "$result" "fmt_duration(300) = 5m"
+}
+
+test_fmt_duration_hours_and_minutes() {
+    local result
+    result="$(clk__fmt_duration 3660)"
+    clk_test__assert_equals "1h 1m" "$result" "fmt_duration(3660) = 1h 1m"
+}
+
+test_fmt_duration_exact_hours() {
+    local result
+    result="$(clk__fmt_duration 7200)"
+    clk_test__assert_equals "2h 0m" "$result" "fmt_duration(7200) = 2h 0m"
+}
+
+test_fmt_duration_large() {
+    local result
+    result="$(clk__fmt_duration 36000)"
+    clk_test__assert_equals "10h 0m" "$result" "fmt_duration(36000) = 10h 0m"
+}
+
+#####################################################################
+# Tests — clk__read_line
+#####################################################################
+
+test_read_line_done_record() {
+    local tab=$'\t'
+    local line="done${tab}2026.03.19-09:00${tab}2026.03.19-10:00${tab}work${tab}3600${tab}0${tab}${tab}wrote code"
+    clk__read_line "$line"
+    clk_test__assert_equals "done" "$CLK_F1" "read_line F1=status" &&
+    clk_test__assert_equals "2026.03.19-09:00" "$CLK_F2" "read_line F2=start" &&
+    clk_test__assert_equals "2026.03.19-10:00" "$CLK_F3" "read_line F3=end" &&
+    clk_test__assert_equals "work" "$CLK_F4" "read_line F4=tag" &&
+    clk_test__assert_equals "3600" "$CLK_F5" "read_line F5=length" &&
+    clk_test__assert_equals "0" "$CLK_F6" "read_line F6=break" &&
+    clk_test__assert_equals "" "$CLK_F7" "read_line F7=paused_at (empty)" &&
+    clk_test__assert_equals "wrote code" "$CLK_F8" "read_line F8=description"
+}
+
+test_read_line_active_record() {
+    local tab=$'\t'
+    local line="active${tab}2026.03.19-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__read_line "$line"
+    clk_test__assert_equals "active" "$CLK_F1" "read_line active F1=status" &&
+    clk_test__assert_equals "2026.03.19-09:00" "$CLK_F2" "read_line active F2=start" &&
+    clk_test__assert_equals "" "$CLK_F3" "read_line active F3=end (empty)" &&
+    clk_test__assert_equals "work" "$CLK_F4" "read_line active F4=tag" &&
+    clk_test__assert_equals "" "$CLK_F5" "read_line active F5=length (empty)" &&
+    clk_test__assert_equals "0" "$CLK_F6" "read_line active F6=break"
+}
+
+#####################################################################
+# Tests — clk__fmt_record
+#####################################################################
+
+test_fmt_record_done_basic() {
+    local tab=$'\t'
+    local line="done${tab}2026.03.19-09:00${tab}2026.03.19-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local result
+    result="$(clk__fmt_record "$line")"
+    clk_test__assert_output_contains "work" printf '%s' "$result" &&
+    clk_test__assert_output_contains "2026.03.19-09:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "2026.03.19-10:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "1h 0m" printf '%s' "$result"
+}
+
+test_fmt_record_done_with_break() {
+    local tab=$'\t'
+    local line="done${tab}2026.03.19-09:00${tab}2026.03.19-10:30${tab}work${tab}4800${tab}600${tab}${tab}"
+    local result
+    result="$(clk__fmt_record "$line")"
+    clk_test__assert_output_contains "(break: 10m)" printf '%s' "$result"
+}
+
+test_fmt_record_done_with_description() {
+    local tab=$'\t'
+    local line="done${tab}2026.03.19-09:00${tab}2026.03.19-10:00${tab}work${tab}3600${tab}0${tab}${tab}wrote tests"
+    local result
+    result="$(clk__fmt_record "$line")"
+    clk_test__assert_output_contains "wrote tests" printf '%s' "$result"
+}
+
+test_fmt_record_active_basic() {
+    local tab=$'\t'
+    local line="active${tab}2026.03.19-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local result
+    result="$(clk__fmt_record "$line")"
+    clk_test__assert_output_contains "work" printf '%s' "$result" &&
+    clk_test__assert_output_contains "started at 2026.03.19-09:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "(active" printf '%s' "$result"
+}
+
+#####################################################################
+# Tests — clk__validate_tag
+#####################################################################
+
+test_validate_tag_valid() {
+    # Should not exit / error
+    clk_test__assert_exit 0 clk__validate_tag "work"
+}
+
+test_validate_tag_valid_dotted() {
+    clk_test__assert_exit 0 clk__validate_tag "pm.bills"
+}
+
+test_validate_tag_empty() {
+    clk_test__assert_exit 1 clk__validate_tag ""
+}
+
+test_validate_tag_numeric() {
+    clk_test__assert_exit 1 clk__validate_tag "123"
+}
+
+test_validate_tag_numeric_message() {
+    clk_test__assert_output_contains "purely numeric" clk__validate_tag "42"
+}
+
+test_validate_tag_with_space() {
+    clk_test__assert_exit 1 clk__validate_tag "my tag"
+}
+
+test_validate_tag_with_tab() {
+    local tab=$'\t'
+    clk_test__assert_exit 1 clk__validate_tag "my${tab}tag"
+}
+
+#####################################################################
+# Tests — clk__validate_timestamp
+#####################################################################
+
+test_validate_timestamp_valid() {
+    clk_test__assert_exit 0 clk__validate_timestamp "2026.03.19-14:30"
+}
+
+test_validate_timestamp_invalid_format() {
+    clk_test__assert_exit 1 clk__validate_timestamp "2026-03-19 14:30"
+}
+
+test_validate_timestamp_invalid_text() {
+    clk_test__assert_exit 1 clk__validate_timestamp "nope"
+}
+
+test_validate_timestamp_missing_part() {
+    clk_test__assert_exit 1 clk__validate_timestamp "2026.03.19"
+}
+
+test_validate_timestamp_error_message() {
+    clk_test__assert_output_contains "Invalid timestamp" clk__validate_timestamp "bad"
+}
+
+#####################################################################
+# Tests — clk__validate_positive_int
+#####################################################################
+
+test_validate_positive_int_valid() {
+    clk_test__assert_exit 0 clk__validate_positive_int "42" "minutes"
+}
+
+test_validate_positive_int_zero() {
+    clk_test__assert_exit 0 clk__validate_positive_int "0" "minutes"
+}
+
+test_validate_positive_int_negative() {
+    clk_test__assert_exit 1 clk__validate_positive_int "-5" "minutes"
+}
+
+test_validate_positive_int_text() {
+    clk_test__assert_exit 1 clk__validate_positive_int "abc" "minutes"
+}
+
+test_validate_positive_int_float() {
+    clk_test__assert_exit 1 clk__validate_positive_int "3.5" "minutes"
+}
+
+test_validate_positive_int_error_message() {
+    clk_test__assert_output_contains "positive integer" clk__validate_positive_int "abc" "minutes"
+}
+
+#####################################################################
+# Tests — clk__ensure_log
+#####################################################################
+
+test_ensure_log_creates_dir_and_file() {
+    # setup already called ensure_log; check the results
+    if [ ! -d "$CLK_TEST_DIR/clk" ]; then
+        printf 'FAIL: clk dir not created\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if [ ! -f "$CLK_TEST_DIR/clk/clk.tsv" ]; then
+        printf 'FAIL: clk.tsv not created\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_ensure_log_has_version_marker() {
+    local first_line
+    first_line="$(head -1 "$CLK_LOG")"
+    clk_test__assert_equals "#clk-v2" "$first_line" "log starts with version marker"
+}
+
+test_ensure_log_strips_trailing_blanks() {
+    # Add some blank lines to the log and re-run ensure_log
+    printf '\n\n\n' >> "$CLK_LOG"
+    clk__ensure_log
+    local last_line
+    last_line="$(tail -1 "$CLK_LOG")"
+    if [ -z "$last_line" ] || printf '%s' "$last_line" | grep -Eq '^[[:space:]]*$'; then
+        printf 'FAIL: trailing blank lines not stripped\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_ensure_log_idempotent() {
+    # Running ensure_log twice should not change the file
+    local before after
+    before="$(cat "$CLK_LOG")"
+    clk__ensure_log
+    after="$(cat "$CLK_LOG")"
+    clk_test__assert_equals "$before" "$after" "ensure_log is idempotent"
+}
+
+#####################################################################
+# Tests — clk script invocation (no-args, help, unknown command)
+#####################################################################
+
+test_script_no_args_shows_synopsis() {
+    clk_test__assert_output_contains "clk [help]" "$CLK_SCRIPT"
+}
+
+test_script_no_args_exits_0() {
+    clk_test__assert_exit 0 "$CLK_SCRIPT"
+}
+
+test_script_unknown_command() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" "nosuchcommand"
+}
+
+test_script_unknown_command_message() {
+    clk_test__assert_output_contains "Unknown command" "$CLK_SCRIPT" "nosuchcommand"
+}
+
+#####################################################################
+# Test runner
+#####################################################################
+
+# Collect all test functions
+ALL_TESTS=(
+    # die
+    test_die_exit_code
+    test_die_message
+    test_die_upstream_detail
+
+    # to_epoch / from_epoch
+    test_to_epoch_valid
+    test_to_epoch_invalid
+    test_epoch_roundtrip
+    test_epoch_roundtrip_midnight
+    test_epoch_roundtrip_end_of_day
+
+    # now_epoch / now_fmt
+    test_now_epoch_is_integer
+    test_now_fmt_matches_format
+    test_now_roundtrip
+
+    # resolve_time
+    test_resolve_time_at
+    test_resolve_time_minus
+    test_resolve_time_now
+    test_resolve_time_at_takes_precedence
+
+    # fmt_duration
+    test_fmt_duration_zero
+    test_fmt_duration_sub_minute
+    test_fmt_duration_exact_minutes
+    test_fmt_duration_hours_and_minutes
+    test_fmt_duration_exact_hours
+    test_fmt_duration_large
+
+    # read_line
+    test_read_line_done_record
+    test_read_line_active_record
+
+    # fmt_record
+    test_fmt_record_done_basic
+    test_fmt_record_done_with_break
+    test_fmt_record_done_with_description
+    test_fmt_record_active_basic
+
+    # validate_tag
+    test_validate_tag_valid
+    test_validate_tag_valid_dotted
+    test_validate_tag_empty
+    test_validate_tag_numeric
+    test_validate_tag_numeric_message
+    test_validate_tag_with_space
+    test_validate_tag_with_tab
+
+    # validate_timestamp
+    test_validate_timestamp_valid
+    test_validate_timestamp_invalid_format
+    test_validate_timestamp_invalid_text
+    test_validate_timestamp_missing_part
+    test_validate_timestamp_error_message
+
+    # validate_positive_int
+    test_validate_positive_int_valid
+    test_validate_positive_int_zero
+    test_validate_positive_int_negative
+    test_validate_positive_int_text
+    test_validate_positive_int_float
+    test_validate_positive_int_error_message
+
+    # ensure_log
+    test_ensure_log_creates_dir_and_file
+    test_ensure_log_has_version_marker
+    test_ensure_log_strips_trailing_blanks
+    test_ensure_log_idempotent
+
+    # script invocation
+    test_script_no_args_shows_synopsis
+    test_script_no_args_exits_0
+    test_script_unknown_command
+    test_script_unknown_command_message
+)
+
+printf 'clk test suite\n'
+
+# Support running a specific test
+if [ "${1:-}" != "" ]; then
+    found=0
+    for t in "${ALL_TESTS[@]}"; do
+        if [ "$t" = "$1" ]; then
+            found=1
+            clk_test__run "$t"
+            break
+        fi
+    done
+    if [ "$found" -eq 0 ]; then
+        printf 'Unknown test: %s\n' "$1" >&2
+        exit 1
+    fi
+else
+    for t in "${ALL_TESTS[@]}"; do
+        clk_test__run "$t"
+    done
+fi
+
+printf '\nResults: %d passed, %d failed\n' "$CLK_TEST_PASS" "$CLK_TEST_FAIL"
+
+if [ "$CLK_TEST_FAIL" -gt 0 ]; then
+    exit 1
+fi
+exit 0
