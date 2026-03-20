@@ -55,8 +55,9 @@ clk [help]
     last-done | ld [<n>]
     log
     view | v today | yesterday
-    view | v past [<n>] <hour(s)|day(s)|week(s)> [before <timestamp> | before minus <minutes>]
-    view | v from <timestamp> until <timestamp>
+    view | v past [<n>] <hour(s)|day(s)|week(s)|month(s)> [before <timestamp> | before minus <minutes>]
+    view | v from <timestamp> until|to <timestamp>
+    view | v <range> [for <tag>] [by <day|week>]
     edit | e -<n> <field> <value>
     edit | e -<n> delete
     alias
@@ -1539,8 +1540,9 @@ clk_do_redo() {
 
 # --- clk_do_view ---
 # clk view today | yesterday
-# clk view past [<n>] <hour(s)|day(s)|week(s)> [before <timestamp> | before minus <minutes>]
-# clk view from <timestamp> until <timestamp>
+# clk view past [<n>] <hour(s)|day(s)|week(s)|month(s)> [before <timestamp> | before minus <minutes>]
+# clk view from <timestamp> until|to <timestamp>
+# Optional suffixes: [for <tag>] [by <day|week>]
 #
 # --- RATIONALE: view not blocked by active sessions ---
 # v1 required all sessions closed before viewing summaries. v2 excludes
@@ -1548,6 +1550,7 @@ clk_do_redo() {
 # note. Users can check active sessions via 'status'.
 clk_do_view() {
     local start_epoch="$1" end_epoch="$2" range_desc="$3"
+    local filter_tag="${4:-}" group_by="${5:-}"
 
     local start_ts end_ts
     start_ts="$(clk__from_epoch "$start_epoch")"
@@ -1566,41 +1569,37 @@ clk_do_view() {
             local a_start_epoch
             a_start_epoch="$(clk__to_epoch "$CLK_F2")"
             if [ "$a_start_epoch" -ge "$start_epoch" ] && [ "$a_start_epoch" -lt "$end_epoch" ]; then
-                active_in_range=$(( active_in_range + 1 ))
+                # When filtering by tag, only count active sessions with that tag
+                if [ -z "$filter_tag" ] || [ "$CLK_F4" = "$filter_tag" ]; then
+                    active_in_range=$(( active_in_range + 1 ))
+                fi
             fi
         done <<< "$active_lines"
     fi
 
-    # Use awk to aggregate completed records within range
-    local awk_result
-    awk_result="$(awk -F'\t' -v start="$start_epoch" -v end="$end_epoch" '
-    BEGIN {
-        total = 0
-        ntags = 0
-    }
-    $1 == "done" {
-        # Field 3 = END_TIME, field 5 = LENGTH_SECS, field 4 = TAG
-        # We need to convert END_TIME to epoch for range check.
-        # But we cannot call shell functions from awk. Instead, we filter
-        # by lexicographic comparison on timestamps (ISO 8601 sorts correctly).
-        # However, we receive epoch boundaries, so we need the timestamps.
-        # Actually, let us receive start_ts and end_ts as well.
-        next
-    }
-    ' "$CLK_LOG" 2>/dev/null)" || true
+    # Build awk tag filter condition
+    local awk_tag_cond=""
+    if [ -n "$filter_tag" ]; then
+        awk_tag_cond=" && \$4 == ftag"
+    fi
 
-    # Since awk cannot call clk__to_epoch, we do the filtering differently:
-    # extract all done records and filter in a shell loop, or pass timestamp
-    # boundaries and use lexicographic sort. ISO 8601 sorts lexicographically,
-    # so we can compare end_time strings directly.
+    if [ -n "$group_by" ]; then
+        # --- Grouped bar chart mode ---
+        # Bucket sessions by day or week and display as a bar chart
+        clk__view_grouped "$start_ts" "$end_ts" "$start_epoch" "$end_epoch" \
+            "$range_desc" "$filter_tag" "$group_by" "$active_in_range"
+        return
+    fi
 
     # Collect per-tag totals using awk with timestamp string comparisons
     local start_ts_str end_ts_str
     start_ts_str="$start_ts"
     end_ts_str="$end_ts"
 
-    awk_result="$(awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" '
+    local awk_result
+    awk_result="$(awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" -v ftag="$filter_tag" '
     $1 == "done" && $3 >= s && $3 <= e {
+        if (ftag != "" && $4 != ftag) next
         tag = $4
         secs = $5 + 0
         total += secs
@@ -1650,7 +1649,11 @@ clk_do_view() {
     done <<< "$awk_result"
 
     # Print output
-    printf '%s\n\n' "$range_desc"
+    printf '%s\n' "$range_desc"
+    if [ -n "$filter_tag" ]; then
+        printf 'Filtered by tag: %s\n' "$filter_tag"
+    fi
+    printf '\n'
 
     if [ "$total_secs" -eq 0 ] && [ "${#tag_names[@]}" -eq 0 ]; then
         printf 'No completed sessions in this range.\n'
@@ -1682,6 +1685,178 @@ clk_do_view() {
     if [ "$active_in_range" -gt 0 ]; then
         printf '\nNote: %d active session(s) not included in totals.\n' "$active_in_range"
     fi
+}
+
+# --- clk__view_grouped ---
+# Renders a bar chart of minutes per day or week for a single tag.
+# Called by clk_do_view when 'by day|week' is specified.
+clk__view_grouped() {
+    local start_ts="$1" end_ts="$2" start_epoch="$3" end_epoch="$4"
+    local range_desc="$5" filter_tag="$6" group_by="$7" active_in_range="$8"
+
+    local bar_width=40
+
+    # Use awk to bucket sessions by day or week
+    # For each done record in range matching the tag, emit its end-date
+    # (YYYY-MM-DD) and seconds. Shell post-processing buckets by week if needed.
+    local raw_data
+    raw_data="$(awk -F'\t' -v s="$start_ts" -v e="$end_ts" -v ftag="$filter_tag" '
+    $1 == "done" && $3 >= s && $3 <= e && $4 == ftag {
+        # Extract date from end timestamp (field 3, format yyyy-mm-ddTHH:MM:SS)
+        date_part = substr($3, 1, 10)
+        secs = $5 + 0
+        printf "%s\t%d\n", date_part, secs
+    }
+    ' "$CLK_LOG" 2>/dev/null)"
+
+    # Aggregate by day using awk, then optionally by week
+    local day_data
+    day_data="$(printf '%s' "$raw_data" | awk -F'\t' '
+    NF >= 2 {
+        day = $1
+        secs = $2 + 0
+        if (!(day in days)) {
+            order[++n] = day
+        }
+        days[day] += secs
+    }
+    END {
+        # Sort by date (insertion sort)
+        for (i = 1; i <= n; i++) {
+            for (j = i + 1; j <= n; j++) {
+                if (order[j] < order[i]) {
+                    tmp = order[i]
+                    order[i] = order[j]
+                    order[j] = tmp
+                }
+            }
+        }
+        for (i = 1; i <= n; i++) {
+            printf "%s\t%d\n", order[i], days[order[i]]
+        }
+    }
+    ')"
+
+    # Print header
+    printf '%s\n' "$range_desc"
+    printf 'Tag: %s  (by %s)\n\n' "$filter_tag" "$group_by"
+
+    if [ -z "$day_data" ]; then
+        printf 'No completed sessions in this range.\n'
+        if [ "$active_in_range" -gt 0 ]; then
+            printf '\nNote: %d active session(s) not included in totals.\n' "$active_in_range"
+        fi
+        return
+    fi
+
+    if [ "$group_by" = "week" ]; then
+        # Aggregate day_data into weeks (Monday-based)
+        # Pass to awk which uses date math to find week start
+        local week_data
+        week_data="$(printf '%s' "$day_data" | awk -F'\t' '
+        function date_to_epoch(datestr,    cmd, ep) {
+            # Parse yyyy-mm-dd manually
+            y = substr(datestr,1,4) + 0
+            m = substr(datestr,6,2) + 0
+            d = substr(datestr,9,2) + 0
+            # Zeller-like epoch: days since 1970-01-01
+            # Use mktime-style calculation
+            # Julian day number approach
+            a = int((14 - m) / 12)
+            y2 = y + 4800 - a
+            m2 = m + 12 * a - 3
+            jdn = d + int((153 * m2 + 2) / 5) + 365 * y2 + int(y2/4) - int(y2/100) + int(y2/400) - 32045
+            # Unix epoch JDN = 2440588
+            return (jdn - 2440588) * 86400
+        }
+        function epoch_to_date(ep,    days, y, m, d, jdn) {
+            days = int(ep / 86400)
+            jdn = days + 2440588
+            # Inverse Julian day number
+            a = jdn + 32044
+            b = int((4*a + 3) / 146097)
+            c = a - int(146097*b/4)
+            dd = int((4*c + 3) / 1461)
+            ee = c - int(1461*dd/4)
+            mm = int((5*ee + 2) / 153)
+            d = ee - int((153*mm + 2)/5) + 1
+            m = mm + 3 - 12 * int(mm/10)
+            y = 100*b + dd - 4800 + int(mm/10)
+            return sprintf("%04d-%02d-%02d", y, m, d)
+        }
+        {
+            date_str = $1
+            secs = $2 + 0
+            ep = date_to_epoch(date_str)
+            # Day of week: 0=Thu for epoch. 1970-01-01 was a Thursday.
+            # dow: 0=Mon, 1=Tue, ... 6=Sun
+            days_since = int(ep / 86400)
+            dow = (days_since + 3) % 7  # 1970-01-01 Thu → +3 makes Mon=0
+            week_start_ep = ep - dow * 86400
+            week_label = epoch_to_date(week_start_ep)
+
+            if (!(week_label in weeks)) {
+                worder[++nw] = week_label
+            }
+            weeks[week_label] += secs
+        }
+        END {
+            for (i = 1; i <= nw; i++) {
+                for (j = i + 1; j <= nw; j++) {
+                    if (worder[j] < worder[i]) {
+                        tmp = worder[i]
+                        worder[i] = worder[j]
+                        worder[j] = tmp
+                    }
+                }
+            }
+            for (i = 1; i <= nw; i++) {
+                printf "%s\t%d\n", worder[i], weeks[worder[i]]
+            }
+        }
+        ')"
+
+        clk__view_render_bars "$week_data" "$bar_width"
+    else
+        # group_by == "day"
+        clk__view_render_bars "$day_data" "$bar_width"
+    fi
+
+    if [ "$active_in_range" -gt 0 ]; then
+        printf '\nNote: %d active session(s) not included in totals.\n' "$active_in_range"
+    fi
+}
+
+# --- clk__view_render_bars ---
+# Renders a horizontal bar chart from "label\tsecs" lines.
+clk__view_render_bars() {
+    local data="$1" max_bar_width="$2"
+
+    # Find max seconds for scaling
+    local max_secs
+    max_secs="$(printf '%s' "$data" | awk -F'\t' '
+    { if ($2+0 > max) max = $2+0 }
+    END { printf "%d", max }
+    ')"
+
+    if [ "$max_secs" -le 0 ]; then
+        printf 'No completed sessions in this range.\n'
+        return
+    fi
+
+    # Render bars
+    printf '%s' "$data" | awk -F'\t' -v max="$max_secs" -v bw="$max_bar_width" '
+    {
+        label = $1
+        secs = $2 + 0
+        mins = int(secs / 60)
+        bar_len = (max > 0) ? int((secs / max) * bw + 0.5) : 0
+        if (bar_len < 1 && secs > 0) bar_len = 1
+        bar = ""
+        for (b = 0; b < bar_len; b++) bar = bar "█"
+        printf "%s  %s %dm\n", label, bar, mins
+    }
+    '
 }
 
 #####################################################################
@@ -2075,14 +2250,12 @@ view|v)
     case "$1" in
         today)
             shift
-            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view today'."
             view_start_epoch="$(clk__midnight_epoch 0)"
             view_end_epoch="$(clk__now_epoch)"
             view_range_desc="Today"
             ;;
         yesterday)
             shift
-            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view yesterday'."
             view_start_epoch="$(clk__midnight_epoch -1)"
             view_end_epoch="$(clk__midnight_epoch 0)"
             view_range_desc="Yesterday"
@@ -2110,10 +2283,11 @@ view|v)
             # hour/hours, day/days, week/weeks are all accepted. Natural language is
             # lenient; the CLI should be too when intent is unambiguous.
             case "$1" in
-                hour|hours) view_unit="hours"; shift ;;
-                day|days)   view_unit="days"; shift ;;
-                week|weeks) view_unit="weeks"; shift ;;
-                *) clk__die 1 "Unknown time unit '$1'. Expected 'hour(s)', 'day(s)', or 'week(s)'." ;;
+                hour|hours)   view_unit="hours"; shift ;;
+                day|days)     view_unit="days"; shift ;;
+                week|weeks)   view_unit="weeks"; shift ;;
+                month|months) view_unit="months"; shift ;;
+                *) clk__die 1 "Unknown time unit '$1'. Expected 'hour(s)', 'day(s)', 'week(s)', or 'month(s)'." ;;
             esac
 
             # Default anchor is now
@@ -2137,18 +2311,17 @@ view|v)
                         clk__validate_timestamp "$1"
                         view_anchor_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"; shift
                     fi
-                else
-                    clk__die 1 "Unexpected argument '$1'. Expected 'before' or end of command."
+                elif [ "$1" != "for" ]; then
+                    clk__die 1 "Unexpected argument '$1'. Expected 'before', 'for', or end of command."
                 fi
             fi
 
-            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view past'."
-
             duration_secs=0
             case "$view_unit" in
-                hours) duration_secs=$(( view_n * 3600 )) ;;
-                days)  duration_secs=$(( view_n * 86400 )) ;;
-                weeks) duration_secs=$(( view_n * 604800 )) ;;
+                hours)  duration_secs=$(( view_n * 3600 )) ;;
+                days)   duration_secs=$(( view_n * 86400 )) ;;
+                weeks)  duration_secs=$(( view_n * 604800 )) ;;
+                months) duration_secs=$(( view_n * 2592000 )) ;;
             esac
 
             view_end_epoch="$view_anchor_epoch"
@@ -2166,15 +2339,13 @@ view|v)
             clk__validate_timestamp "$1"
             view_start_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"; shift
 
-            if [ $# -eq 0 ] || [ "$1" != "until" ]; then
-                clk__die 1 "Expected 'until <timestamp>' after 'from <timestamp>'."
+            if [ $# -eq 0 ] || { [ "$1" != "until" ] && [ "$1" != "to" ]; }; then
+                clk__die 1 "Expected 'until|to <timestamp>' after 'from <timestamp>'."
             fi
-            shift  # consume 'until'
-            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'until'."
+            shift  # consume 'until' or 'to'
+            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'until/to'."
             clk__validate_timestamp "$1"
             view_end_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"; shift
-
-            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view from ... until ...'."
 
             from_ts="$(clk__from_epoch "$view_start_epoch")"
             until_ts="$(clk__from_epoch "$view_end_epoch")"
@@ -2185,7 +2356,32 @@ view|v)
             ;;
     esac
 
-    clk_do_view "$view_start_epoch" "$view_end_epoch" "$view_range_desc"
+    # Optional: for <tag> — filter by tag
+    view_filter_tag=""
+    if [ $# -gt 0 ] && [ "$1" = "for" ]; then
+        shift
+        [ $# -ge 1 ] || clk__die 1 "Missing <tag> after 'for'."
+        view_filter_tag="$1"; shift
+    fi
+
+    # Optional: by <day|week> — group by time bucket (requires 'for <tag>')
+    view_group_by=""
+    if [ $# -gt 0 ] && [ "$1" = "by" ]; then
+        shift
+        [ $# -ge 1 ] || clk__die 1 "Missing <day|week> after 'by'."
+        if [ -z "$view_filter_tag" ]; then
+            clk__die 1 "'by <day|week>' requires a tag filter. Use 'for <tag>' before 'by'."
+        fi
+        case "$1" in
+            day)  view_group_by="day"; shift ;;
+            week) view_group_by="week"; shift ;;
+            *) clk__die 1 "Unknown grouping '$1'. Expected 'day' or 'week'." ;;
+        esac
+    fi
+
+    [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view'."
+
+    clk_do_view "$view_start_epoch" "$view_end_epoch" "$view_range_desc" "$view_filter_tag" "$view_group_by"
     ;;
 
 edit|e)

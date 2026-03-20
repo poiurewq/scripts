@@ -63,13 +63,13 @@
 .Cm log
 .br
 .Nm
-.Bro Cm view | Cm v Brc Bro Cm today | Cm yesterday Brc
+.Bro Cm view | Cm v Brc Bro Cm today | Cm yesterday Brc Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
 .br
 .Nm
-.Bro Cm view | Cm v Brc Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+.Bro Cm view | Cm v Brc Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
 .br
 .Nm
-.Bro Cm view | Cm v Brc Cm from Ar timestamp Cm until Ar timestamp
+.Bro Cm view | Cm v Brc Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Fl Ar n Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
@@ -296,13 +296,14 @@ or
 Summarize sessions from midnight today until now.
 .It Cm view Cm yesterday
 Summarize sessions from midnight yesterday until midnight today.
-.It Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+.It Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
 Summarize sessions over the past
 .Ar n
-hours, days, or weeks
+hours, days, weeks, or months
 .Pq default 1 .
 Both singular and plural unit forms are accepted
 .Pq e.g., Cm day No or Cm days .
+One month equals 30 days.
 .Pp
 The
 .Cm before
@@ -311,13 +312,30 @@ modifier anchors the lookback window to a point other than now:
 anchors to the given timestamp, and
 .Cm before Cm minus Ar minutes
 anchors to that many minutes ago.
-.It Cm view Cm from Ar timestamp Cm until Ar timestamp
+.It Cm view Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp
 Summarize sessions in an explicit time range.
+.Cm to
+is accepted as an alias for
+.Cm until .
 .El
 .Pp
 All
 .Cm view
-forms display a table of tags with total minutes, hours, and percentages.
+forms accept optional suffixes:
+.Bl -tag -width indent -compact
+.It Cm for Ar tag
+Filter results to only sessions with the given tag.
+.It Cm by Bro Cm day | Cm week Brc
+Group results into a horizontal bar chart by day or week.
+Requires
+.Cm for Ar tag
+to be specified first.
+.El
+.Pp
+Without
+.Cm by ,
+.Cm view
+displays a table of tags with total minutes, hours, and percentages.
 Active sessions whose start time falls within the range are excluded
 from totals and noted separately.
 .Ss Editing records
