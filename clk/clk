@@ -15,7 +15,7 @@ set -u
 #####################################################################
 
 CLK_FMT='%Y-%m-%dT%H:%M:%S'
-CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM)'
+CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM, yyyy-mm-dd)'
 CLK_FMT_RAW=0
 CLK_TAB='	'
 CLK_VERSION_MARKER='#clk-v3'
@@ -51,7 +51,7 @@ clk [help]
     unpause [<tag>]
     undo | redo
     status | s
-    last | l [<n>]
+    last | l [<n>] | -<n>
     last-done | ld [<n>]
     log
     view | v today | yesterday
@@ -61,7 +61,7 @@ clk [help]
     edit | e -<n> delete
     alias
 
-<timestamp> = HH:MM | HH:MM:SS | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
+<timestamp> = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
 EOF
 
 #####################################################################
@@ -348,6 +348,7 @@ clk__validate_tag() {
 #   HH:MM:SS           → <today>THH:MM:SS
 #   yyyy-mm-ddTHH:MM   → yyyy-mm-ddTHH:MM:00
 #   yyyy-mm-dd HH:MM   → yyyy-mm-ddTHH:MM:00
+#   yyyy-mm-dd         → yyyy-mm-ddT00:00:00
 #   Full format        → unchanged
 # Outputs normalized timestamp on stdout.
 clk__normalize_timestamp() {
@@ -366,6 +367,9 @@ clk__normalize_timestamp() {
         local d="${ts%% *}"
         local t="${ts##* }"
         printf '%s' "${d}T${t}:00"
+    # yyyy-mm-dd (date only → midnight)
+    elif printf '%s' "$ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+        printf '%s' "${ts}T00:00:00"
     else
         printf '%s' "$ts"
     fi
@@ -764,19 +768,64 @@ clk_do_last() {
     local selected
     selected="$(printf '%s\n' "$data_lines" | tail -n "$n")"
 
-    # Display in order, with -N index (N counts from end of data lines)
-    # clk last shows full timestamps (CLK_FMT_RAW=1) for inspection
+    # Display with -N index, -1 (most recent) on top, -N (oldest) at bottom.
+    # clk last shows full timestamps (CLK_FMT_RAW=1) for inspection.
+    # Column-aligned output: collect all formatted lines, then pad fields.
     CLK_FMT_RAW=1
+    local lines_arr_idx=""
+    local lines_arr_fmt=""
     local i="$n"
     while IFS= read -r lineno; do
         local line_content
         line_content="$(clk__get_line "$lineno")"
         local formatted
         formatted="$(clk__fmt_record "$line_content")"
-        printf -- '-%d  %s\n' "$i" "$formatted"
+        lines_arr_idx="${lines_arr_idx}${i}${CLK_TAB}"
+        lines_arr_fmt="${lines_arr_fmt}${formatted}${CLK_TAB}"
         i=$(( i - 1 ))
     done <<< "$selected"
     CLK_FMT_RAW=0
+
+    # Reverse order: -1 on top, then -2, etc.
+    # Split tab-separated lists and reverse
+    local rev_idx="" rev_fmt="" idx_item fmt_item
+    while [ -n "$lines_arr_idx" ]; do
+        idx_item="${lines_arr_idx%%${CLK_TAB}*}"
+        fmt_item="${lines_arr_fmt%%${CLK_TAB}*}"
+        lines_arr_idx="${lines_arr_idx#*${CLK_TAB}}"
+        lines_arr_fmt="${lines_arr_fmt#*${CLK_TAB}}"
+        rev_idx="${idx_item}${CLK_TAB}${rev_idx}"
+        rev_fmt="${fmt_item}${CLK_TAB}${rev_fmt}"
+    done
+
+    # Find max tag width for alignment
+    local max_tag=0
+    local tmp_fmt="$rev_fmt"
+    while [ -n "$tmp_fmt" ]; do
+        fmt_item="${tmp_fmt%%${CLK_TAB}*}"
+        tmp_fmt="${tmp_fmt#*${CLK_TAB}}"
+        if [ -z "$fmt_item" ]; then continue; fi
+        # Tag is the first space-delimited word
+        local this_tag="${fmt_item%%  *}"
+        local this_len=${#this_tag}
+        if [ "$this_len" -gt "$max_tag" ]; then
+            max_tag="$this_len"
+        fi
+    done
+
+    # Print with aligned columns
+    local idx_width=${#n}
+    while [ -n "$rev_idx" ]; do
+        idx_item="${rev_idx%%${CLK_TAB}*}"
+        fmt_item="${rev_fmt%%${CLK_TAB}*}"
+        rev_idx="${rev_idx#*${CLK_TAB}}"
+        rev_fmt="${rev_fmt#*${CLK_TAB}}"
+        if [ -z "$idx_item" ]; then continue; fi
+        # Split formatted record: tag is before first double-space, rest is after
+        local this_tag="${fmt_item%%  *}"
+        local this_rest="${fmt_item#*  }"
+        printf -- "-%-${idx_width}d  %-${max_tag}s  %s\n" "$idx_item" "$this_tag" "$this_rest"
+    done
 }
 
 # --- clk_do_last_done ---
@@ -1362,12 +1411,15 @@ clk_do_edit() {
             ;;
     esac
 
-    # Print updated record (all non-delete paths)
+    # Print before/after comparison (all non-delete paths)
     local updated_line
     updated_line="$(clk__get_line "$lineno")"
-    local formatted
-    formatted="$(clk__fmt_record "$updated_line")"
-    printf '\nUpdated record -%d:\n  %s\n\n' "$n" "$formatted"
+    CLK_FMT_RAW=1
+    local fmt_before fmt_after
+    fmt_before="$(clk__fmt_record "$line_content")"
+    fmt_after="$(clk__fmt_record "$updated_line")"
+    CLK_FMT_RAW=0
+    printf '\nUpdated record -%d:\n  before: %s\n   after: %s\n\n' "$n" "$fmt_before" "$fmt_after"
 }
 
 # --- clk_do_log ---
@@ -2195,6 +2247,14 @@ alias)
     shift
     [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk alias'"
     clk_do_alias
+    ;;
+
+-[0-9]*)
+    # Syntactic sugar: clk -<n> → clk last <n>
+    clk_subcmd="last"
+    clk_last_n="${1#-}"
+    clk__validate_positive_int "$clk_last_n" "<n> in 'clk -<n>'"
+    clk_do_last "$clk_last_n"
     ;;
 
 *)

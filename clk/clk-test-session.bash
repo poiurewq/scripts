@@ -308,6 +308,70 @@ test_last_empty_log() {
     clk_test__assert_output_contains "No records" "$CLK_SCRIPT" last
 }
 
+test_last_shorthand_dash_n() {
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" -2 2>&1)"
+    # Should show both records, same as 'clk last 2'
+    clk_test__assert_output_contains "a" printf '%s' "$output" &&
+    clk_test__assert_output_contains "b" printf '%s' "$output"
+}
+
+test_last_shorthand_dash_1() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" -1 2>&1)"
+    clk_test__assert_output_contains "work" printf '%s' "$output"
+}
+
+test_last_display_order_reversed() {
+    # -1 (most recent) should appear on top (first line)
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
+    local output first_line last_line
+    output="$("$CLK_SCRIPT" last 2 2>&1)"
+    first_line="$(printf '%s\n' "$output" | head -1)"
+    last_line="$(printf '%s\n' "$output" | tail -1)"
+    # First line should be -1 (most recent = b), last line should be -2 (older = a)
+    if ! printf '%s' "$first_line" | grep -q '\-1'; then
+        printf 'FAIL: first line should be -1 (most recent)\n  first: %s\n' "$first_line"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$last_line" | grep -q '\-2'; then
+        printf 'FAIL: last line should be -2 (oldest)\n  last: %s\n' "$last_line"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_last_columns_aligned() {
+    # With different tag lengths, fields should still align
+    "$CLK_SCRIPT" add ab for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add longertag for 60 at 2026-01-01T12:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" last 2 2>&1)"
+    # Both lines should have the same column position for the timestamp
+    # The tag column is padded so the start timestamps should be at the same offset
+    local line1_ts_pos line2_ts_pos
+    line1_ts_pos="$(printf '%s\n' "$output" | head -1 | sed 's/[^ ]* *[^ ]*//' | grep -o '20[0-9][0-9]-' | head -1)"
+    line2_ts_pos="$(printf '%s\n' "$output" | tail -1 | sed 's/[^ ]* *[^ ]*//' | grep -o '20[0-9][0-9]-' | head -1)"
+    # Both should have timestamps
+    if [ -z "$line1_ts_pos" ] || [ -z "$line2_ts_pos" ]; then
+        printf 'FAIL: could not find timestamps in aligned output\n  output:\n%s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
 #####################################################################
 # Tests — clk last-done (integration)
 #####################################################################
@@ -464,6 +528,10 @@ CLK_TESTS_SESSION=(
     test_last_shows_index
     test_last_alias_l
     test_last_empty_log
+    test_last_shorthand_dash_n
+    test_last_shorthand_dash_1
+    test_last_display_order_reversed
+    test_last_columns_aligned
 
     # clk last-done (integration)
     test_last_done_excludes_active

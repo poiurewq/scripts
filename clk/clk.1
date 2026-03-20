@@ -54,6 +54,9 @@
 .Bro Cm last | Cm l Brc Op Ar n
 .br
 .Nm
+.Fl Ar n
+.br
+.Nm
 .Bro Cm last-done | Cm ld Brc Op Ar n
 .br
 .Nm
@@ -99,7 +102,10 @@ and
 .Ql yyyy-mm-dd HH:MM
 .Pq with a space instead of Ql T
 are treated as if seconds were
-.Ql :00 .
+.Ql :00 ;
+.Ql yyyy-mm-dd
+alone is treated as midnight
+.Pq Ql T00:00:00 .
 Multiple sessions may be active simultaneously.
 .Pp
 User-facing output displays timestamps in a simplified form:
@@ -258,6 +264,17 @@ Each record is prefixed with a
 .Fl Ar N
 index that corresponds to the index used by
 .Cm edit .
+Records are displayed with
+.Fl 1
+.Pq most recent
+on top.
+Fields are column-aligned across rows.
+.Pp
+The shorthand
+.Nm Fl Ar n
+.Pq e.g., Nm Fl 3
+is equivalent to
+.Nm Cm last Ar n .
 .It Bro Cm last-done | Cm ld Brc Op Ar n
 Print the last
 .Ar n
@@ -339,6 +356,7 @@ is second-to-last, and so on.
 This index matches the one shown by
 .Cm last .
 All edit operations save an undo snapshot.
+Non-delete edits show the record before and after the change for comparison.
 .Ss Miscellaneous
 .Bl -tag -width indent
 .It Cm help
