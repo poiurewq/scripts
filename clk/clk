@@ -309,6 +309,164 @@ clk__validate_positive_int() {
     fi
 }
 
+# --- File I/O helpers ---
+
+# clk__save_undo()
+# Snapshots the current log for single-level undo. Clears redo state.
+#
+# --- RATIONALE: Single-level undo ---
+# Multi-level undo would require a snapshot stack (disk) or reversible op log
+# (complexity). Single-level covers the common "oops" case. clk edit handles
+# surgical fixes to older records.
+clk__save_undo() {
+    cp "$CLK_LOG" "${CLK_LOG}.undo" || clk__die 2 "Failed to save undo snapshot."
+    \rm -f "${CLK_LOG}.redo"
+}
+
+# clk__append_line(content)
+# Appends a record line to the end of the log.
+clk__append_line() {
+    local content="$1"
+    printf '%s\n' "$content" >> "$CLK_LOG" || clk__die 2 "Failed to append to log."
+}
+
+# clk__replace_line(line_number, new_content)
+# Replaces a specific line in the log (1-indexed).
+clk__replace_line() {
+    local lineno="$1" new_content="$2"
+    awk -v n="$lineno" -v rep="$new_content" 'NR==n{print rep;next}{print}' \
+        "$CLK_LOG" > "$CLK_LOG_TMP" || clk__die 2 "Failed to replace line $lineno."
+    mv "$CLK_LOG_TMP" "$CLK_LOG" || clk__die 2 "Failed to update log file."
+}
+
+# clk__delete_line(line_number)
+# Deletes a specific line from the log (1-indexed).
+clk__delete_line() {
+    local lineno="$1"
+    awk -v n="$lineno" 'NR!=n' \
+        "$CLK_LOG" > "$CLK_LOG_TMP" || clk__die 2 "Failed to delete line $lineno."
+    mv "$CLK_LOG_TMP" "$CLK_LOG" || clk__die 2 "Failed to update log file."
+}
+
+# clk__insert_before_active(content)
+# Inserts a completed record just above the first active line
+# (or appends if no active lines exist). Maintains sort order.
+#
+# --- RATIONALE: Active records at end of file ---
+# Completed records are sorted by end-time for efficient range queries in
+# 'view'. Keeping active records below all completed records preserves this
+# sort order. When a session completes, its done-line is inserted just above
+# the first remaining active line.
+clk__insert_before_active() {
+    local content="$1"
+    local first_active_lineno
+    first_active_lineno="$(clk__find_active | head -1)" || true
+    if [ -n "$first_active_lineno" ]; then
+        # Insert before the first active line
+        awk -v n="$first_active_lineno" -v ins="$content" \
+            'NR==n{print ins}{print}' \
+            "$CLK_LOG" > "$CLK_LOG_TMP" || clk__die 2 "Failed to insert before active line."
+        mv "$CLK_LOG_TMP" "$CLK_LOG" || clk__die 2 "Failed to update log file."
+    else
+        # No active lines; just append
+        clk__append_line "$content"
+    fi
+}
+
+# clk__find_active([tag]) → line_number(s)
+# With no args: finds all active lines, prints line numbers (one per line).
+# With tag arg: finds the active line for that specific tag.
+# Prints line numbers to stdout. Returns 0 if found, 1 if not found.
+#
+# Implementation: awk scan for lines where field 1 == "active".
+# Since active records cluster at the end, this is fast even for large logs.
+clk__find_active() {
+    local tag="${1:-}"
+    local result
+    if [ -n "$tag" ]; then
+        result="$(awk -F'\t' -v t="$tag" '$1=="active" && $4==t {print NR}' "$CLK_LOG")"
+    else
+        result="$(awk -F'\t' '$1=="active" {print NR}' "$CLK_LOG")"
+    fi
+    if [ -z "$result" ]; then
+        return 1
+    fi
+    printf '%s\n' "$result"
+    return 0
+}
+
+# clk__require_active_tag(tag) → sets CLK_ACTIVE_LINE and CLK_ACTIVE_TAG
+# If tag is provided and has an active session, set globals and return.
+# If tag is empty and exactly one active session, infer tag and set globals.
+# If tag is empty and zero active sessions, error + exit 5.
+# If tag is empty and multiple active sessions, error listing them + exit 1.
+#
+# --- RATIONALE: Tag resolution (implicit when unambiguous) ---
+# Commands like out/pause/resume accept an optional tag. When exactly one
+# session is active, the tag is inferred. When multiple are active, the user
+# must specify. This means single-session users see zero UX change from v1.
+CLK_ACTIVE_LINE=""
+CLK_ACTIVE_TAG=""
+
+clk__require_active_tag() {
+    local tag="${1:-}"
+    CLK_ACTIVE_LINE=""
+    CLK_ACTIVE_TAG=""
+
+    if [ -n "$tag" ]; then
+        # Tag provided: find its active session
+        local lineno
+        lineno="$(clk__find_active "$tag")" || \
+            clk__die 5 "No active session for tag '$tag'."
+        CLK_ACTIVE_LINE="$lineno"
+        CLK_ACTIVE_TAG="$tag"
+        return 0
+    fi
+
+    # No tag: check how many active sessions exist
+    local lines
+    lines="$(clk__find_active)" || \
+        clk__die 5 "No active sessions. Clock in first with 'clk in <tag>'."
+
+    local count
+    count="$(printf '%s\n' "$lines" | wc -l | tr -d ' ')"
+
+    if [ "$count" -eq 1 ]; then
+        CLK_ACTIVE_LINE="$lines"
+        # Read the line to get the tag
+        local line_content
+        line_content="$(awk -v n="$lines" 'NR==n' "$CLK_LOG")"
+        clk__read_line "$line_content"
+        CLK_ACTIVE_TAG="$CLK_F4"
+        return 0
+    fi
+
+    # Multiple active sessions — list them and error
+    local msg="Multiple active sessions. Specify a tag:"
+    local lineno
+    while IFS= read -r lineno; do
+        local line_content
+        line_content="$(awk -v n="$lineno" 'NR==n' "$CLK_LOG")"
+        clk__read_line "$line_content"
+        msg="${msg}
+  ${CLK_F4}  (started at ${CLK_F2})"
+    done <<< "$lines"
+    clk__die 1 "$msg"
+}
+
+# clk__get_line(line_number) → line content
+# Reads a specific line from the log by line number.
+clk__get_line() {
+    local lineno="$1"
+    awk -v n="$lineno" 'NR==n' "$CLK_LOG"
+}
+
+# clk__record_count() → number of data lines (excluding comments)
+# Returns the count of non-comment, non-empty lines in the log.
+clk__record_count() {
+    awk -F'\t' '/^[^#]/ && NF>0' "$CLK_LOG" | wc -l | tr -d ' '
+}
+
 # --- Log management ---
 
 # clk__ensure_log()

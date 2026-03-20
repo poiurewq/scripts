@@ -460,6 +460,340 @@ test_validate_positive_int_error_message() {
 }
 
 #####################################################################
+# Tests — clk__save_undo
+#####################################################################
+
+test_save_undo_creates_file() {
+    clk__save_undo
+    if [ ! -f "${CLK_LOG}.undo" ]; then
+        printf 'FAIL: .undo file not created\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_save_undo_matches_log() {
+    # Add a line to the log first
+    local tab=$'\t'
+    clk__append_line "done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    clk__save_undo
+    local log_content undo_content
+    log_content="$(cat "$CLK_LOG")"
+    undo_content="$(cat "${CLK_LOG}.undo")"
+    clk_test__assert_equals "$log_content" "$undo_content" "undo snapshot matches log"
+}
+
+test_save_undo_clears_redo() {
+    # Create a fake .redo file, then save_undo should remove it
+    printf 'fake redo\n' > "${CLK_LOG}.redo"
+    clk__save_undo
+    if [ -f "${CLK_LOG}.redo" ]; then
+        printf 'FAIL: .redo file not removed after save_undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+#####################################################################
+# Tests — clk__append_line
+#####################################################################
+
+test_append_line_basic() {
+    local tab=$'\t'
+    local record="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$record"
+    local last_line
+    last_line="$(tail -1 "$CLK_LOG")"
+    clk_test__assert_equals "$record" "$last_line" "append_line adds to end"
+}
+
+test_append_line_preserves_existing() {
+    local tab=$'\t'
+    local record1="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local record2="done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}play${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$record1"
+    clk__append_line "$record2"
+    # First line should still be version marker
+    local first_line
+    first_line="$(head -1 "$CLK_LOG")"
+    clk_test__assert_equals "#clk-v2" "$first_line" "append preserves header" &&
+    # Should have 3 lines total
+    local count
+    count="$(wc -l < "$CLK_LOG" | tr -d ' ')"
+    clk_test__assert_equals "3" "$count" "append creates correct line count"
+}
+
+#####################################################################
+# Tests — clk__replace_line
+#####################################################################
+
+test_replace_line_basic() {
+    local tab=$'\t'
+    local original="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    local replacement="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}play${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$original"
+    clk__replace_line 2 "$replacement"
+    local line
+    line="$(clk__get_line 2)"
+    clk_test__assert_equals "$replacement" "$line" "replace_line swaps content"
+}
+
+test_replace_line_preserves_other_lines() {
+    local tab=$'\t'
+    local line1="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}a${tab}3600${tab}0${tab}${tab}"
+    local line2="done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}b${tab}3600${tab}0${tab}${tab}"
+    local line3="done${tab}2026.01.01-11:00${tab}2026.01.01-12:00${tab}c${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$line1"
+    clk__append_line "$line2"
+    clk__append_line "$line3"
+    local replacement="done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}REPLACED${tab}3600${tab}0${tab}${tab}"
+    clk__replace_line 3 "$replacement"
+    # Line 2 (first data line) should be unchanged
+    local got
+    got="$(clk__get_line 2)"
+    clk_test__assert_equals "$line1" "$got" "replace_line preserves other lines" &&
+    # Line 4 should be unchanged
+    got="$(clk__get_line 4)"
+    clk_test__assert_equals "$line3" "$got" "replace_line preserves lines after"
+}
+
+#####################################################################
+# Tests — clk__delete_line
+#####################################################################
+
+test_delete_line_basic() {
+    local tab=$'\t'
+    local line1="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}a${tab}3600${tab}0${tab}${tab}"
+    local line2="done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}b${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$line1"
+    clk__append_line "$line2"
+    # Delete line 2 (first data line)
+    clk__delete_line 2
+    local count
+    count="$(wc -l < "$CLK_LOG" | tr -d ' ')"
+    clk_test__assert_equals "2" "$count" "delete_line reduces line count" &&
+    # Remaining data line should be line2 (now at position 2)
+    local got
+    got="$(clk__get_line 2)"
+    clk_test__assert_equals "$line2" "$got" "delete_line shifts subsequent lines up"
+}
+
+test_delete_line_last() {
+    local tab=$'\t'
+    local line1="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}a${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$line1"
+    clk__delete_line 2
+    local count
+    count="$(wc -l < "$CLK_LOG" | tr -d ' ')"
+    clk_test__assert_equals "1" "$count" "delete_line on last data line leaves only header"
+}
+
+#####################################################################
+# Tests — clk__find_active
+#####################################################################
+
+test_find_active_none() {
+    # Fresh log has no active records
+    local result=0
+    clk__find_active || result=$?
+    clk_test__assert_equals "1" "$result" "find_active returns 1 when none found"
+}
+
+test_find_active_one() {
+    local tab=$'\t'
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local lineno
+    lineno="$(clk__find_active)"
+    clk_test__assert_equals "2" "$lineno" "find_active returns correct line number"
+}
+
+test_find_active_multiple() {
+    local tab=$'\t'
+    clk__append_line "done${tab}2026.01.01-08:00${tab}2026.01.01-09:00${tab}old${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    local lines
+    lines="$(clk__find_active)"
+    local count
+    count="$(printf '%s\n' "$lines" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "2" "$count" "find_active returns multiple lines"
+}
+
+test_find_active_by_tag() {
+    local tab=$'\t'
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    local lineno
+    lineno="$(clk__find_active "play")"
+    clk_test__assert_equals "3" "$lineno" "find_active by tag returns correct line"
+}
+
+test_find_active_by_tag_not_found() {
+    local tab=$'\t'
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local result=0
+    clk__find_active "nope" || result=$?
+    clk_test__assert_equals "1" "$result" "find_active returns 1 for missing tag"
+}
+
+test_find_active_skips_done() {
+    local tab=$'\t'
+    clk__append_line "done${tab}2026.01.01-08:00${tab}2026.01.01-09:00${tab}old${tab}3600${tab}0${tab}${tab}"
+    local result=0
+    clk__find_active || result=$?
+    clk_test__assert_equals "1" "$result" "find_active ignores done records"
+}
+
+#####################################################################
+# Tests — clk__insert_before_active
+#####################################################################
+
+test_insert_before_active_no_active() {
+    local tab=$'\t'
+    local done_rec="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    clk__insert_before_active "$done_rec"
+    local last_line
+    last_line="$(tail -1 "$CLK_LOG")"
+    clk_test__assert_equals "$done_rec" "$last_line" "insert_before_active appends when no active"
+}
+
+test_insert_before_active_with_active() {
+    local tab=$'\t'
+    local active_rec="active${tab}2026.01.01-10:00${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    local done_rec="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$active_rec"
+    clk__insert_before_active "$done_rec"
+    # done record should be at line 2, active at line 3
+    local line2 line3
+    line2="$(clk__get_line 2)"
+    line3="$(clk__get_line 3)"
+    clk_test__assert_equals "$done_rec" "$line2" "insert_before_active: done line is before active" &&
+    clk_test__assert_equals "$active_rec" "$line3" "insert_before_active: active line stays at end"
+}
+
+test_insert_before_active_multiple_active() {
+    local tab=$'\t'
+    local active1="active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local active2="active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    local done_rec="done${tab}2026.01.01-08:00${tab}2026.01.01-09:00${tab}old${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$active1"
+    clk__append_line "$active2"
+    clk__insert_before_active "$done_rec"
+    # done record at line 2, active1 at line 3, active2 at line 4
+    local line2 line3 line4
+    line2="$(clk__get_line 2)"
+    line3="$(clk__get_line 3)"
+    line4="$(clk__get_line 4)"
+    clk_test__assert_equals "$done_rec" "$line2" "insert_before_active: done before both active" &&
+    clk_test__assert_equals "$active1" "$line3" "insert_before_active: first active preserved" &&
+    clk_test__assert_equals "$active2" "$line4" "insert_before_active: second active preserved"
+}
+
+test_insert_before_active_done_then_active() {
+    local tab=$'\t'
+    local existing_done="done${tab}2026.01.01-07:00${tab}2026.01.01-08:00${tab}early${tab}3600${tab}0${tab}${tab}"
+    local active_rec="active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    local new_done="done${tab}2026.01.01-08:00${tab}2026.01.01-09:00${tab}mid${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$existing_done"
+    clk__append_line "$active_rec"
+    clk__insert_before_active "$new_done"
+    # Order: header, existing_done, new_done, active_rec
+    local line2 line3 line4
+    line2="$(clk__get_line 2)"
+    line3="$(clk__get_line 3)"
+    line4="$(clk__get_line 4)"
+    clk_test__assert_equals "$existing_done" "$line2" "insert: existing done stays" &&
+    clk_test__assert_equals "$new_done" "$line3" "insert: new done before active" &&
+    clk_test__assert_equals "$active_rec" "$line4" "insert: active at end"
+}
+
+#####################################################################
+# Tests — clk__require_active_tag
+#####################################################################
+
+test_require_active_tag_explicit() {
+    local tab=$'\t'
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__require_active_tag "work"
+    clk_test__assert_equals "work" "$CLK_ACTIVE_TAG" "require_active_tag: explicit tag" &&
+    clk_test__assert_equals "2" "$CLK_ACTIVE_LINE" "require_active_tag: explicit line"
+}
+
+test_require_active_tag_implicit_single() {
+    local tab=$'\t'
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__require_active_tag ""
+    clk_test__assert_equals "work" "$CLK_ACTIVE_TAG" "require_active_tag: inferred tag" &&
+    clk_test__assert_equals "2" "$CLK_ACTIVE_LINE" "require_active_tag: inferred line"
+}
+
+test_require_active_tag_no_active() {
+    clk_test__assert_exit 5 clk__require_active_tag ""
+}
+
+test_require_active_tag_no_active_message() {
+    clk_test__assert_output_contains "No active sessions" clk__require_active_tag ""
+}
+
+test_require_active_tag_ambiguous() {
+    local tab=$'\t'
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    clk_test__assert_exit 1 clk__require_active_tag ""
+}
+
+test_require_active_tag_ambiguous_lists_tags() {
+    local tab=$'\t'
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026.01.01-09:30${tab}${tab}play${tab}${tab}0${tab}${tab}"
+    clk_test__assert_output_contains "work" clk__require_active_tag "" &&
+    clk_test__assert_output_contains "play" clk__require_active_tag ""
+}
+
+test_require_active_tag_wrong_tag() {
+    local tab=$'\t'
+    clk__append_line "active${tab}2026.01.01-09:00${tab}${tab}work${tab}${tab}0${tab}${tab}"
+    clk_test__assert_exit 5 clk__require_active_tag "nope"
+}
+
+#####################################################################
+# Tests — clk__get_line / clk__record_count
+#####################################################################
+
+test_get_line_basic() {
+    local tab=$'\t'
+    local record="done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}work${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "$record"
+    local got
+    got="$(clk__get_line 2)"
+    clk_test__assert_equals "$record" "$got" "get_line returns correct line"
+}
+
+test_get_line_header() {
+    local got
+    got="$(clk__get_line 1)"
+    clk_test__assert_equals "#clk-v2" "$got" "get_line 1 returns header"
+}
+
+test_record_count_empty() {
+    local count
+    count="$(clk__record_count)"
+    clk_test__assert_equals "0" "$count" "record_count on fresh log is 0"
+}
+
+test_record_count_with_records() {
+    local tab=$'\t'
+    clk__append_line "done${tab}2026.01.01-09:00${tab}2026.01.01-10:00${tab}a${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "done${tab}2026.01.01-10:00${tab}2026.01.01-11:00${tab}b${tab}3600${tab}0${tab}${tab}"
+    clk__append_line "active${tab}2026.01.01-11:00${tab}${tab}c${tab}${tab}0${tab}${tab}"
+    local count
+    count="$(clk__record_count)"
+    clk_test__assert_equals "3" "$count" "record_count counts data lines"
+}
+
+#####################################################################
 # Tests — clk__ensure_log
 #####################################################################
 
@@ -597,6 +931,52 @@ ALL_TESTS=(
     test_validate_positive_int_text
     test_validate_positive_int_float
     test_validate_positive_int_error_message
+
+    # save_undo
+    test_save_undo_creates_file
+    test_save_undo_matches_log
+    test_save_undo_clears_redo
+
+    # append_line
+    test_append_line_basic
+    test_append_line_preserves_existing
+
+    # replace_line
+    test_replace_line_basic
+    test_replace_line_preserves_other_lines
+
+    # delete_line
+    test_delete_line_basic
+    test_delete_line_last
+
+    # find_active
+    test_find_active_none
+    test_find_active_one
+    test_find_active_multiple
+    test_find_active_by_tag
+    test_find_active_by_tag_not_found
+    test_find_active_skips_done
+
+    # insert_before_active
+    test_insert_before_active_no_active
+    test_insert_before_active_with_active
+    test_insert_before_active_multiple_active
+    test_insert_before_active_done_then_active
+
+    # require_active_tag
+    test_require_active_tag_explicit
+    test_require_active_tag_implicit_single
+    test_require_active_tag_no_active
+    test_require_active_tag_no_active_message
+    test_require_active_tag_ambiguous
+    test_require_active_tag_ambiguous_lists_tags
+    test_require_active_tag_wrong_tag
+
+    # get_line / record_count
+    test_get_line_basic
+    test_get_line_header
+    test_record_count_empty
+    test_record_count_with_records
 
     # ensure_log
     test_ensure_log_creates_dir_and_file
