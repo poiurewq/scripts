@@ -57,9 +57,9 @@ test_view_from_until() {
 }
 
 test_view_from_until_range_desc() {
-    "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
-    "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
-    clk_test__assert_output_contains "2026-03-20T00:00:00" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59'
+    "$CLK_SCRIPT" in dev at '2026-01-15T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at '2026-01-15T10:00:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "2026-01-15 00:00" "$CLK_SCRIPT" view from '2026-01-15T00:00:00' until '2026-01-15T23:59:59'
 }
 
 test_view_from_until_correct_totals() {

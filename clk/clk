@@ -15,7 +15,8 @@ set -u
 #####################################################################
 
 CLK_FMT='%Y-%m-%dT%H:%M:%S'
-CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, yyyy-mm-ddTHH:MM)'
+CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM)'
+CLK_FMT_RAW=0
 CLK_TAB='	'
 CLK_VERSION_MARKER='#clk-v3'
 
@@ -59,6 +60,8 @@ clk [help]
     edit | e -<n> <field> <value>
     edit | e -<n> delete
     alias
+
+<timestamp> = HH:MM | HH:MM:SS | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
 EOF
 
 #####################################################################
@@ -189,6 +192,31 @@ clk__fmt_duration() {
     fi
 }
 
+# clk__fmt_ts_display(ts)
+# Formats a stored timestamp for user-facing display:
+#   - Drops seconds and replaces the T with a space
+#   - If the date is today, shows only HH:MM
+#   - Otherwise shows yyyy-mm-dd HH:MM
+# When CLK_FMT_RAW=1, returns the timestamp unchanged (used by clk last).
+clk__fmt_ts_display() {
+    local ts="$1"
+    if [ "$CLK_FMT_RAW" = "1" ]; then
+        printf '%s' "$ts"
+        return
+    fi
+    # ts format: yyyy-mm-ddTHH:MM:SS
+    local date_part="${ts%%T*}"
+    local time_full="${ts#*T}"
+    local time_hm="${time_full%:*}"    # drop :SS
+    local today
+    today="$(date +%Y-%m-%d)"
+    if [ "$date_part" = "$today" ]; then
+        printf '%s' "$time_hm"
+    else
+        printf '%s %s' "$date_part" "$time_hm"
+    fi
+}
+
 # --- RATIONALE: Unified record schema ---
 # v1 used different field positions for active vs completed records (e.g.,
 # field 2 was "start time" in active but "tag" in completed). v2 uses a
@@ -238,7 +266,10 @@ clk__fmt_record() {
     if [ "$status" = "done" ]; then
         local dur_str
         dur_str="$(clk__fmt_duration "$length_secs")"
-        out="${tag}  ${start_time} → ${end_time}  ${dur_str}"
+        local disp_start disp_end
+        disp_start="$(clk__fmt_ts_display "$start_time")"
+        disp_end="$(clk__fmt_ts_display "$end_time")"
+        out="${tag}  ${disp_start} → ${disp_end}  ${dur_str}"
         if [ -n "$break_secs" ] && [ "$break_secs" -gt 0 ] 2>/dev/null; then
             local break_str
             break_str="$(clk__fmt_duration "$break_secs")"
@@ -248,7 +279,9 @@ clk__fmt_record() {
             out="${out}  ${description}"
         fi
     elif [ "$status" = "active" ]; then
-        out="${tag}  started at ${start_time}  (active"
+        local disp_start
+        disp_start="$(clk__fmt_ts_display "$start_time")"
+        out="${tag}  started at ${disp_start}  (active"
         # Calculate elapsed if possible
         local now_epoch start_epoch elapsed_secs elapsed_str
         now_epoch="$(clk__now_epoch)"
@@ -272,7 +305,9 @@ clk__fmt_record() {
         if [ -n "$paused_at" ]; then
             local paused_ts
             paused_ts="$(clk__from_epoch "$paused_at" 2>/dev/null)" || paused_ts="$paused_at"
-            out="${out}, paused since ${paused_ts}"
+            local disp_paused
+            disp_paused="$(clk__fmt_ts_display "$paused_ts")"
+            out="${out}, paused since ${disp_paused}"
         fi
         out="${out})"
         if [ -n "$description" ]; then
@@ -309,10 +344,11 @@ clk__validate_tag() {
 
 # clk__normalize_timestamp(ts)
 # Accepts simplified timestamp formats and expands them to CLK_FMT:
-#   HH:MM        → <today>THH:MM:00
-#   HH:MM:SS     → <today>THH:MM:SS
-#   yyyy-mm-ddTHH:MM → yyyy-mm-ddTHH:MM:00
-#   Full format  → unchanged
+#   HH:MM              → <today>THH:MM:00
+#   HH:MM:SS           → <today>THH:MM:SS
+#   yyyy-mm-ddTHH:MM   → yyyy-mm-ddTHH:MM:00
+#   yyyy-mm-dd HH:MM   → yyyy-mm-ddTHH:MM:00
+#   Full format        → unchanged
 # Outputs normalized timestamp on stdout.
 clk__normalize_timestamp() {
     local ts="$1"
@@ -322,9 +358,14 @@ clk__normalize_timestamp() {
     # HH:MM (time only, no seconds)
     elif printf '%s' "$ts" | grep -Eq '^[0-9]{2}:[0-9]{2}$'; then
         printf '%s' "$(date +%Y-%m-%d)T${ts}:00"
-    # yyyy-mm-ddTHH:MM (date+time, no seconds)
+    # yyyy-mm-ddTHH:MM (date+time with T, no seconds)
     elif printf '%s' "$ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$'; then
         printf '%s' "${ts}:00"
+    # yyyy-mm-dd HH:MM (date+time with space, no seconds)
+    elif printf '%s' "$ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$'; then
+        local d="${ts%% *}"
+        local t="${ts##* }"
+        printf '%s' "${d}T${t}:00"
     else
         printf '%s' "$ts"
     fi
@@ -491,7 +532,7 @@ clk__require_active_tag() {
         line_content="$(awk -v n="$lineno" 'NR==n' "$CLK_LOG")"
         clk__read_line "$line_content"
         msg="${msg}
-  ${CLK_F4}  (started at ${CLK_F2})"
+  ${CLK_F4}  (started at $(clk__fmt_ts_display "$CLK_F2"))"
     done <<< "$lines"
     clk__die 1 "$msg"
 }
@@ -583,7 +624,7 @@ clk_do_in() {
     local record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${tag}${CLK_TAB}${CLK_TAB}0${CLK_TAB}${CLK_TAB}${description}"
     clk__append_line "$record"
 
-    printf '\nStarted session in\n  %s\n  at %s\n' "$tag" "$start_ts"
+    printf '\nStarted session in\n  %s\n  at %s\n' "$tag" "$(clk__fmt_ts_display "$start_ts")"
     if [ -n "$description" ]; then
         printf '  on %s\n' "$description"
     fi
@@ -660,7 +701,7 @@ clk_do_out() {
     # Print confirmation
     local dur_str
     dur_str="$(clk__fmt_duration "$length_secs")"
-    printf '\nRecorded session in\n  %s\n  %s → %s  (%s)\n' "$active_tag" "$start_ts" "$end_ts" "$dur_str"
+    printf '\nRecorded session in\n  %s\n  %s → %s  (%s)\n' "$active_tag" "$(clk__fmt_ts_display "$start_ts")" "$(clk__fmt_ts_display "$end_ts")" "$dur_str"
     if [ "$break_secs" -gt 0 ]; then
         local break_str
         break_str="$(clk__fmt_duration "$break_secs")"
@@ -724,6 +765,8 @@ clk_do_last() {
     selected="$(printf '%s\n' "$data_lines" | tail -n "$n")"
 
     # Display in order, with -N index (N counts from end of data lines)
+    # clk last shows full timestamps (CLK_FMT_RAW=1) for inspection
+    CLK_FMT_RAW=1
     local i="$n"
     while IFS= read -r lineno; do
         local line_content
@@ -733,6 +776,7 @@ clk_do_last() {
         printf -- '-%d  %s\n' "$i" "$formatted"
         i=$(( i - 1 ))
     done <<< "$selected"
+    CLK_FMT_RAW=0
 }
 
 # --- clk_do_last_done ---
@@ -764,6 +808,8 @@ clk_do_last_done() {
     local selected
     selected="$(printf '%s\n' "$done_lines" | tail -n "$n")"
 
+    # clk last-done shows full timestamps (CLK_FMT_RAW=1) for inspection
+    CLK_FMT_RAW=1
     while IFS= read -r lineno; do
         local line_content
         line_content="$(clk__get_line "$lineno")"
@@ -771,6 +817,7 @@ clk_do_last_done() {
         formatted="$(clk__fmt_record "$line_content")"
         printf '  %s\n' "$formatted"
     done <<< "$selected"
+    CLK_FMT_RAW=0
 }
 
 # --- clk_do_pause ---
@@ -796,7 +843,7 @@ clk_do_pause() {
     if [ -n "$paused_at" ]; then
         local paused_ts
         paused_ts="$(clk__from_epoch "$paused_at" 2>/dev/null)" || paused_ts="$paused_at"
-        clk__die 5 "Session '$active_tag' is already paused (since ${paused_ts}). Use 'clk resume' first."
+        clk__die 5 "Session '$active_tag' is already paused (since $(clk__fmt_ts_display "$paused_ts")). Use 'clk resume' first."
     fi
 
     # Calculate pause epoch
@@ -829,7 +876,7 @@ clk_do_pause() {
     elapsed_str="$(clk__fmt_duration "$elapsed_secs")"
 
     printf '\nSession in\n  %s\n  paused at %s\n  Active work so far: %s\n\n' \
-        "$active_tag" "$pause_ts" "$elapsed_str"
+        "$active_tag" "$(clk__fmt_ts_display "$pause_ts")" "$elapsed_str"
 }
 
 # --- clk_do_resume ---
@@ -872,7 +919,7 @@ clk_do_resume() {
         local resume_ts paused_ts
         resume_ts="$(clk__from_epoch "$resume_epoch")"
         paused_ts="$(clk__from_epoch "$paused_at")"
-        clk__die 1 "Resume time ${resume_ts} cannot be earlier than pause time ${paused_ts}."
+        clk__die 1 "Resume time $(clk__fmt_ts_display "$resume_ts") cannot be earlier than pause time $(clk__fmt_ts_display "$paused_ts")."
     fi
     local new_break_secs=$(( break_secs + this_pause_secs ))
 
@@ -889,7 +936,7 @@ clk_do_resume() {
     total_break_str="$(clk__fmt_duration "$new_break_secs")"
 
     printf '\nSession in\n  %s\n  resumed at %s\n  This pause: %s\n  Total break so far: %s\n\n' \
-        "$active_tag" "$resume_ts" "$this_pause_str" "$total_break_str"
+        "$active_tag" "$(clk__fmt_ts_display "$resume_ts")" "$this_pause_str" "$total_break_str"
 }
 
 # --- clk_do_unpause ---
@@ -984,7 +1031,7 @@ clk_do_add_session() {
 
     local dur_str
     dur_str="$(clk__fmt_duration "$length_secs")"
-    printf '\nAdded session in\n  %s\n  %s → %s  (%s)\n' "$tag" "$start_ts" "$end_ts" "$dur_str"
+    printf '\nAdded session in\n  %s\n  %s → %s  (%s)\n' "$tag" "$(clk__fmt_ts_display "$start_ts")" "$(clk__fmt_ts_display "$end_ts")" "$dur_str"
     if [ -n "$description" ]; then
         printf '  on %s\n' "$description"
     fi
@@ -1030,7 +1077,7 @@ clk_do_add_time() {
     clk__replace_line "$active_line" "$new_record"
 
     printf '\nAdded %d minutes to session in\n  %s\n  %s → %s\n\n' \
-        "$minutes" "$active_tag" "$old_start_ts" "$new_start_ts"
+        "$minutes" "$active_tag" "$(clk__fmt_ts_display "$old_start_ts")" "$(clk__fmt_ts_display "$new_start_ts")"
 }
 
 # --- clk_do_add_break ---
@@ -1113,7 +1160,7 @@ clk_do_extend() {
     new_end_epoch="$(clk__to_epoch "$new_end_ts")"
 
     if [ "$new_end_epoch" -lt "$old_end_epoch" ]; then
-        clk__die 1 "New end time ${new_end_ts} is before old end time ${old_end_ts}. Cannot shrink a session with extend."
+        clk__die 1 "New end time $(clk__fmt_ts_display "$new_end_ts") is before old end time $(clk__fmt_ts_display "$old_end_ts"). Cannot shrink a session with extend."
     fi
 
     local extension_secs=$(( new_end_epoch - old_end_epoch ))
@@ -1128,7 +1175,7 @@ clk_do_extend() {
     ext_str="$(clk__fmt_duration "$extension_secs")"
     total_str="$(clk__fmt_duration "$new_length_secs")"
     printf '\nExtended session in\n  %s\n  by %s (new total: %s)\n  new end: %s\n\n' \
-        "$tag" "$ext_str" "$total_str" "$new_end_ts"
+        "$tag" "$ext_str" "$total_str" "$(clk__fmt_ts_display "$new_end_ts")"
 }
 
 # --- clk_do_remove ---
@@ -2079,7 +2126,7 @@ view|v)
 
             from_ts="$(clk__from_epoch "$view_start_epoch")"
             until_ts="$(clk__from_epoch "$view_end_epoch")"
-            view_range_desc="${from_ts} → ${until_ts}"
+            view_range_desc="$(clk__fmt_ts_display "$from_ts") → $(clk__fmt_ts_display "$until_ts")"
             ;;
         *)
             clk__die 1 "Unknown view mode '$1'. Expected 'today', 'yesterday', 'past', or 'from'."

@@ -66,7 +66,38 @@ test_in_confirmation_output() {
     output="$("$CLK_SCRIPT" in foo at 2026-01-01T09:00:00 2>&1)"
     clk_test__assert_output_contains "Started session" printf '%s' "$output" &&
     clk_test__assert_output_contains "foo" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026-01-01T09:00:00" printf '%s' "$output"
+    clk_test__assert_output_contains "2026-01-01 09:00" printf '%s' "$output"
+}
+
+test_in_space_format_timestamp() {
+    "$CLK_SCRIPT" in work at '2026-01-15 14:30' >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^active	2026-01-15T14:30:00	'
+}
+
+test_out_display_simplified_timestamps() {
+    "$CLK_SCRIPT" in work at 2026-01-15T09:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" out work at 2026-01-15T10:00:00 2>&1)"
+    clk_test__assert_output_contains "2026-01-15 09:00" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026-01-15 10:00" printf '%s' "$output"
+}
+
+test_last_shows_full_timestamps() {
+    "$CLK_SCRIPT" in work at 2026-01-15T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-15T10:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" last 2>&1)"
+    clk_test__assert_output_contains "2026-01-15T09:00:00" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026-01-15T10:00:00" printf '%s' "$output"
+}
+
+test_last_done_shows_full_timestamps() {
+    "$CLK_SCRIPT" in work at 2026-01-15T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-15T10:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" last-done 2>&1)"
+    clk_test__assert_output_contains "2026-01-15T09:00:00" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026-01-15T10:00:00" printf '%s' "$output"
 }
 
 #####################################################################
@@ -183,7 +214,7 @@ test_status_shows_tag() {
 
 test_status_shows_start_time() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "2026-01-01T09:00:00" "$CLK_SCRIPT" status
+    clk_test__assert_output_contains "2026-01-01 09:00" "$CLK_SCRIPT" status
 }
 
 test_status_shows_active() {
@@ -397,6 +428,10 @@ CLK_TESTS_SESSION=(
     test_in_bad_timestamp
     test_in_creates_undo
     test_in_confirmation_output
+    test_in_space_format_timestamp
+    test_out_display_simplified_timestamps
+    test_last_shows_full_timestamps
+    test_last_done_shows_full_timestamps
 
     # clk out (integration)
     test_out_basic

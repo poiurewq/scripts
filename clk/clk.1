@@ -93,11 +93,27 @@ is expected:
 .Ql HH:MM
 and
 .Ql HH:MM:SS
-are interpreted as times on the current date, and
+are interpreted as times on the current date;
 .Ql yyyy-mm-ddTHH:MM
-is treated as if seconds were
+and
+.Ql yyyy-mm-dd HH:MM
+.Pq with a space instead of Ql T
+are treated as if seconds were
 .Ql :00 .
 Multiple sessions may be active simultaneously.
+.Pp
+User-facing output displays timestamps in a simplified form:
+seconds and the
+.Ql T
+separator are omitted
+.Pq e.g.\& Ql 2026-03-19 12:16 ,
+and timestamps from the current date show only the time
+.Pq e.g.\& Ql 12:16 .
+The
+.Cm last
+and
+.Cm last-done
+commands show full ISO\ 8601 timestamps for inspection.
 .Pp
 .Nm
 offers a shell alias
