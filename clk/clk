@@ -511,6 +511,226 @@ clk__ensure_log() {
 }
 
 #####################################################################
+# Subcommand functions
+#####################################################################
+
+# --- clk_do_in ---
+# clk in <tag> [minus <minutes> | at <timestamp>] [on <description>]
+#
+# --- RATIONALE: Description at clock-in ---
+# Users often know what they're about to work on when they clock in, but may
+# forget to annotate at clock-out. Allowing `on` at clock-in captures intent
+# early. The clock-out description wins if provided.
+clk_do_in() {
+    local tag="$1" at_ts="$2" minus_val="$3" description="$4"
+
+    clk__validate_tag "$tag"
+
+    # Validate that no active session for this tag already exists
+    if clk__find_active "$tag" >/dev/null 2>&1; then
+        clk__die 5 "Tag '$tag' already has an active session. Clock out first with 'clk out $tag'."
+    fi
+
+    local start_ts
+    start_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
+
+    clk__save_undo
+
+    # active \t START \t (empty) \t TAG \t (empty) \t 0 \t (empty) \t DESCRIPTION
+    local record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${tag}${CLK_TAB}${CLK_TAB}0${CLK_TAB}${CLK_TAB}${description}"
+    clk__append_line "$record"
+
+    printf '\nStarted session in\n  %s\n  at %s\n' "$tag" "$start_ts"
+    if [ -n "$description" ]; then
+        printf '  on %s\n' "$description"
+    fi
+    printf '\n'
+}
+
+# --- clk_do_out ---
+# clk out [<tag>] [minus <minutes> | at <timestamp>] [on <description>]
+#
+# --- RATIONALE: Description override at clock-out ---
+# Users often set a description at clock-in for intent, then refine it at
+# clock-out to reflect what actually happened. Clock-out description wins.
+clk_do_out() {
+    local tag="$1" at_ts="$2" minus_val="$3" description="$4"
+    # skip_undo: when called from switch, undo is already saved
+    local skip_undo="${5:-}"
+
+    clk__require_active_tag "$tag"
+    local active_line="$CLK_ACTIVE_LINE"
+    local active_tag="$CLK_ACTIVE_TAG"
+
+    local end_ts
+    end_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
+
+    # Read the active record
+    local line_content
+    line_content="$(clk__get_line "$active_line")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local break_secs="${CLK_F6:-0}"
+    local paused_at="$CLK_F7"
+    local existing_desc="$CLK_F8"
+
+    # If session is currently paused, finalize pause
+    local end_epoch
+    end_epoch="$(clk__to_epoch "$end_ts")"
+    if [ -n "$paused_at" ]; then
+        break_secs=$(( break_secs + end_epoch - paused_at ))
+    fi
+
+    # Calculate length
+    local start_epoch
+    start_epoch="$(clk__to_epoch "$start_ts")"
+    local length_secs=$(( end_epoch - start_epoch - break_secs ))
+
+    if [ "$length_secs" -lt 0 ]; then
+        local total_dur
+        total_dur="$(clk__fmt_duration $(( end_epoch - start_epoch )))"
+        local break_dur
+        break_dur="$(clk__fmt_duration "$break_secs")"
+        clk__die 1 "Active time would be negative. Session span is ${total_dur} but break time is ${break_dur}."
+    fi
+
+    # Resolve description: clock-out overrides clock-in
+    local final_desc="$description"
+    if [ -z "$final_desc" ]; then
+        final_desc="$existing_desc"
+    fi
+
+    if [ "$skip_undo" != "skip_undo" ]; then
+        clk__save_undo
+    fi
+
+    # Delete the active line
+    clk__delete_line "$active_line"
+
+    # Build completed record
+    local done_record="done${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${active_tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${CLK_TAB}${final_desc}"
+
+    # Insert before remaining active lines (maintains sort order)
+    clk__insert_before_active "$done_record"
+
+    # Print confirmation
+    local dur_str
+    dur_str="$(clk__fmt_duration "$length_secs")"
+    printf '\nRecorded session in\n  %s\n  %s → %s  (%s)\n' "$active_tag" "$start_ts" "$end_ts" "$dur_str"
+    if [ "$break_secs" -gt 0 ]; then
+        local break_str
+        break_str="$(clk__fmt_duration "$break_secs")"
+        printf '  break: %s\n' "$break_str"
+    fi
+    if [ -n "$final_desc" ]; then
+        printf '  on %s\n' "$final_desc"
+    fi
+    printf '\n'
+}
+
+# --- clk_do_status ---
+# clk status | s
+clk_do_status() {
+    local lines
+    lines="$(clk__find_active)" || {
+        printf 'No active sessions.\n'
+        return 0
+    }
+
+    local lineno
+    while IFS= read -r lineno; do
+        local line_content
+        line_content="$(clk__get_line "$lineno")"
+        local formatted
+        formatted="$(clk__fmt_record "$line_content")"
+        printf '  %s\n' "$formatted"
+    done <<< "$lines"
+}
+
+# --- clk_do_last ---
+# clk last [<n>] | l [<n>]
+#
+# --- RATIONALE: clk last includes active records ---
+# last and edit -N form a pair: last shows what's there with -N indices,
+# edit -N modifies by index. If last excluded active records but edit counted
+# them, the indices would be misaligned. Alignment > separation.
+clk_do_last() {
+    local n="${1:-1}"
+    clk__validate_positive_int "$n" "<n> in 'clk last <n>'"
+
+    # Count data lines (non-comment, non-empty)
+    local total
+    total="$(clk__record_count)"
+
+    if [ "$total" -eq 0 ]; then
+        printf 'No records in log.\n'
+        return 0
+    fi
+
+    if [ "$n" -gt "$total" ]; then
+        n="$total"
+    fi
+
+    # Collect data line numbers (skipping comments)
+    local data_lines
+    data_lines="$(awk '/^[^#]/ && NF>0 {print NR}' "$CLK_LOG")"
+
+    # Get the last N data line numbers
+    local selected
+    selected="$(printf '%s\n' "$data_lines" | tail -n "$n")"
+
+    # Display in order, with -N index (N counts from end of data lines)
+    local i="$n"
+    while IFS= read -r lineno; do
+        local line_content
+        line_content="$(clk__get_line "$lineno")"
+        local formatted
+        formatted="$(clk__fmt_record "$line_content")"
+        printf -- '-%d  %s\n' "$i" "$formatted"
+        i=$(( i - 1 ))
+    done <<< "$selected"
+}
+
+# --- clk_do_last_done ---
+# clk last-done [<n>] | ld [<n>]
+#
+# --- RATIONALE: last-done omits -N index ---
+# The index would skip active records but edit -N doesn't, so showing a
+# wrong index is worse than showing none.
+clk_do_last_done() {
+    local n="${1:-1}"
+    clk__validate_positive_int "$n" "<n> in 'clk last-done <n>'"
+
+    # Collect only 'done' lines
+    local done_lines
+    done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+
+    if [ -z "$done_lines" ]; then
+        printf 'No completed records in log.\n'
+        return 0
+    fi
+
+    local total
+    total="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
+
+    if [ "$n" -gt "$total" ]; then
+        n="$total"
+    fi
+
+    local selected
+    selected="$(printf '%s\n' "$done_lines" | tail -n "$n")"
+
+    while IFS= read -r lineno; do
+        local line_content
+        line_content="$(clk__get_line "$lineno")"
+        local formatted
+        formatted="$(clk__fmt_record "$line_content")"
+        printf '  %s\n' "$formatted"
+    done <<< "$selected"
+}
+
+#####################################################################
 # Main — guarded so the script can be sourced for testing
 #####################################################################
 
@@ -543,5 +763,132 @@ fi
 # Initialize log
 clk__ensure_log
 
-# TODO: Argument parsing and subcommand dispatch (steps 2-10)
-clk__die 1 "Unknown command '$1'. Run 'clk' with no arguments for usage."
+#####################################################################
+# Argument parsing and subcommand dispatch
+#####################################################################
+
+# Shared option-parsing helpers used by subcommand parsers.
+# These consume arguments from the caller's positional params via
+# variable names rather than shift (since we parse in a while loop).
+
+clk_subcmd=""
+clk_tag=""
+clk_at_timestamp=""
+clk_minus_minutes=""
+clk_description=""
+clk_for_minutes=""
+clk_from_tag=""
+clk_last_n=""
+
+case "$1" in
+
+in)
+    clk_subcmd="in"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing <tag> in 'clk in <tag>'. Run 'clk' for usage."
+    fi
+    clk_tag="$1"; shift
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$2"; shift 2
+                ;;
+            on)
+                [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
+                shift  # consume 'on'
+                clk_description="$*"
+                break  # 'on' consumes all remaining args
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk in ${clk_tag}'."
+                ;;
+        esac
+    done
+
+    clk_do_in "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    ;;
+
+out)
+    clk_subcmd="out"
+    shift
+
+    # Tag is optional — peek at first arg to see if it's a tag or an option
+    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ] && [ "$1" != "on" ]; then
+        clk_tag="$1"; shift
+    fi
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$2"; shift 2
+                ;;
+            on)
+                [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
+                shift
+                clk_description="$*"
+                break
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk out'."
+                ;;
+        esac
+    done
+
+    clk_do_out "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    ;;
+
+status|s)
+    clk_subcmd="status"
+    shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk status'"
+    clk_do_status
+    ;;
+
+last|l)
+    clk_subcmd="last"
+    shift
+    if [ $# -gt 0 ]; then
+        clk__validate_positive_int "$1" "<n> in 'clk last <n>'"
+        clk_last_n="$1"
+    fi
+    clk_do_last "${clk_last_n:-1}"
+    ;;
+
+last-done|ld)
+    clk_subcmd="last-done"
+    shift
+    if [ $# -gt 0 ]; then
+        clk__validate_positive_int "$1" "<n> in 'clk last-done <n>'"
+        clk_last_n="$1"
+    fi
+    clk_do_last_done "${clk_last_n:-1}"
+    ;;
+
+# TODO: switch, add, add-break, extend, remove, pop (step 5)
+# TODO: pause, resume, unpause (step 4)
+# TODO: undo, redo (step 6)
+# TODO: view (step 7)
+# TODO: edit (step 8)
+# TODO: log, alias (step 10)
+
+*)
+    clk__die 1 "Unknown command '$1'. Run 'clk' with no arguments for usage."
+    ;;
+
+esac
