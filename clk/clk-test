@@ -1277,6 +1277,32 @@ test_pause_minus() {
     CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
 }
 
+test_pause_at() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause at 2026.01.01-10:30 >/dev/null 2>&1
+    # PAUSED_AT should be the epoch for 2026.01.01-10:30
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local paused_at
+    paused_at="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f7)"
+    # Convert 2026.01.01-10:30 to epoch for comparison
+    CLK_SOURCED=1 source "$CLK_SCRIPT"
+    clk__ensure_log >/dev/null 2>&1
+    local expected_epoch
+    expected_epoch="$(clk__to_epoch "2026.01.01-10:30")"
+    clk_test__assert_equals "$expected_epoch" "$paused_at" "pause at sets correct epoch"
+}
+
+test_pause_at_with_tag() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026.01.01-09:30 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" pause work at 2026.01.01-10:00
+}
+
+test_pause_at_confirmation_output() {
+    "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "2026.01.01-10:30" "$CLK_SCRIPT" pause at 2026.01.01-10:30
+}
+
 test_pause_confirmation_output() {
     "$CLK_SCRIPT" in work at 2026.01.01-09:00 >/dev/null 2>&1
     clk_test__assert_output_contains "paused at" "$CLK_SCRIPT" pause &&
@@ -2118,6 +2144,9 @@ ALL_TESTS=(
     test_pause_explicit_tag
     test_pause_ambiguous_tag
     test_pause_minus
+    test_pause_at
+    test_pause_at_with_tag
+    test_pause_at_confirmation_output
     test_pause_confirmation_output
     test_pause_creates_undo
     test_pause_no_active

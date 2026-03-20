@@ -45,7 +45,7 @@ clk [help]
     add-break | ab <minutes> [to <tag>]
     extend [minus <minutes> | at <timestamp>]
     remove | pop
-    pause | p [<tag>] [minus <minutes>]
+    pause | p [<tag>] [minus <minutes> | at <timestamp>]
     resume | r [<tag>] [minus <minutes>]
     unpause [<tag>]
     undo | redo
@@ -731,9 +731,9 @@ clk_do_last_done() {
 }
 
 # --- clk_do_pause ---
-# clk pause [<tag>] [minus <minutes>]
+# clk pause [<tag>] [minus <minutes> | at <timestamp>]
 clk_do_pause() {
-    local tag="$1" minus_val="$2"
+    local tag="$1" minus_val="$2" at_ts="$3"
 
     clk__require_active_tag "$tag"
     local active_line="$CLK_ACTIVE_LINE"
@@ -758,7 +758,9 @@ clk_do_pause() {
 
     # Calculate pause epoch
     local pause_epoch
-    if [ -n "$minus_val" ]; then
+    if [ -n "$at_ts" ]; then
+        pause_epoch="$(clk__to_epoch "$at_ts")"
+    elif [ -n "$minus_val" ]; then
         local now_epoch
         now_epoch="$(clk__now_epoch)"
         pause_epoch=$(( now_epoch - minus_val * 60 ))
@@ -1267,24 +1269,29 @@ pause|p)
     shift
 
     # Tag is optional — peek at first arg
-    if [ $# -gt 0 ] && [ "$1" != "minus" ]; then
+    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ]; then
         clk_tag="$1"; shift
     fi
 
-    if [ $# -gt 0 ]; then
+    while [ $# -gt 0 ]; do
         case "$1" in
             minus)
                 [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
                 clk__validate_positive_int "$2" "<minutes> after 'minus'"
                 clk_minus_minutes="$2"; shift 2
                 ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$2"; shift 2
+                ;;
             *)
                 clk__die 1 "Unknown option '$1' after 'clk pause'."
                 ;;
         esac
-    fi
+    done
 
-    clk_do_pause "$clk_tag" "$clk_minus_minutes"
+    clk_do_pause "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
     ;;
 
 resume|r)
