@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # clk — time-tracking CLI
 #
-# v2 rewrite: functions-not-copy-paste architecture, unified record schema,
+# v3 rewrite: functions-not-copy-paste architecture, unified record schema,
 # seconds-precision durations, multiple active sessions.
 
 # --- RATIONALE: No set -e ---
@@ -2029,7 +2029,12 @@ view)
 
             view_end_epoch="$view_anchor_epoch"
             view_start_epoch=$(( view_anchor_epoch - duration_secs ))
-            view_range_desc="Past ${view_n} ${view_unit}"
+            # Singularize unit when count is 1
+            view_unit_display="$view_unit"
+            if [ "$view_n" -eq 1 ]; then
+                view_unit_display="${view_unit%s}"
+            fi
+            view_range_desc="Past ${view_n} ${view_unit_display}"
             ;;
         from)
             shift
