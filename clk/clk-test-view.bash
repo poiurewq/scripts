@@ -822,6 +822,541 @@ test_view_by_day_from_to() {
 }
 
 #####################################################################
+# Tests — clk view stats total
+#####################################################################
+
+test_view_by_day_stats_total() {
+    # Two days: 60m + 30m = 90m total
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "total" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_stats_total_minutes() {
+    # Two days: 60m + 30m = 90m total
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "90m" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_stats_total_hours_minutes() {
+    # Two days: 60m + 30m = 90m → 1h 30m
+    "$CLK_SCRIPT" in exercise at '2026-03-18T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-18T10:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    clk_test__assert_output_contains "1h 30m" \
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day
+}
+
+test_view_by_day_stats_total_under_60() {
+    # Single day: 30m → no h:m conversion
+    "$CLK_SCRIPT" in exercise at '2026-03-19T09:00:00' >/dev/null 2>&1
+    "$CLK_SCRIPT" out exercise at '2026-03-19T09:30:00' >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for exercise by day 2>&1)"
+    # Should have total with 30m but no h:m conversion
+    if ! printf '%s' "$output" | grep -q "total.*30m"; then
+        printf 'FAIL: expected total 30m in output\n'
+        printf '  output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if printf '%s' "$output" | grep "total" | grep -q "("; then
+        printf 'FAIL: total under 60m should not have h:m conversion\n'
+        printf '  output: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+#####################################################################
+# Tests — clk view -<n> day(s)/week(s)/month(s)
+#####################################################################
+
+# Helper: compute a timestamp at a given hour on the day at offset from today.
+# Usage: _view_ts_at_day_offset <offset_days> <HH:MM:SS>
+# e.g. _view_ts_at_day_offset 0 09:00:00  → today at 9am
+#      _view_ts_at_day_offset -1 10:00:00 → yesterday at 10am
+_view_ts_at_day_offset() {
+    local offset="$1" time="$2"
+    local day_epoch ts_date
+    day_epoch="$(clk__midnight_epoch "$offset")"
+    ts_date="$(clk__from_epoch "$day_epoch")"
+    # ts_date is full ISO; extract just the date part and append the time
+    printf '%s' "${ts_date%%T*}T${time}"
+}
+
+# Helper: compute a timestamp at a given hour on a day within the week at offset.
+# Usage: _view_ts_at_week_offset <offset_weeks> <day_in_week_1_7> <HH:MM:SS>
+# day_in_week: 1=Mon, 2=Tue, ... 7=Sun
+_view_ts_at_week_offset() {
+    local offset_weeks="$1" dow="$2" time="$3"
+    local week_start_epoch day_epoch ts_date
+    week_start_epoch="$(clk__week_start_epoch "$offset_weeks")"
+    day_epoch=$(( week_start_epoch + (dow - 1) * 86400 ))
+    ts_date="$(clk__from_epoch "$day_epoch")"
+    printf '%s' "${ts_date%%T*}T${time}"
+}
+
+# Helper: compute a timestamp at a given day+hour within the month at offset.
+# Usage: _view_ts_at_month_offset <offset_months> <day_of_month> <HH:MM:SS>
+_view_ts_at_month_offset() {
+    local offset_months="$1" dom="$2" time="$3"
+    local month_start_epoch day_epoch ts_date
+    month_start_epoch="$(clk__month_start_epoch "$offset_months")"
+    day_epoch=$(( month_start_epoch + (dom - 1) * 86400 ))
+    ts_date="$(clk__from_epoch "$day_epoch")"
+    printf '%s' "${ts_date%%T*}T${time}"
+}
+
+test_view_offset_0_day() {
+    # -0 day should behave like today
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset 0 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset 0 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Today" \
+        "$CLK_SCRIPT" view -0 day
+}
+
+test_view_offset_0_days_plural() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset 0 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset 0 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" view -0 days
+}
+
+test_view_offset_1_day() {
+    # -1 day should behave like yesterday
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -1 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -1 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Yesterday" \
+        "$CLK_SCRIPT" view -1 day
+}
+
+test_view_offset_2_days() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -2 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "2 days ago" \
+        "$CLK_SCRIPT" view -2 days
+}
+
+test_view_offset_day_shows_data() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -1 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -1 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "60" \
+        "$CLK_SCRIPT" view -1 day
+}
+
+test_view_current_day() {
+    # 'current' is alias for -0
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset 0 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset 0 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Today" \
+        "$CLK_SCRIPT" view current day
+}
+
+test_view_offset_0_week() {
+    # -0 week = this week (Mon-now); use Tuesday of current week
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset 0 2 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset 0 2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "This week" \
+        "$CLK_SCRIPT" view -0 week
+}
+
+test_view_offset_1_week() {
+    # -1 week = last week Mon-Sun; use Tuesday of last week
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset -1 2 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset -1 2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Last week" \
+        "$CLK_SCRIPT" view -1 week
+}
+
+test_view_offset_2_weeks() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset -2 2 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset -2 2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "2 weeks ago" \
+        "$CLK_SCRIPT" view -2 weeks
+}
+
+test_view_current_week() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset 0 2 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset 0 2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "This week" \
+        "$CLK_SCRIPT" view current week
+}
+
+test_view_offset_week_shows_data() {
+    # Last week, Tuesday, 2h session → 120m
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset -1 2 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset -1 2 11:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "120" \
+        "$CLK_SCRIPT" view -1 week
+}
+
+test_view_offset_0_month() {
+    # -0 month = this month; use 5th of current month
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_month_offset 0 5 09:00:00)"
+    ts_out="$(_view_ts_at_month_offset 0 5 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "This month" \
+        "$CLK_SCRIPT" view -0 month
+}
+
+test_view_offset_1_month() {
+    # -1 month = last month; use 10th
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_month_offset -1 10 09:00:00)"
+    ts_out="$(_view_ts_at_month_offset -1 10 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Last month" \
+        "$CLK_SCRIPT" view -1 month
+}
+
+test_view_offset_2_months() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_month_offset -2 15 09:00:00)"
+    ts_out="$(_view_ts_at_month_offset -2 15 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "2 months ago" \
+        "$CLK_SCRIPT" view -2 months
+}
+
+test_view_current_month() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_month_offset 0 5 09:00:00)"
+    ts_out="$(_view_ts_at_month_offset 0 5 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "This month" \
+        "$CLK_SCRIPT" view current month
+}
+
+test_view_offset_month_shows_data() {
+    # Last month, 15th, 2.5h session → 150m
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_month_offset -1 15 09:00:00)"
+    ts_out="$(_view_ts_at_month_offset -1 15 11:30:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "150" \
+        "$CLK_SCRIPT" view -1 month
+}
+
+test_view_offset_day_for_tag() {
+    # -1 day with for <tag> filter
+    local ts_in1 ts_out1 ts_in2 ts_out2
+    ts_in1="$(_view_ts_at_day_offset -1 09:00:00)"
+    ts_out1="$(_view_ts_at_day_offset -1 10:00:00)"
+    ts_in2="$(_view_ts_at_day_offset -1 11:00:00)"
+    ts_out2="$(_view_ts_at_day_offset -1 12:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in1" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out1" >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at "$ts_in2" >/dev/null 2>&1
+    "$CLK_SCRIPT" out pm at "$ts_out2" >/dev/null 2>&1
+    clk_test__assert_output_contains "dev" \
+        "$CLK_SCRIPT" view -1 day for dev
+}
+
+test_view_offset_week_by_day() {
+    # -0 week with by day grouping; Mon and Tue of current week
+    local ts_in1 ts_out1 ts_in2 ts_out2
+    ts_in1="$(_view_ts_at_week_offset 0 1 09:00:00)"
+    ts_out1="$(_view_ts_at_week_offset 0 1 10:00:00)"
+    ts_in2="$(_view_ts_at_week_offset 0 2 09:00:00)"
+    ts_out2="$(_view_ts_at_week_offset 0 2 10:30:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in1" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out1" >/dev/null 2>&1
+    "$CLK_SCRIPT" in dev at "$ts_in2" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out2" >/dev/null 2>&1
+    clk_test__assert_output_contains "by day" \
+        "$CLK_SCRIPT" view -0 week for dev by day
+}
+
+test_view_offset_missing_unit() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view -1
+}
+
+test_view_offset_bad_unit() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view -1 hours
+}
+
+#####################################################################
+# Tests — clk view through (multi-period ranges)
+#####################################################################
+
+test_view_through_weeks() {
+    # -2 weeks through -1 week: data in last week should appear
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset -1 3 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset -1 3 11:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "120" \
+        "$CLK_SCRIPT" view -2 weeks through -1 week
+}
+
+test_view_through_weeks_range_desc() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset -2 2 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset -2 2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "2 weeks ago through last week" \
+        "$CLK_SCRIPT" view -2 weeks through -1 week
+}
+
+test_view_through_days() {
+    # -3 days through -1 day: data 2 days ago should appear
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -2 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "60" \
+        "$CLK_SCRIPT" view -3 days through -1 day
+}
+
+test_view_through_days_range_desc() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -2 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "2 days ago through yesterday" \
+        "$CLK_SCRIPT" view -2 days through -1 day
+}
+
+test_view_through_months() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_month_offset -1 10 09:00:00)"
+    ts_out="$(_view_ts_at_month_offset -1 10 10:30:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "90" \
+        "$CLK_SCRIPT" view -2 months through -1 month
+}
+
+test_view_through_months_range_desc() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_month_offset -2 5 09:00:00)"
+    ts_out="$(_view_ts_at_month_offset -2 5 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "2 months ago through last month" \
+        "$CLK_SCRIPT" view -2 months through -1 month
+}
+
+test_view_through_current() {
+    # -1 week through current week: should end at now
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset -1 3 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset -1 3 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Last week through this week" \
+        "$CLK_SCRIPT" view -1 week through current week
+}
+
+test_view_through_with_for() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset -1 2 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset -1 2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "dev" \
+        "$CLK_SCRIPT" view -2 weeks through -1 week for dev
+}
+
+test_view_through_with_by() {
+    local ts_in1 ts_out1 ts_in2 ts_out2
+    ts_in1="$(_view_ts_at_week_offset -2 2 09:00:00)"
+    ts_out1="$(_view_ts_at_week_offset -2 2 10:00:00)"
+    ts_in2="$(_view_ts_at_week_offset -1 3 09:00:00)"
+    ts_out2="$(_view_ts_at_week_offset -1 3 11:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in1" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out1" >/dev/null 2>&1
+    "$CLK_SCRIPT" in dev at "$ts_in2" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out2" >/dev/null 2>&1
+    clk_test__assert_output_contains "by day" \
+        "$CLK_SCRIPT" view -2 weeks through -1 week for dev by day
+}
+
+test_view_through_invalid_order() {
+    # -1 week through -2 weeks should fail (end before start)
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view -1 week through -2 weeks
+}
+
+test_view_through_missing_offset() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view -2 weeks through
+}
+
+test_view_through_missing_unit() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view -2 weeks through -1
+}
+
+#####################################################################
+# Tests — clk view aliases (today, yesterday, this)
+#####################################################################
+
+test_view_today_alias_standalone() {
+    # 'clk view today' still works (existing behavior)
+    clk_test__assert_output_contains "Today" "$CLK_SCRIPT" view today
+}
+
+test_view_today_alias_offset() {
+    # 'clk view today' as offset (implies day, no unit needed)
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset 0 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset 0 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Today" \
+        "$CLK_SCRIPT" view today
+}
+
+test_view_yesterday_alias_offset() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -1 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -1 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Yesterday" \
+        "$CLK_SCRIPT" view yesterday
+}
+
+test_view_this_week() {
+    # 'this' is alias for 'current'
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_week_offset 0 2 09:00:00)"
+    ts_out="$(_view_ts_at_week_offset 0 2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "This week" \
+        "$CLK_SCRIPT" view this week
+}
+
+test_view_this_month() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_month_offset 0 5 09:00:00)"
+    ts_out="$(_view_ts_at_month_offset 0 5 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "This month" \
+        "$CLK_SCRIPT" view this month
+}
+
+test_view_yesterday_through_today() {
+    # yesterday through today — both are aliases, no explicit units
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -1 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -1 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Yesterday through today" \
+        "$CLK_SCRIPT" view yesterday through today
+}
+
+test_view_yesterday_through_today_shows_data() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -1 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -1 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "60" \
+        "$CLK_SCRIPT" view yesterday through today
+}
+
+test_view_offset_through_today() {
+    # -3 days through today
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -2 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "3 days ago through today" \
+        "$CLK_SCRIPT" view -3 days through today
+}
+
+test_view_offset_through_yesterday() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -2 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -2 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "3 days ago through yesterday" \
+        "$CLK_SCRIPT" view -3 days through yesterday
+}
+
+test_view_yesterday_through_this_week() {
+    # Mixed: yesterday as start, this week as end
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -1 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -1 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Yesterday through this week" \
+        "$CLK_SCRIPT" view yesterday through this week
+}
+
+test_view_today_with_for_by() {
+    # today with for and by
+    local ts_in1 ts_out1 ts_in2 ts_out2
+    ts_in1="$(_view_ts_at_day_offset 0 09:00:00)"
+    ts_out1="$(_view_ts_at_day_offset 0 09:30:00)"
+    ts_in2="$(_view_ts_at_day_offset 0 10:00:00)"
+    ts_out2="$(_view_ts_at_day_offset 0 10:30:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in1" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out1" >/dev/null 2>&1
+    "$CLK_SCRIPT" in dev at "$ts_in2" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out2" >/dev/null 2>&1
+    clk_test__assert_output_contains "by session" \
+        "$CLK_SCRIPT" view today for dev by session
+}
+
+#####################################################################
 # Test list
 #####################################################################
 
@@ -925,6 +1460,61 @@ CLK_TESTS_VIEW=(
     test_view_by_session_shows_minutes
     test_view_by_session_shows_header
     test_view_by_session_without_for
+
+    # clk view stats total
+    test_view_by_day_stats_total
+    test_view_by_day_stats_total_minutes
+    test_view_by_day_stats_total_hours_minutes
+    test_view_by_day_stats_total_under_60
+
+    # clk view -<n> day(s)/week(s)/month(s)
+    test_view_offset_0_day
+    test_view_offset_0_days_plural
+    test_view_offset_1_day
+    test_view_offset_2_days
+    test_view_offset_day_shows_data
+    test_view_current_day
+    test_view_offset_0_week
+    test_view_offset_1_week
+    test_view_offset_2_weeks
+    test_view_current_week
+    test_view_offset_week_shows_data
+    test_view_offset_0_month
+    test_view_offset_1_month
+    test_view_offset_2_months
+    test_view_current_month
+    test_view_offset_month_shows_data
+    test_view_offset_day_for_tag
+    test_view_offset_week_by_day
+    test_view_offset_missing_unit
+    test_view_offset_bad_unit
+
+    # clk view through (multi-period ranges)
+    test_view_through_weeks
+    test_view_through_weeks_range_desc
+    test_view_through_days
+    test_view_through_days_range_desc
+    test_view_through_months
+    test_view_through_months_range_desc
+    test_view_through_current
+    test_view_through_with_for
+    test_view_through_with_by
+    test_view_through_invalid_order
+    test_view_through_missing_offset
+    test_view_through_missing_unit
+
+    # clk view aliases (today, yesterday, this)
+    test_view_today_alias_standalone
+    test_view_today_alias_offset
+    test_view_yesterday_alias_offset
+    test_view_this_week
+    test_view_this_month
+    test_view_yesterday_through_today
+    test_view_yesterday_through_today_shows_data
+    test_view_offset_through_today
+    test_view_offset_through_yesterday
+    test_view_yesterday_through_this_week
+    test_view_today_with_for_by
 
     # clk view all
     test_view_all
