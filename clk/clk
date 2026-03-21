@@ -2049,7 +2049,7 @@ fi
 
 # No-args: show synopsis
 if [ "$#" -eq 0 ]; then
-    printf '\n%s\n\n' "$CLK_SYNOPSIS"
+    printf '\n%s\n\nRun "clk help" and see the EXAMPLES section to get started.\n\n' "$CLK_SYNOPSIS"
     exit 0
 fi
 
