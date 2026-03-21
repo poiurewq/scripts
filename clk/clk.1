@@ -298,6 +298,49 @@ Summarize all sessions in the log.
 Summarize sessions from midnight today until now.
 .It Cm view Cm yesterday
 Summarize sessions from midnight yesterday until midnight today.
+.It Cm view Bro Fl Ar n | Cm current | Cm this | Cm today | Cm yesterday Brc Op Ar unit Op Cm through No ...
+View sessions for a calendar period relative to the current one.
+.Cm current
+and
+.Cm this
+are aliases for
+.Fl 0 .
+.Cm today
+is equivalent to
+.Fl 0 Cm day ;
+.Cm yesterday
+is equivalent to
+.Fl 1 Cm day .
+When
+.Cm today
+or
+.Cm yesterday
+is used, the unit is implied and may be omitted.
+Weeks start on Monday.
+.Fl 0 Cm week
+covers Monday of the current week until now;
+.Fl 1 Cm week
+covers last Monday through Sunday.
+.Fl 0 Cm month
+covers the 1st of the current month until now;
+.Fl 1 Cm month
+covers the entire previous calendar month.
+.Pp
+The optional
+.Cm through
+modifier extends the range to include all of the specified end period.
+For example,
+.Ql view -2 weeks through -1 week
+spans from two Mondays ago through the end of last Sunday.
+The
+.Cm through
+period must be more recent than the starting period.
+The same aliases
+.Pq Cm current , Cm this , Cm today , Cm yesterday
+are accepted after
+.Cm through .
+Start and end units may differ
+.Pq e.g., Ql -2 months through -1 week .
 .It Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) | Cm year(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
 Summarize sessions over the past
 .Ar n
@@ -336,7 +379,8 @@ Group results into a horizontal bar chart by day, week, month, or session
 When used without
 .Cm for ,
 aggregates all tags into each bucket.
-Displays summary statistics (mean, median, stddev, skewness) below the chart.
+Displays summary statistics (mean, median, stddev, skewness) and total time below the chart.
+The total is shown in minutes and, when 60 or more, also as hours and minutes.
 .El
 .Pp
 Without
