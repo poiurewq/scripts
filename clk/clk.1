@@ -63,13 +63,13 @@
 .Cm log
 .br
 .Nm
-.Bro Cm view | Cm v Brc Bro Cm all | Cm today | Cm yesterday Brc Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
+.Bro Cm view | Cm v Brc Bro Cm all | Cm today | Cm yesterday Brc Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
 .br
 .Nm
-.Bro Cm view | Cm v Brc Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
+.Bro Cm view | Cm v Brc Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) | Cm year(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
 .br
 .Nm
-.Bro Cm view | Cm v Brc Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp Op Cm for Ar tag Op Cm by Bro Cm day | Cm week Brc
+.Bro Cm view | Cm v Brc Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Fl Ar n Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
@@ -298,14 +298,14 @@ Summarize all sessions in the log.
 Summarize sessions from midnight today until now.
 .It Cm view Cm yesterday
 Summarize sessions from midnight yesterday until midnight today.
-.It Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+.It Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) | Cm year(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
 Summarize sessions over the past
 .Ar n
-hours, days, weeks, or months
+hours, days, weeks, months, or years
 .Pq default 1 .
 Both singular and plural unit forms are accepted
 .Pq e.g., Cm day No or Cm days .
-One month equals 30 days.
+One month equals 30 days; one year equals 365 days.
 .Pp
 The
 .Cm before
@@ -325,13 +325,17 @@ All
 .Cm view
 forms accept optional suffixes:
 .Bl -tag -width indent -compact
-.It Cm for Ar tag
-Filter results to only sessions with the given tag.
-.It Cm by Bro Cm day | Cm week Brc
-Group results into a horizontal bar chart by day or week.
-Requires
-.Cm for Ar tag
-to be specified first.
+.It Cm for Ar tag Ns | Ns Ar tag Ns | Ns ...
+Filter results to only sessions matching the given tag(s).
+Multiple tags can be specified separated by pipes
+.Pq e.g., Ql dev|pm|admin .
+When multiple tags are given, their times are combined.
+.It Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
+Group results into a horizontal bar chart by day, week, month, or session
+.Pq one bar per clk record .
+When used without
+.Cm for ,
+aggregates all tags into each bucket.
 Displays summary statistics (mean, median, stddev, skewness) below the chart.
 .El
 .Pp
