@@ -450,6 +450,113 @@ is already defined as a command, function, or alias,
 .Nm
 reports the conflict and exits.
 .El
+.Sh EXAMPLES
+.Ss Basic workflow
+Clock in to a task, check on it, and clock out:
+.Bd -literal -offset indent
+$ clk in dev
+$ clk status
+$ clk out
+.Ed
+.Pp
+When only one session is active, the tag can be omitted from
+.Cm out ,
+.Cm pause ,
+.Cm resume ,
+and other commands that operate on an active session.
+.Ss Timestamps and descriptions
+Start a session that began 15 minutes ago, with a note:
+.Dl $ clk in dev minus 15 on fixing auth bug
+.Pp
+Clock out at a specific time:
+.Dl $ clk out at 17:30
+.Pp
+Timestamps accept several shorthand forms:
+.Ql HH:MM ,
+.Ql yyyy-mm-dd ,
+and
+.Ql yyyy-mm-ddTHH:MM
+all work wherever a timestamp is expected.
+.Ss Pausing and resuming
+Take a break during a session:
+.Bd -literal -offset indent
+$ clk pause
+$ clk resume
+.Ed
+.Pp
+If you paused by mistake, cancel it without recording break time:
+.Dl $ clk unpause
+.Ss Switching tasks
+End one session and start another atomically:
+.Dl $ clk switch pm
+.Pp
+If multiple sessions are active, specify which one to close:
+.Dl $ clk switch pm from dev
+.Ss Multiple concurrent sessions
+You can clock in to several tags at once:
+.Bd -literal -offset indent
+$ clk in dev
+$ clk in pm
+$ clk status
+$ clk out pm
+$ clk out dev
+.Ed
+.Pp
+When more than one session is active, the tag is required for
+.Cm out ,
+.Cm pause ,
+and
+.Cm resume .
+.Ss Adding past sessions
+Log a 45-minute meeting that just ended:
+.Dl $ clk add pm for 45
+.Pp
+Log a session that ended at a specific time:
+.Dl $ clk add pm for 30 at 14:00 on standup
+.Pp
+Add 10 minutes to the current session (moves start time back):
+.Dl $ clk add 10
+.Ss Viewing time
+See what you did today, this week, or over any range:
+.Bd -literal -offset indent
+$ clk view today
+$ clk view -0 week
+$ clk view past 3 days
+$ clk view from 2026-03-01 to 2026-03-15
+.Ed
+.Pp
+Filter by tag and see a bar chart grouped by day:
+.Dl $ clk view -0 month for dev by day
+.Pp
+Combine multiple tags:
+.Dl $ clk view past 2 weeks for dev|pm by week
+.Ss Inspecting and editing records
+Show the last 5 records:
+.Dl $ clk last 5
+.Pp
+Or equivalently:
+.Dl $ clk -5
+.Pp
+Change the tag on the most recent record:
+.Dl $ clk edit -1 tag admin
+.Pp
+Fix the start time of the second-to-last record:
+.Dl $ clk edit -2 start 09:15
+.Pp
+Delete a record:
+.Dl $ clk edit -3 delete
+.Ss Undo mistakes
+Every mutation can be undone (and re-done):
+.Bd -literal -offset indent
+$ clk undo
+$ clk redo
+.Ed
+.Ss Shell alias
+For faster invocation, install a one-letter alias:
+.Bd -literal -offset indent
+$ clk alias
+$ c in dev
+.Ed
 .Sh ENVIRONMENT
 .Bl -tag -width indent
 .It Ev XDG_DATA_HOME
