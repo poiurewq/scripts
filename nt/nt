@@ -30,7 +30,7 @@ ${bf}DESCRIPTION${nf}
 
      By default, the file extension for each new document is the extension of the last numbered document in the folder. If the folder has no numbered documents, ${nt_syn_1} defaults to ${bf}.md${nf}. If the folder has a template file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then each new document uses this template's content and ${uf}extension${nf}. The template supports the following macros: ${bf}%DATE${nf} is replaced with today's date (yyyy-mm-dd), and ${bf}%TITLE${nf} is replaced with the title passed to ${bf}n${nf}.
 
-     If ${nt_syn_1} is given a ${uf}title${nf} when creating or renaming a doc, a number of underscores will be inserted between the numeric index and the title portion of the file name based on the same format as the last doc, defaulting to one underscore.
+     If ${nt_syn_1} is given a ${uf}title${nf} when creating or renaming a doc, the delimiter (underscores or hyphens) between the numeric index and the title portion of the file name will match the format of the last doc, defaulting to a single hyphen.
 
      As a syntactic sugar, you can pass in multiple numeric indices, as well as ${nt_syn_8} and/or ${nt_syn_9} in a row to open the specified files all at once.
 
@@ -40,7 +40,7 @@ ${bf}DESCRIPTION${nf}
              Print help page.
      
      ${nt_syn_3}
-             Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by an underscore and a hyphenated version of the ${uf}title${nf}, with the same extension as the previous document (or .md), then open it in the preferred editor. If the current directory contains the file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then the new document uses this template's content and ${uf}extension${nf} instead.
+             Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by a delimiter and a hyphenated version of the ${uf}title${nf}, with the same extension as the previous document (or .md), then open it in the preferred editor. If the current directory contains the file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then the new document uses this template's content and ${uf}extension${nf} instead.
 
      ${nt_syn_4}
              Open the document with the latest numeric index. A numeric index must be a 1-to-3-digit positive integer. If ${uf}title${nf} is provided, rename this document to ${uf}title${nf} without opening the document. Alternatively, if the optional argument is ${bf}n${nf}, ${bf}nt${nf} simply returns the numeric index of the last detected note in the current directory.
@@ -80,7 +80,7 @@ ${bf}EXIT STATUS${nf}
 NT_MANUAL
 
 last_num_getter() {
-	maybe_last_num="$(ls -1 | cut -d '.' -f1 | cut -d '_' -f1 | sort -n | awk 'END{print}')"
+	maybe_last_num="$(ls -1 | sed 's/[^0-9].*//' | sort -n | awk 'END{print}')"
 	if [[ $maybe_last_num =~ ^[0-9]+$ ]]; then
 		echo "${maybe_last_num}"
 	else
@@ -88,27 +88,19 @@ last_num_getter() {
 	fi
 }
 
-count_leading_underscores() {
-	# a simple grep or awk gsub() won't do here, since we only want the number of leading underscores in a file of format ###__..__file-name.md
+get_delimiter() {
+	# Returns the delimiter string between numeric index and title.
+	# e.g., "001__foo.md" -> "__", "001-foo.md" -> "-", "001.md" -> ""
 	name="$1"
-	has_leading_underscore=true
-	if [[ "$name" =~ ^[0-9]+_ ]]; then 
-		num_leading_underscores=1
-		while [ $has_leading_underscore = true ]; do
-			name="${name#*_}"
-			if [[ "$name" =~ ^_ ]]; then
-				(( num_leading_underscores ++ ))
-			else has_leading_underscore=false
-			fi
-		done
-	else
-		num_leading_underscores=0
+	if [[ "$name" =~ ^[0-9]+(_+) ]]; then
+		printf '%s' "${match[1]}"
+	elif [[ "$name" =~ ^[0-9]+(-+) ]]; then
+		printf '%s' "${match[1]}"
 	fi
-	printf '%d' "$num_leading_underscores"
 }
 
 last_ext_getter() {
-	ls -1 | tr '_.' ' ' | sort -n -k1 | tail -1 | tr ' ' '\n' | tail -1
+	ls -1 | tr '_-.' ' ' | sort -n -k1 | tail -1 | tr ' ' '\n' | tail -1
 }
 
 deprecated_update_modified() {
@@ -182,12 +174,11 @@ while [ "$#" -gt 0 ]; do
 				new_title_raw="${new_title}"
 				new_title="${new_title// /-}"
 				last_doc="$(ls -1 | sort -n | awk 'END{print}')"
-				last_underscores_count="$(count_leading_underscores "$last_doc")"
-				if [ $last_underscores_count -eq 0 ]; then
-					new_doc="${new_num}_${new_title}"
+				last_delim="$(get_delimiter "$last_doc")"
+				if [ -z "$last_delim" ]; then
+					new_doc="${new_num}-${new_title}"
 				else
-					new_underscores="$( printf '_%.0s' {1..$last_underscores_count} )"
-					new_doc="${new_num}${new_underscores}${new_title}"
+					new_doc="${new_num}${last_delim}${new_title}"
 				fi
 			else
 				new_doc="${new_num}"
@@ -233,12 +224,11 @@ while [ "$#" -gt 0 ]; do
 						done
 						new_title="${new_title// /-}"
 
-						last_underscores_count="$(count_leading_underscores "$last_doc")"
-						if [ $last_underscores_count -eq 0 ]; then
-							new_doc="${last_num}_${new_title}.$(last_ext_getter)"
+						last_delim="$(get_delimiter "$last_doc")"
+						if [ -z "$last_delim" ]; then
+							new_doc="${last_num}-${new_title}.$(last_ext_getter)"
 						else
-							new_underscores="$( printf '_%.0s' {1..$last_underscores_count} )"
-							new_doc="${last_num}${new_underscores}${new_title}.$(last_ext_getter)"
+							new_doc="${last_num}${last_delim}${new_title}.$(last_ext_getter)"
 						fi
 
 						mv "${last_doc}" "${new_doc}" \
@@ -283,15 +273,13 @@ while [ "$#" -gt 0 ]; do
 					done
 					new_title="${new_title// /-}"
 
-					try_underscores_count="$(count_leading_underscores "$try_doc")"
-					if [ $try_underscores_count -eq 0 ]; then
-						new_doc="${try_num}_${new_title}.${try_doc_ext}"
+					try_delim="$(get_delimiter "$try_doc")"
+					if [ -z "$try_delim" ]; then
+						new_doc="${try_num}-${new_title}.${try_doc_ext}"
 					else
-						new_underscores="$( printf '_%.0s' {1..$try_underscores_count} )"
-						new_doc="${try_num}${new_underscores}.${try_doc_ext}"
+						new_doc="${try_num}${try_delim}${new_title}.${try_doc_ext}"
 					fi
 
-					new_doc="${try_num}_${new_title}.${try_doc_ext}"
 					mv "${try_doc}" "${new_doc}" \
 						&& printf '%s renamed to %s\n' "${try_doc}" "${new_doc}"
 				else
@@ -374,9 +362,9 @@ while [ "$#" -gt 0 ]; do
 
 		a|ar)
 			if [ "$1" = "ar" ]; then
-				nt_files=( **/[0-9][0-9][0-9](_*|.?*)(N.) )
+				nt_files=( **/[0-9][0-9][0-9]([_-]*|.?*)(N.) )
 			else
-				nt_files=( [0-9][0-9][0-9](_*|.?*)(N.) )
+				nt_files=( [0-9][0-9][0-9]([_-]*|.?*)(N.) )
 			fi
 			if [ "${#nt_files[@]}" -eq 0 ]; then
 				printf 'No indexed documents found.\n'

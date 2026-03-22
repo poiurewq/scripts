@@ -1,4 +1,4 @@
-.Dd February 24, 2026
+.Dd March 21, 2026
 .Dt NT 1
 .Os
 .Sh NAME
@@ -50,7 +50,7 @@ If
 .Nm
 is given a
 .Ar title
-when creating or renaming a doc, a number of underscores will be inserted between the numeric index and the title portion of the file name based on the same format as the last doc, defaulting to one underscore.
+when creating or renaming a doc, the delimiter (underscores or hyphens) between the numeric index and the title portion of the file name will match the format of the last doc, defaulting to a single hyphen.
 .Pp
 As syntactic sugar, you can pass in multiple numeric indices, as well as
 .Cm R
@@ -63,7 +63,7 @@ Options include:
 .It Fl h | Cm h
 Print help page.
 .It Cm n Op Ar title
-Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by an underscore and a hyphenated version of the
+Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by a delimiter and a hyphenated version of the
 .Ar title ,
 with the same extension as the previous document (or .md), then open it in the preferred editor.
 If the current directory contains the file
