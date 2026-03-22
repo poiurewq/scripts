@@ -41,6 +41,20 @@ Input  (-p):        expects an already-preprocessed file
 Run 'man mew' for full documentation."""
 
 
+def _deconflict(path: Path) -> Path:
+    """Return path if it doesn't exist; otherwise notes.mew.wav -> notes-2.mew.wav, etc."""
+    if not path.exists():
+        return path
+    base = path.with_suffix("").with_suffix("")  # strip both .mew + .ext
+    ext = "".join(path.suffixes)                 # e.g. ".mew.wav" or ".mew.md"
+    n = 2
+    while True:
+        candidate = base.parent / f"{base.name}-{n}{ext}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def _mew_stem(input_path: Path) -> Path:
     """Return the path with .mew inserted before the final extension removed.
 
@@ -119,7 +133,7 @@ def main() -> None:
     if mode == "intermediate":
         # -i: preprocess only, write .mew.md
         from mew import preprocess
-        out_md = stem.with_suffix(".mew.md")
+        out_md = _deconflict(stem.with_suffix(".mew.md"))
         preprocess.process(str(input_path), str(out_md))
         print(out_md)
         return
@@ -127,7 +141,7 @@ def main() -> None:
     if mode == "preprocessed":
         # -p: skip preprocessing, synthesize directly
         from mew import speak
-        out_wav = stem.with_suffix(".mew.wav")
+        out_wav = _deconflict(stem.with_suffix(".mew.wav"))
         speak.synthesize(input_path.read_text(encoding="utf-8"), str(out_wav))
         print(out_wav)
         return
@@ -143,7 +157,7 @@ def main() -> None:
 
     try:
         preprocess.process(str(input_path), tmp_path)
-        out_wav = stem.with_suffix(".mew.wav")
+        out_wav = _deconflict(stem.with_suffix(".mew.wav"))
         speak.synthesize(Path(tmp_path).read_text(encoding="utf-8"), str(out_wav))
     finally:
         os.unlink(tmp_path)
