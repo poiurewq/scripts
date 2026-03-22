@@ -1,2 +1,5 @@
 **/*.swp
 **/CLAUDE.md
+**/build/
+**/*.egg-info/
+**/__pycache__/

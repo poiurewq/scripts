@@ -1,14 +1,14 @@
 """
-mewsify.config — interactive model/voice preference selector.
+mew.config — interactive model/voice preference selector.
 
 Usage (via CLI):
-  mewsify config            interactive: optionally change model and voice
-  mewsify config model      change model only
-  mewsify config voice      change voice only
-  mewsify config delete     delete a downloaded model
-  mewsify config show       print current settings and exit
+  mew config            interactive: optionally change model and voice
+  mew config model      change model only
+  mew config voice      change voice only
+  mew config delete     delete a downloaded model
+  mew config show       print current settings and exit
 
-Preferences are stored in ~/.config/mewsify/prefs.json.
+Preferences are stored in ~/.config/mew/prefs.json.
 """
 
 import json
@@ -16,8 +16,8 @@ import os
 import shutil
 from pathlib import Path
 
-PREFS_FILE = Path.home() / ".config" / "mewsify" / "prefs.json"
-CACHE_DIR  = Path.home() / ".cache"  / "mewsify" / "models"
+PREFS_FILE = Path.home() / ".config" / "mew" / "prefs.json"
+CACHE_DIR  = Path.home() / ".cache"  / "mew" / "models"
 
 MODEL_REGISTRY = {
     "mini":      {"repo": "KittenML/kitten-tts-mini-0.8",      "desc": "Best quality"},
@@ -194,7 +194,7 @@ def cmd_delete(prefs: dict) -> None:
 
         if chosen == prefs["model"]:
             print(f"\n  Warning: '{chosen}' is your active model.")
-            print("  After deletion, mewsify will fail until you download another model.")
+            print("  After deletion, mew will fail until you download another model.")
         yn = input(f"  Delete '{chosen}'? [y/N]: ").strip().lower()
         if yn not in ("y", "yes"):
             print("  Cancelled.")

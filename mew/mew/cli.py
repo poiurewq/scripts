@@ -1,23 +1,23 @@
 """
-mewsify.cli — entry point for the mewsify command.
+mew.cli — entry point for the mew command.
 """
 
 import sys
 from pathlib import Path
 
-from mewsify import __version__
+from mew import __version__
 
 _SYNOPSIS = """\
-Usage: mewsify [options] file
-       mewsify config [model|voice|show]
+Usage: mew [options] file
+       mew config [model|voice|show]
 
   Convert a study note to speech via KittenTTS.
 
-Type 'mewsify --help' for full usage."""
+Type 'mew --help' for full usage."""
 
 _HELP = """\
-Usage: mewsify [options] file
-       mewsify config [model|voice|show]
+Usage: mew [options] file
+       mew config [model|voice|show]
 
   Preprocess a note file and synthesize it to speech via KittenTTS.
 
@@ -36,7 +36,7 @@ Output files (written alongside the input):
   file-processed.md   Preprocessed plain text, kept for inspection
   file-processed.wav  Synthesized audio
 
-Run 'man mewsify' for full documentation."""
+Run 'man mew' for full documentation."""
 
 
 def main() -> None:
@@ -44,7 +44,7 @@ def main() -> None:
 
     # ── config subcommand ─────────────────────────────────────────────────────
     if args and args[0] == "config":
-        from mewsify import config
+        from mew import config
         config.main(args[1:])
         return
 
@@ -57,14 +57,14 @@ def main() -> None:
             print(_HELP)
             return
         if a == "--version":
-            print(f"mewsify {__version__}")
+            print(f"mew {__version__}")
             return
         if a == "--":
             positional += args[i + 1:]
             break
         if a.startswith("-"):
-            print(f"mewsify: unknown option: {a}", file=sys.stderr)
-            print("Try 'mewsify --help' for usage.", file=sys.stderr)
+            print(f"mew: unknown option: {a}", file=sys.stderr)
+            print("Try 'mew --help' for usage.", file=sys.stderr)
             sys.exit(1)
         positional.append(a)
         i += 1
@@ -75,24 +75,24 @@ def main() -> None:
         return
 
     if len(positional) != 1:
-        print("mewsify: expected exactly one argument", file=sys.stderr)
-        print("Try 'mewsify --help' for usage.", file=sys.stderr)
+        print("mew: expected exactly one argument", file=sys.stderr)
+        print("Try 'mew --help' for usage.", file=sys.stderr)
         sys.exit(1)
 
     input_path = Path(positional[0])
 
     if not input_path.exists():
-        print(f"mewsify: file not found: {input_path}", file=sys.stderr)
+        print(f"mew: file not found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
     # ── Step 1: preprocess ────────────────────────────────────────────────────
-    from mewsify import preprocess
+    from mew import preprocess
     print(f"→ Preprocessing: {input_path}")
     processed_md = Path(preprocess.process(str(input_path)))
     print(f"  Written: {processed_md}")
 
     # ── Step 2: synthesize ────────────────────────────────────────────────────
-    from mewsify import speak
+    from mew import speak
     processed_wav = processed_md.with_suffix(".wav")
     print(f"→ Synthesizing:  {processed_wav}")
     speak.synthesize(processed_md.read_text(encoding="utf-8"), str(processed_wav))
