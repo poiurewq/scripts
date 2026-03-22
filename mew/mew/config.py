@@ -69,7 +69,8 @@ def download_model(alias: str) -> None:
     from kittentts import KittenTTS
     repo  = MODEL_REGISTRY[alias]["repo"]
     cache = str(CACHE_DIR / alias)
-    print(f"  Downloading '{alias}' from {repo} ...")
+    print(f"  Downloading '{alias}' from {repo}...")
+    print(f"  This may take a minute depending on your connection.")
     KittenTTS(repo, cache_dir=cache)
     print(f"  Model '{alias}' ready.")
 

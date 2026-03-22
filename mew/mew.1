@@ -239,6 +239,13 @@ Created automatically when preferences are first saved via
 KittenTTS model cache; one subdirectory per model alias, populated
 automatically on first use or when downloading via
 .BR "mew config" .
+.TP
+.I ~/.local/share/mew/synthesis.jsonl
+Synthesis timing log.
+Each line records the phoneme count, elapsed seconds, and model alias
+for one synthesis run.
+After at least three entries for a given model, mew displays an estimated
+progress bar during synthesis.
 .\" -----------------------------------------------------------------------
 .SH EXAMPLES
 Synthesize a single note file (produces notes.mew.wav):
