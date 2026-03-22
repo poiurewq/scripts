@@ -1,5 +1,5 @@
 """
-mewsify.speak — synthesize text to a WAV file via KittenTTS.
+mew.speak — synthesize text to a WAV file via KittenTTS.
 """
 
 import json
@@ -13,8 +13,8 @@ MODEL_REGISTRY = {
     "nano-int8": "KittenML/kitten-tts-nano-0.8-int8",
 }
 
-PREFS_FILE = Path.home() / ".config" / "mewsify" / "prefs.json"
-CACHE_DIR  = Path.home() / ".cache"  / "mewsify" / "models"
+PREFS_FILE = Path.home() / ".config" / "mew" / "prefs.json"
+CACHE_DIR  = Path.home() / ".cache"  / "mew" / "models"
 
 
 def _load_prefs() -> dict:

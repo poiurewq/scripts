@@ -1,17 +1,17 @@
-.\" mewsify.1 — manual page for mewsify
+.\" mew.1 — manual page for mew
 .\" -----------------------------------------------------------------------
-.TH MEWSIFY 1 "March 2026" "mewsify 0.1.0" "User Commands"
+.TH MEW 1 "March 2026" "mew 0.1.0" "User Commands"
 .\" -----------------------------------------------------------------------
 .SH NAME
-mewsify \- preprocess study notes and synthesize speech via KittenTTS
+mew \- preprocess study notes and synthesize speech via KittenTTS
 .\" -----------------------------------------------------------------------
 .SH SYNOPSIS
-.B mewsify
+.B mew
 .RB [ \-h ]
 .I file
 .\" -----------------------------------------------------------------------
 .SH DESCRIPTION
-.B mewsify
+.B mew
 takes a note file, runs it through a text preprocessing pipeline
 optimised for natural-sounding speech output, then synthesizes the result
 to a WAV file using the KittenTTS engine directly via a self-contained
@@ -35,18 +35,18 @@ Print the version number and exit.
 .\" -----------------------------------------------------------------------
 .SH CONFIGURATION
 Run
-.B mewsify config
+.B mew config
 to interactively select the TTS model and voice.
 Preferences are saved to
-.I ~/.config/mewsify/prefs.json
+.I ~/.config/mew/prefs.json
 and used on every subsequent synthesis run.
 .PP
 .B Subcommands:
 .TP
-.B mewsify config
+.B mew config
 Interactive prompt: offers to change model and/or voice.
 .TP
-.B mewsify config model
+.B mew config model
 Change model only.
 Available models:
 .BR mini " (best quality),"
@@ -55,18 +55,18 @@ Available models:
 .BR nano-int8 " (fast, quantized)."
 If the chosen model has not been downloaded, you are prompted to download it.
 .TP
-.B mewsify config voice
+.B mew config voice
 Change voice only.
 Available voices:
 .BR Bella ", " Jasper ", " Luna ", " Bruno ", " Rosie ", " Hugo ", " Kiki ", " Leo .
 .TP
-.B mewsify config delete
+.B mew config delete
 Interactively select a downloaded model to remove from the cache.
 Only downloaded models are listed.
 If the selected model is the active model, a warning is shown before
 confirming deletion.
 .TP
-.B mewsify config show
+.B mew config show
 Print current model and voice settings without making changes.
 .\" -----------------------------------------------------------------------
 .SH PREPROCESSING PIPELINE
@@ -205,36 +205,36 @@ has a period appended, ensuring the engine pauses at every logical break.
 .\" -----------------------------------------------------------------------
 .SH FILES
 .TP
-.I $(brew \-\-prefix)/bin/mewsify
-Symbolic link to the mewsify entry point inside the Homebrew-managed venv.
+.I $(brew \-\-prefix)/bin/mew
+Symbolic link to the mew entry point inside the Homebrew-managed venv.
 .TP
-.I $(brew \-\-prefix)/opt/mewsify/libexec/venv/
-Python virtual environment containing mewsify, kittentts, and their
+.I $(brew \-\-prefix)/opt/mew/libexec/venv/
+Python virtual environment containing mew, kittentts, and their
 dependencies.
 Managed by Homebrew; do not modify directly.
 .TP
-.I ~/.config/mewsify/prefs.json
+.I ~/.config/mew/prefs.json
 Persistent model and voice preferences.
 Created automatically when preferences are first saved via
-.BR "mewsify config" .
+.BR "mew config" .
 .TP
-.I ~/.cache/mewsify/models/
+.I ~/.cache/mew/models/
 KittenTTS model cache; one subdirectory per model alias, populated
 automatically on first use or when downloading via
-.BR "mewsify config" .
+.BR "mew config" .
 .\" -----------------------------------------------------------------------
 .SH EXAMPLES
 Synthesize a single note file:
 .PP
 .RS
-.B mewsify 001_Ethics\-Supervision\-Training\-and\-Teaching.md
+.B mew 001_Ethics\-Supervision\-Training\-and\-Teaching.md
 .RE
 .PP
 Inspect the preprocessed text before listening:
 .PP
 .RS
 .nf
-mewsify notes.md
+mew notes.md
 less notes\-processed.md
 .fi
 .RE
