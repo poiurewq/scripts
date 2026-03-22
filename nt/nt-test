@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# nt-test — automated tests for nt
+#
+# Usage:
+#   ./nt-test                # run all tests
+#   ./nt-test test_name      # run a specific test
+#   ./nt-test group_name     # run a test group (new, last, open, rename, renumber, activity, misc)
+#
+# Test files:
+#   nt-test-new.bash        — tests for n/new (document creation)
+#   nt-test-last.bash       — tests for l/last (open last, nth-to-last)
+#   nt-test-open.bash       — tests for numeric open and range open
+#   nt-test-rename.bash     — tests for r/rename, rl
+#   nt-test-renumber.bash   — tests for rn/renumber
+#   nt-test-activity.bash   — tests for a/ar (activity summary)
+#   nt-test-misc.bash       — tests for help, R, t, editor, usage
+
+set -u
+
+#####################################################################
+# Test harness
+#####################################################################
+
+NT_TEST_PASS=0
+NT_TEST_FAIL=0
+NT_TEST_DIR=""
+NT_SCRIPT=""
+
+# Resolve path to nt script (same directory as this test file)
+NT_SCRIPT="$(cd "$(dirname "$0")" && pwd)/nt"
+
+if [ ! -f "$NT_SCRIPT" ]; then
+    printf 'ERROR: nt script not found at %s\n' "$NT_SCRIPT" >&2
+    exit 1
+fi
+
+nt_test__setup() {
+    NT_TEST_DIR="$(mktemp -d)"
+    cd "$NT_TEST_DIR" || return 1
+    # Ensure nt uses a predictable editor that doesn't actually open anything
+    export NT_EDITOR="true"
+    # Unset VISUAL/EDITOR to avoid interference
+    unset VISUAL EDITOR 2>/dev/null || true
+}
+
+nt_test__teardown() {
+    cd /
+    \rm -rf "$NT_TEST_DIR"
+}
+
+nt_test__assert_exit() {
+    # $1: expected exit code, $2+: command to run
+    local expected="$1"; shift
+    local actual=0
+    ("$@") >/dev/null 2>&1 || actual=$?
+    if [ "$actual" -ne "$expected" ]; then
+        printf 'FAIL: expected exit %d, got %d: %s\n' "$expected" "$actual" "$*"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__assert_output_contains() {
+    # $1: expected substring, $2+: command to run
+    local expected="$1"; shift
+    local output
+    output="$("$@" 2>&1)" || true
+    if ! printf '%s' "$output" | grep -qF -- "$expected"; then
+        printf 'FAIL: output missing "%s": %s\n' "$expected" "$*"
+        printf '  actual output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__assert_output_equals() {
+    # $1: expected output (exact), $2+: command to run
+    local expected="$1"; shift
+    local output
+    output="$("$@" 2>&1)" || true
+    if [ "$output" != "$expected" ]; then
+        printf 'FAIL: output mismatch: %s\n' "$*"
+        printf '  expected: "%s"\n' "$expected"
+        printf '  actual:   "%s"\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__assert_output_matches() {
+    # $1: expected regex, $2+: command to run
+    local pattern="$1"; shift
+    local output
+    output="$("$@" 2>&1)" || true
+    if ! printf '%s' "$output" | grep -Eq "$pattern"; then
+        printf 'FAIL: output does not match /%s/: %s\n' "$pattern" "$*"
+        printf '  actual output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__assert_equals() {
+    # $1: expected, $2: actual, $3: description
+    local expected="$1" actual="$2" desc="$3"
+    if [ "$expected" != "$actual" ]; then
+        printf 'FAIL: %s\n' "$desc"
+        printf '  expected: "%s"\n' "$expected"
+        printf '  actual:   "%s"\n' "$actual"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__assert_file_exists() {
+    # $1: file path, $2: description
+    local file="$1" desc="${2:-file should exist: $1}"
+    if [ ! -f "$file" ]; then
+        printf 'FAIL: %s\n' "$desc"
+        printf '  file not found: %s\n' "$file"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__assert_file_not_exists() {
+    # $1: file path, $2: description
+    local file="$1" desc="${2:-file should not exist: $1}"
+    if [ -f "$file" ]; then
+        printf 'FAIL: %s\n' "$desc"
+        printf '  file exists: %s\n' "$file"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__assert_file_contains() {
+    # $1: file path, $2: expected substring
+    local file="$1" expected="$2"
+    if [ ! -f "$file" ]; then
+        printf 'FAIL: file not found for content check: %s\n' "$file"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! grep -qF "$expected" "$file"; then
+        printf 'FAIL: file "%s" missing content "%s"\n' "$file" "$expected"
+        printf '  actual contents: %s\n' "$(cat "$file")"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__assert_file_count() {
+    # $1: expected count, $2: glob pattern, $3: description
+    local expected="$1" pattern="$2" desc="${3:-file count}"
+    local actual
+    # Use bash globbing; nullglob to handle zero matches
+    local prev_nullglob
+    prev_nullglob="$(shopt -p nullglob 2>/dev/null)" || true
+    shopt -s nullglob
+    local files=( $pattern )
+    eval "$prev_nullglob" 2>/dev/null || true
+    actual="${#files[@]}"
+    if [ "$expected" -ne "$actual" ]; then
+        printf 'FAIL: %s\n' "$desc"
+        printf '  expected %d files matching %s, got %d\n' "$expected" "$pattern" "$actual"
+        printf '  files: %s\n' "${files[*]}"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+nt_test__run() {
+    local test_name="$1"
+    printf '  %s ... ' "$test_name"
+    nt_test__setup
+    local result=0
+    if "$test_name"; then
+        printf 'ok\n'
+    else
+        printf 'FAILED\n'
+        result=1
+    fi
+    nt_test__teardown
+    return "$result"
+}
+
+# Helper: create a numbered file in NT_TEST_DIR for test setup
+# Usage: nt_test__create_file "001-my-note.md" ["content"]
+nt_test__create_file() {
+    local name="$1"
+    local content="${2:-}"
+    if [ -n "$content" ]; then
+        printf '%s\n' "$content" > "$NT_TEST_DIR/$name"
+    else
+        : > "$NT_TEST_DIR/$name"
+    fi
+}
+
+#####################################################################
+# Source test files
+#####################################################################
+
+_test_dir="$(cd "$(dirname "$0")" && pwd)"
+
+source "$_test_dir/nt-test-new.bash"
+source "$_test_dir/nt-test-last.bash"
+source "$_test_dir/nt-test-open.bash"
+source "$_test_dir/nt-test-rename.bash"
+source "$_test_dir/nt-test-renumber.bash"
+source "$_test_dir/nt-test-activity.bash"
+source "$_test_dir/nt-test-misc.bash"
+
+#####################################################################
+# Collect all tests
+#####################################################################
+
+ALL_TESTS=(
+    "${NT_TESTS_NEW[@]}"
+    "${NT_TESTS_LAST[@]}"
+    "${NT_TESTS_OPEN[@]}"
+    "${NT_TESTS_RENAME[@]}"
+    "${NT_TESTS_RENUMBER[@]}"
+    "${NT_TESTS_ACTIVITY[@]}"
+    "${NT_TESTS_MISC[@]}"
+)
+
+#####################################################################
+# Test runner
+#####################################################################
+
+printf 'nt test suite\n'
+
+if [ "${1:-}" != "" ]; then
+    case "$1" in
+        new)       SELECTED_TESTS=("${NT_TESTS_NEW[@]}") ;;
+        last)      SELECTED_TESTS=("${NT_TESTS_LAST[@]}") ;;
+        open)      SELECTED_TESTS=("${NT_TESTS_OPEN[@]}") ;;
+        rename)    SELECTED_TESTS=("${NT_TESTS_RENAME[@]}") ;;
+        renumber)  SELECTED_TESTS=("${NT_TESTS_RENUMBER[@]}") ;;
+        activity)  SELECTED_TESTS=("${NT_TESTS_ACTIVITY[@]}") ;;
+        misc)      SELECTED_TESTS=("${NT_TESTS_MISC[@]}") ;;
+        *)
+            found=0
+            for t in "${ALL_TESTS[@]}"; do
+                if [ "$t" = "$1" ]; then
+                    found=1
+                    SELECTED_TESTS=("$1")
+                    break
+                fi
+            done
+            if [ "$found" -eq 0 ]; then
+                printf 'Unknown test or group: %s\n' "$1" >&2
+                printf 'Groups: new, last, open, rename, renumber, activity, misc\n' >&2
+                exit 1
+            fi
+            ;;
+    esac
+    for t in "${SELECTED_TESTS[@]}"; do
+        nt_test__run "$t"
+    done
+else
+    for t in "${ALL_TESTS[@]}"; do
+        nt_test__run "$t"
+    done
+fi
+
+printf '\nResults: %d passed, %d failed\n' "$NT_TEST_PASS" "$NT_TEST_FAIL"
+
+if [ "$NT_TEST_FAIL" -gt 0 ]; then
+    exit 1
+fi
+exit 0
