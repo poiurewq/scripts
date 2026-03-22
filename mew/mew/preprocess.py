@@ -244,13 +244,15 @@ def _add_intro_commas(line: str) -> str:
 
 # ── Main processing loop ───────────────────────────────────────────────────────
 
-def process(input_path: str) -> str:
-    """Preprocess *input_path* and write the result to a -processed.md file.
+def process(input_path: str, output_path: str | None = None) -> str:
+    """Preprocess *input_path* and write the result to *output_path*.
 
+    If *output_path* is ``None``, defaults to ``<base>-processed<ext>``.
     Returns the path of the output file.
     """
-    base, ext = os.path.splitext(input_path)
-    output_path = base + '-processed' + (ext or '.md')
+    if output_path is None:
+        base, ext = os.path.splitext(input_path)
+        output_path = base + '-processed' + (ext or '.md')
 
     with open(input_path, 'r', encoding='utf-8') as fh:
         lines = fh.readlines()

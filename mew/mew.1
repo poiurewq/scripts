@@ -8,6 +8,7 @@ mew \- preprocess study notes and synthesize speech via KittenTTS
 .SH SYNOPSIS
 .B mew
 .RB [ \-h ]
+.RB [ \-i " | " \-p ]
 .I file
 .\" -----------------------------------------------------------------------
 .SH DESCRIPTION
@@ -17,18 +18,34 @@ optimised for natural-sounding speech output, then synthesizes the result
 to a WAV file using the KittenTTS engine directly via a self-contained
 Python venv.
 .PP
-Two output files are written alongside the input:
+By default, only the synthesized audio is written:
 .TP
-.I file\-processed.md
-The preprocessed plain text, kept for inspection and debugging.
-.TP
-.I file\-processed.wav
+.I file.mew.wav
 The synthesized audio, ready for playback.
+.PP
+The intermediate preprocessed text is used internally but not saved
+unless
+.B \-i
+is given.
 .\" -----------------------------------------------------------------------
 .SH OPTIONS
 .TP
 .BR \-h ", " \-\-help
 Print a short usage summary and exit.
+.TP
+.B \-i
+Intermediate only: preprocess the input and write
+.IR file.mew.md ,
+then exit without synthesizing.
+Mutually exclusive with
+.BR \-p .
+.TP
+.B \-p
+Pre-processed: treat
+.I file
+as already preprocessed and skip straight to synthesis.
+Mutually exclusive with
+.BR \-i .
 .TP
 .B \-\-version
 Print the version number and exit.
@@ -206,7 +223,7 @@ has a period appended, ensuring the engine pauses at every logical break.
 .SH FILES
 .TP
 .I $(brew \-\-prefix)/bin/mew
-Symbolic link to the mew entry point inside the Homebrew-managed venv.
+Wrapper script that delegates to the mew entry point inside the Homebrew-managed venv.
 .TP
 .I $(brew \-\-prefix)/opt/mew/libexec/venv/
 Python virtual environment containing mew, kittentts, and their
@@ -224,18 +241,19 @@ automatically on first use or when downloading via
 .BR "mew config" .
 .\" -----------------------------------------------------------------------
 .SH EXAMPLES
-Synthesize a single note file:
+Synthesize a single note file (produces notes.mew.wav):
 .PP
 .RS
-.B mew 001_Ethics\-Supervision\-Training\-and\-Teaching.md
+.B mew notes.md
 .RE
 .PP
-Inspect the preprocessed text before listening:
+Export the preprocessed text for inspection, then synthesize it:
 .PP
 .RS
 .nf
-mew notes.md
-less notes\-processed.md
+mew \-i notes.md        # writes notes.mew.md
+less notes.mew.md       # review
+mew \-p notes.mew.md    # writes notes.mew.wav
 .fi
 .RE
 .\" -----------------------------------------------------------------------
