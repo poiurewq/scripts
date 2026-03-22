@@ -44,7 +44,7 @@ clk [help]
     add | a <tag> for <minutes> [minus <minutes> | at <timestamp>] [on <description>]
     add | a <minutes> [to <tag>]
     add-break | ab <minutes> [to <tag>]
-    extend [minus <minutes> | at <timestamp>]
+    extend [<tag>] [minus <minutes> | at <timestamp>]
     remove | pop
     pause | p [<tag>] [minus <minutes> | at <timestamp>]
     resume | r [<tag>] [minus <minutes> | at <timestamp>]
@@ -1236,14 +1236,24 @@ clk_do_add_break() {
 # clk extend [minus <minutes> | at <timestamp>]
 # Extends the last completed (done) record's end time.
 clk_do_extend() {
-    local at_ts="$1" minus_val="$2"
+    local tag="$1" at_ts="$2" minus_val="$3"
 
-    # Find the last done record
+    # Find the last done record (optionally filtered by tag)
     local last_done_lineno
-    last_done_lineno="$(awk -F'\t' '$1=="done" {lineno=NR} END {print lineno}' "$CLK_LOG")"
-
-    if [ -z "$last_done_lineno" ]; then
-        clk__die 5 "No completed records to extend."
+    if [ -n "$tag" ]; then
+        # Error if that tag has an active session
+        if clk__find_active "$tag" >/dev/null 2>&1; then
+            clk__die 1 "Session '$tag' is currently active. Clock out first before extending."
+        fi
+        last_done_lineno="$(awk -F'\t' -v t="$tag" '$1=="done" && $4==t {lineno=NR} END {print lineno}' "$CLK_LOG")"
+        if [ -z "$last_done_lineno" ]; then
+            clk__die 5 "No completed records for tag '$tag'."
+        fi
+    else
+        last_done_lineno="$(awk -F'\t' '$1=="done" {lineno=NR} END {print lineno}' "$CLK_LOG")"
+        if [ -z "$last_done_lineno" ]; then
+            clk__die 5 "No completed records to extend."
+        fi
     fi
 
     local line_content
@@ -2382,6 +2392,11 @@ extend)
     clk_subcmd="extend"
     shift
 
+    # Tag is optional — peek at first arg
+    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ]; then
+        clk_tag="$1"; shift
+    fi
+
     while [ $# -gt 0 ]; do
         case "$1" in
             minus)
@@ -2400,7 +2415,7 @@ extend)
         esac
     done
 
-    clk_do_extend "$clk_at_timestamp" "$clk_minus_minutes"
+    clk_do_extend "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes"
     ;;
 
 remove|pop)

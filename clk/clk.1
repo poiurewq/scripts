@@ -27,7 +27,7 @@
 .Bro Cm add-break | Cm ab Brc Ar minutes Op Cm to Ar tag
 .br
 .Nm
-.Cm extend Op Cm minus Ar minutes | Cm at Ar timestamp
+.Cm extend Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
 .Nm
 .Bro Cm remove | Cm pop Brc
@@ -204,12 +204,16 @@ The session must not be currently paused.
 If
 .Cm to Ar tag
 is omitted, the tag is inferred when unambiguous.
-.It Cm extend Op Cm minus Ar minutes | Cm at Ar timestamp
+.It Cm extend Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 Extend the last completed session to the current time, or to the time
 specified by
 .Cm minus
 or
 .Cm at .
+If
+.Ar tag
+is given, extend the most recent completed session with that tag instead;
+an error is raised if that tag currently has an active session.
 The new end time must be at or after the original end time.
 .It Bro Cm remove | Cm pop Brc
 Remove the last record from the log
