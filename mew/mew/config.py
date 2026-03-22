@@ -40,7 +40,7 @@ VOICE_REGISTRY = {
 }
 VOICE_NAMES = list(VOICE_REGISTRY.keys())
 
-DEFAULTS = {"model": "mini", "voice": "Hugo"}
+DEFAULTS = {"model": "micro", "voice": "Hugo"}
 
 
 # ── Prefs I/O ─────────────────────────────────────────────────────────────────
@@ -218,6 +218,13 @@ def main(args: list[str] | None = None) -> None:
         import sys
         args = sys.argv[1:]
 
+    try:
+        _run(args)
+    except (KeyboardInterrupt, EOFError):
+        print("\n  Cancelled.")
+
+
+def _run(args: list[str]) -> None:
     prefs  = load_prefs()
     subcmd = args[0] if args else None
 

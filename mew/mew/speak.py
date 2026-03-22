@@ -28,7 +28,7 @@ def _load_prefs() -> dict:
             return json.loads(PREFS_FILE.read_text())
         except (json.JSONDecodeError, OSError):
             pass
-    return {"model": "mini", "voice": "Hugo"}
+    return {"model": "micro", "voice": "Hugo"}
 
 
 # ── Phoneme counting ────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ dependencies = [
     "num2words",
     "phonemizer",
     "espeakng_loader",
-    "spacy",
+    # spacy was listed here but is not imported by mew or kittentts at runtime.
     # kittentts is not on PyPI; install with --no-deps to avoid misaki[en],
     # which pulls torch and CUDA (~700MB–3GB) that are unused when clean_text=False.
     # Install from:
