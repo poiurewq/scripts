@@ -36,7 +36,7 @@
 .Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
 .Nm
-.Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes
+.Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
 .Nm
 .Cm unpause Op Ar tag
@@ -226,11 +226,13 @@ sets the pause start to that many minutes ago.
 If
 .Ar tag
 is omitted and exactly one session is active, it is inferred.
-.It Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes
+.It Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 Resume a paused session.
 The pause duration is added to the session's accumulated break time.
 .Cm minus Ar minutes
 sets the resume point to that many minutes ago.
+.Cm at Ar timestamp
+sets the resume point to an explicit time.
 .It Cm unpause Op Ar tag
 Cancel a pause without adding break time.
 Useful when a pause was started by mistake.

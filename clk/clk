@@ -47,7 +47,7 @@ clk [help]
     extend [minus <minutes> | at <timestamp>]
     remove | pop
     pause | p [<tag>] [minus <minutes> | at <timestamp>]
-    resume | r [<tag>] [minus <minutes>]
+    resume | r [<tag>] [minus <minutes> | at <timestamp>]
     unpause [<tag>]
     undo | redo
     status | s
@@ -714,11 +714,14 @@ clk_do_out() {
     local paused_at="$CLK_F7"
     local existing_desc="$CLK_F8"
 
-    # If session is currently paused, finalize pause
+    # If session is currently paused, end at the pause timestamp.
+    # Time elapsed since the pause is discarded — the session effectively
+    # ended when the user paused, so the pause timestamp becomes end_ts.
     local end_epoch
     end_epoch="$(clk__to_epoch "$end_ts")"
     if [ -n "$paused_at" ]; then
-        break_secs=$(( break_secs + end_epoch - paused_at ))
+        end_epoch="$paused_at"
+        end_ts="$(clk__from_epoch "$paused_at")"
     fi
 
     # Calculate length
@@ -982,7 +985,7 @@ clk_do_pause() {
 # --- clk_do_resume ---
 # clk resume [<tag>] [minus <minutes>]
 clk_do_resume() {
-    local tag="$1" minus_val="$2"
+    local tag="$1" minus_val="$2" at_ts="$3"
 
     clk__require_active_tag "$tag"
     local active_line="$CLK_ACTIVE_LINE"
@@ -1005,7 +1008,9 @@ clk_do_resume() {
 
     # Calculate resume epoch
     local resume_epoch
-    if [ -n "$minus_val" ]; then
+    if [ -n "$at_ts" ]; then
+        resume_epoch="$(clk__to_epoch "$at_ts")"
+    elif [ -n "$minus_val" ]; then
         local now_epoch
         now_epoch="$(clk__now_epoch)"
         resume_epoch=$(( now_epoch - minus_val * 60 ))
@@ -2222,24 +2227,29 @@ resume|r)
     shift
 
     # Tag is optional — peek at first arg
-    if [ $# -gt 0 ] && [ "$1" != "minus" ]; then
+    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ]; then
         clk_tag="$1"; shift
     fi
 
-    if [ $# -gt 0 ]; then
+    while [ $# -gt 0 ]; do
         case "$1" in
             minus)
                 [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
                 clk__validate_positive_int "$2" "<minutes> after 'minus'"
                 clk_minus_minutes="$2"; shift 2
                 ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__validate_timestamp "$2"
+                clk_at_timestamp="$CLK_VALIDATED_TS"; shift 2
+                ;;
             *)
                 clk__die 1 "Unknown option '$1' after 'clk resume'."
                 ;;
         esac
-    fi
+    done
 
-    clk_do_resume "$clk_tag" "$clk_minus_minutes"
+    clk_do_resume "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
     ;;
 
 unpause)
