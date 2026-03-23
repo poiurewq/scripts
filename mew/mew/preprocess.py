@@ -139,9 +139,14 @@ SUBSTITUTIONS_FILE = Path.home() / ".config" / "mew" / "substitutions.json"
 def _load_substitutions() -> list[dict]:
     """Load custom substitutions from ~/.config/mew/substitutions.json.
 
-    Returns an empty list if the file is absent or malformed.
+    On first ever call (file absent), seeds the file with default entries
+    so that common titles, abbreviations, and acronyms are handled out of
+    the box.  Returns an empty list only if the file is malformed.
     Each entry is a dict with keys: find, replace, regex (bool), first_only (bool).
     """
+    if not SUBSTITUTIONS_FILE.exists():
+        from mew.config import ensure_substitutions_seeded
+        ensure_substitutions_seeded()
     if not SUBSTITUTIONS_FILE.exists():
         return []
     try:

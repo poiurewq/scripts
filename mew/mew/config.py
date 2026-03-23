@@ -377,18 +377,34 @@ def cmd_delete(prefs: dict) -> None:
 # ── Substitutions ────────────────────────────────────────────────────────────
 
 _SEED_SUBSTITUTIONS = [
-    {"find": r"\bACA\b", "replace": "ACA, the American Counseling Association,", "regex": True, "first_only": True},
-    {"find": r"\bHIPAA\b", "replace": "HIPAA, the Health Insurance Portability and Accountability Act,", "regex": True, "first_only": True},
-    {"find": r"\bWHO\b", "replace": "WHO, the World Health Organization,", "regex": True, "first_only": True},
-    {"find": r"\bFERPA\b", "replace": "FERPA, the Family Educational Rights and Privacy Act,", "regex": True, "first_only": True},
-    {"find": r"\bSTEM\b", "replace": "STEM, Science Technology Engineering and Math,", "regex": True, "first_only": True},
-    {"find": r"\bCEO\b", "replace": "C.E.O.", "regex": True, "first_only": False},
-    {"find": r"\bPhD\b", "replace": "P.H.D.", "regex": True, "first_only": False},
-    {"find": "vs.", "replace": "versus", "regex": False, "first_only": False},
-    {"find": r"\bDr\.", "replace": "Doctor", "regex": True, "first_only": False},
-    {"find": "w/o", "replace": "without", "regex": False, "first_only": False},
-    {"find": r"(?<!\w)w/(?!\w)", "replace": "with", "regex": True, "first_only": False},
+    # ── Titles & honorifics ──────────────────────────────────────────────
+    {"find": r"\bDr\.",   "replace": "Doctor",    "regex": True, "first_only": False, "comment": "title"},
+    {"find": r"\bMr\.",   "replace": "Mister",    "regex": True, "first_only": False, "comment": "title"},
+    {"find": r"\bMrs\.",  "replace": "Missus",    "regex": True, "first_only": False, "comment": "title"},
+    {"find": r"\bMs\.",   "replace": "Miz",       "regex": True, "first_only": False, "comment": "title"},
+    {"find": r"\bProf\.", "replace": "Professor", "regex": True, "first_only": False, "comment": "title"},
+    # ── Common written shorthand ─────────────────────────────────────────
+    {"find": "vs.",       "replace": "versus",         "regex": False, "first_only": False},
+    {"find": "approx.",   "replace": "approximately",  "regex": False, "first_only": False},
+    {"find": "dept.",     "replace": "department",     "regex": False, "first_only": False},
+    {"find": "govt.",     "replace": "government",     "regex": False, "first_only": False},
+    {"find": "w/o",       "replace": "without",        "regex": False, "first_only": False, "comment": "must precede w/"},
+    {"find": r"(?<!\w)w/(?!\w)", "replace": "with",    "regex": True,  "first_only": False},
+    # ── Letter-acronyms TTS often mispronounces as words ─────────────────
+    {"find": r"\bCEO\b",  "replace": "C.E.O.",  "regex": True, "first_only": False, "comment": "spell out"},
+    {"find": r"\bCFO\b",  "replace": "C.F.O.",  "regex": True, "first_only": False, "comment": "spell out"},
+    {"find": r"\bCTO\b",  "replace": "C.T.O.",  "regex": True, "first_only": False, "comment": "spell out"},
+    {"find": r"\bPhD\b",  "replace": "P.H.D.",  "regex": True, "first_only": False, "comment": "spell out"},
+    {"find": r"\bDIY\b",  "replace": "D.I.Y.",  "regex": True, "first_only": False, "comment": "spell out"},
+    {"find": r"\bFAQ\b",  "replace": "F.A.Q.",  "regex": True, "first_only": False, "comment": "spell out"},
 ]
+
+
+def ensure_substitutions_seeded() -> None:
+    """Create substitutions.json with seed entries if it doesn't exist yet."""
+    if SUBSTITUTIONS_FILE.exists():
+        return
+    _save_substitutions(list(_SEED_SUBSTITUTIONS))
 
 
 def _load_substitutions() -> list[dict]:
@@ -424,21 +440,8 @@ def cmd_substitutions(prefs: dict) -> None:
     """Interactive CRUD for ~/.config/mew/substitutions.json."""
     import re as _re
 
+    ensure_substitutions_seeded()
     subs = _load_substitutions()
-
-    # First-run seeding
-    if not SUBSTITUTIONS_FILE.exists():
-        yn = input(
-            "\n  No substitutions file found. Create with example entries? [Y/n]: "
-        ).strip().lower()
-        if yn in ("", "y", "yes"):
-            subs = list(_SEED_SUBSTITUTIONS)
-            _save_substitutions(subs)
-            print(f"  Created {SUBSTITUTIONS_FILE} with {len(subs)} example entries.")
-        else:
-            subs = []
-            _save_substitutions(subs)
-            print(f"  Created empty {SUBSTITUTIONS_FILE}.")
 
     while True:
         print(f"\nSubstitutions ({len(subs)} entries):")
