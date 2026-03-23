@@ -45,7 +45,7 @@ PLAYBACK_OPTIONS = {
     "app":      "Open in default audio player",
 }
 
-SPEED_PRESETS = [1.0, 1.25, 1.5, 2.0]
+SPEED_PRESETS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
 
 DEFAULTS = {"model": "micro", "voice": "Hugo", "playback": "terminal", "speed": 1.0}
 
@@ -159,10 +159,18 @@ def select_speed(prefs: dict) -> float:
     current = prefs.get("speed", DEFAULTS["speed"])
     print(f"\nCurrent default speed: {current}x")
     print()
-    labels = {1.0: "Normal", 1.25: "Slightly faster", 1.5: "Faster", 2.0: "Double speed"}
+    labels = {
+        0.5:  "Half speed",
+        0.75: "Slower",
+        1.0:  "Normal",
+        1.25: "Slightly faster",
+        1.5:  "Faster",
+        2.0:  "Double speed",
+        3.0:  "Triple speed",
+    }
     for i, preset in enumerate(SPEED_PRESETS, 1):
         marker = "  ← current" if preset == current else ""
-        print(f"  {i}. {preset}x{'':<6}  {labels.get(preset, '')}{marker}")
+        print(f"  {i}. {str(preset) + 'x':<6}  {labels.get(preset, '')}{marker}")
     print()
     while True:
         raw = input(
@@ -322,22 +330,30 @@ def _run(args: list[str]) -> None:
         cmd_delete(prefs)
         return
     else:
-        yn = input("\nChange model? [y/N]: ").strip().lower()
-        if yn in ("y", "yes"):
-            cmd_model(prefs)
-        yn = input("\nChange voice? [y/N]: ").strip().lower()
-        if yn in ("y", "yes"):
-            cmd_voice(prefs)
-        yn = input("\nChange playback method? [y/N]: ").strip().lower()
-        if yn in ("y", "yes"):
-            cmd_playback(prefs)
-        yn = input("\nChange default speed? [y/N]: ").strip().lower()
-        if yn in ("y", "yes"):
-            cmd_speed(prefs)
-        yn = input("\nDelete a model? [y/N]: ").strip().lower()
-        if yn in ("y", "yes"):
-            cmd_delete(prefs)
-            return
+        _menu = [
+            ("model",    "Change model",              cmd_model),
+            ("voice",    "Change voice",               cmd_voice),
+            ("playback", "Change playback method",    cmd_playback),
+            ("speed",    "Change default speed",      cmd_speed),
+            ("delete",   "Delete a downloaded model", cmd_delete),
+        ]
+        while True:
+            print("\nWhat would you like to change?\n")
+            for i, (_, label, _fn) in enumerate(_menu, 1):
+                print(f"  {i}. {label}")
+            print()
+            raw = input(f"Choose [1-{len(_menu)}, or Enter to exit]: ").strip()
+            if not raw:
+                return
+            if raw.isdigit() and 1 <= int(raw) <= len(_menu):
+                _, _, fn = _menu[int(raw) - 1]
+                fn(prefs)
+                prefs = load_prefs()
+                print("\nCurrent settings:")
+                cmd_show(prefs)
+            else:
+                print("  Invalid choice.")
+        return
 
     print("\nCurrent settings:")
     cmd_show(load_prefs())
