@@ -305,6 +305,60 @@ class TestAddIntroCommas(unittest.TestCase):
         self.t('Since then, nothing changed.', 'Since then, nothing changed.')
 
 
+# ── _add_breathing_commas ─────────────────────────────────────────────────────
+
+class TestAddBreathingCommas(unittest.TestCase):
+
+    def t(self, text, expected):
+        self.assertEqual(P._add_breathing_commas(text), expected, msg=repr(text))
+
+    def test_long_sentence_and(self):
+        line = 'Counselors should always be aware of the ethical standards that govern their professional practice and they must act in accordance with those guidelines at all times.\n'
+        result = P._add_breathing_commas(line)
+        self.assertIn(', and', result)
+
+    def test_long_sentence_but(self):
+        line = 'The supervisor reviewed all of the documentation from the recent sessions very carefully but the trainee had not completed the required forms.\n'
+        result = P._add_breathing_commas(line)
+        self.assertIn(', but', result)
+
+    def test_short_sentence_unchanged(self):
+        self.t('Students and supervisors must cooperate.\n',
+               'Students and supervisors must cooperate.\n')
+
+    def test_already_has_comma(self):
+        line = 'Counselors should always be aware of the standards, and they must act accordingly at all times during supervision.\n'
+        self.t(line, line)  # comma already present, no change
+
+    def test_no_conjunction(self):
+        line = 'Counselors should always be aware of the ethical standards that govern their practice in all professional settings.\n'
+        self.t(line, line)
+
+
+# ── _wrap_in_quotes ──────────────────────────────────────────────────────────
+
+class TestWrapInQuotes(unittest.TestCase):
+
+    def t(self, text, expected):
+        self.assertEqual(P._wrap_in_quotes(text), expected, msg=repr(text))
+
+    def test_basic_sentence(self):
+        self.t('Some content here.\n', '"Some content here."\n')
+
+    def test_blank_line_skipped(self):
+        self.t('\n', '\n')
+        self.t('', '')
+
+    def test_section_break_skipped(self):
+        self.t('...\n', '...\n')
+
+    def test_already_has_quotes(self):
+        self.t('He said "hello" to them.\n', 'He said "hello" to them.\n')
+
+    def test_strips_surrounding_whitespace(self):
+        self.t('  indented text.  \n', '"indented text."\n')
+
+
 # ── _needs_period ─────────────────────────────────────────────────────────────
 
 class TestNeedsPeriod(unittest.TestCase):
@@ -347,7 +401,7 @@ class TestProcess(unittest.TestCase):
 
     def test_header_stripped_and_period_added(self):
         out = self._run('## Monitoring Supervisees\n')
-        self.assertIn('Monitoring Supervisees.', out)
+        self.assertIn('"Monitoring Supervisees."', out)
         self.assertNotIn('##', out)
 
     def test_section_break_inserted(self):
@@ -356,8 +410,8 @@ class TestProcess(unittest.TestCase):
 
     def test_bullet_numbered(self):
         out = self._run('## S\nPotential Problems:\n\n- Item one\n- Item two\n')
-        self.assertIn('Number one: Item one.', out)
-        self.assertIn('Number two: Item two.', out)
+        self.assertIn('"Number one: Item one."', out)
+        self.assertIn('"Number two: Item two."', out)
 
     def test_numbering_resets_per_label(self):
         out = self._run(
@@ -366,14 +420,14 @@ class TestProcess(unittest.TestCase):
             'Recommendations and Resolutions:\n\n- C\n- D\n'
         )
         lines = out.splitlines()
-        numbered = [l for l in lines if l.startswith('Number')]
-        self.assertEqual(numbered[0], 'Number one: A.')
-        self.assertEqual(numbered[2], 'Number one: C.')
+        numbered = [l for l in lines if 'Number' in l]
+        self.assertEqual(numbered[0], '"Number one: A."')
+        self.assertEqual(numbered[2], '"Number one: C."')
 
     def test_deduplication(self):
         block = '## Section\nsome content\n'
         out = self._run(block + block)
-        self.assertEqual(out.count('Section.'), 1)
+        self.assertEqual(out.count('"Section."'), 1)
 
     def test_acronym_first_use_only(self):
         out = self._run('## S\nThe ACA Code. The ACA again.\n')
@@ -388,11 +442,22 @@ class TestProcess(unittest.TestCase):
 
     def test_unicode_em_dash(self):
         out = self._run('## S\nresult\u2014surprising.\n')
-        self.assertIn('result--surprising.', out)
+        self.assertIn('"result--surprising."', out)
 
     def test_range_expanded(self):
         out = self._run('## S\ncomplete stages 1-3 first.\n')
         self.assertIn('one to three', out)
+
+    def test_lines_wrapped_in_quotes(self):
+        out = self._run('## S\nSome content here.\n')
+        self.assertIn('"Some content here."', out)
+
+    def test_section_break_not_quoted(self):
+        out = self._run('## A\ntext\n## B\ntext\n')
+        # The "..." section break should NOT be wrapped in quotes
+        lines = out.splitlines()
+        ellipsis_lines = [l for l in lines if l.strip() == '...']
+        self.assertTrue(len(ellipsis_lines) > 0, 'section break should remain bare ...')
 
     def test_output_filename(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.md',

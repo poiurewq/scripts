@@ -22,6 +22,8 @@ Transformations applied (in pipeline order):
   8.  Insert section breaks around headings using double blank lines + "..."
         Extra blank line after label lines ("Potential Problems:") for breathing room
   +.  Append period to any line still missing terminal punctuation
+ BC.  Add breathing commas before conjunctions in long (20+ word) sentences
+ QW.  Wrap content lines in double quotes for more expressive TTS prosody
 
 KittenTTS punctuation reference (from engine docs):
   ,    comma    — breathing pause, most important for natural flow
@@ -293,6 +295,46 @@ def _add_intro_commas(line: str) -> str:
     return line
 
 
+# BC. Coordinating conjunctions that benefit from a preceding comma pause.
+_CONJ_PAT = re.compile(r'(?<![,;])\s+\b(and|but|or|so|yet)\b', re.IGNORECASE)
+
+
+def _add_breathing_commas(line: str) -> str:
+    """BC. Insert commas before conjunctions in long sentences for natural pacing.
+
+    KittenTTS treats commas as the primary breathing-pause signal.  In sentences
+    over 20 words, adding a comma before a coordinating conjunction that isn't
+    already preceded by one prevents the flat "breathless run" effect.
+    """
+    s = line.rstrip('\n')
+    if not s.strip() or len(s.split()) <= 20:
+        return line
+    # Find the first eligible conjunction whose preceding clause is 10+ words.
+    for m in _CONJ_PAT.finditer(s):
+        words_before = len(s[:m.start()].split())
+        if words_before >= 10:
+            ins = m.start() + 1          # position after the last char before the space
+            s = s[:ins - 1] + ',' + s[ins - 1:]
+            return s + '\n' if line.endswith('\n') else s
+    return line
+
+
+def _wrap_in_quotes(line: str) -> str:
+    """QW. Wrap content lines in double quotes for more expressive TTS prosody.
+
+    Kokoro-family TTS engines (including KittenTTS) read quoted text with more
+    varied intonation and emphasis, reducing the flat/robotic quality of
+    unquoted input.  Skip blank lines, section breaks, and lines that already
+    contain quotes (to avoid nested-quote confusion).
+    """
+    s = line.strip()
+    if not s or s == '...':
+        return line
+    if '"' in s:
+        return line
+    return f'"{s}"\n'
+
+
 # ── Main processing loop ───────────────────────────────────────────────────────
 
 def process(input_path: str, output_path: 'str | None' = None) -> str:
@@ -344,6 +386,7 @@ def process(input_path: str, output_path: 'str | None' = None) -> str:
         line = _strip_markdown(line)
         line = _expand_acronyms(line, seen_acronyms)
         line = _add_intro_commas(line)
+        line = _add_breathing_commas(line)
 
         if is_bullet:
             content = re.sub(r'^-\s+', '', line.rstrip())
@@ -355,6 +398,8 @@ def process(input_path: str, output_path: 'str | None' = None) -> str:
 
         if _needs_period(line):
             line = line.rstrip() + '.\n'
+
+        line = _wrap_in_quotes(line)
 
         out.append(line)
 
