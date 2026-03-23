@@ -26,8 +26,9 @@ Usage: mew [options] file [file ...]
 Subcommands:
   config           Interactively set model, voice, playback, and speed
   config model     Change model only
-  config voice     Change voice only
-  config playback  Change playback method only
+  config voice           Change voice only
+  config voice --preview Auto-preview current voice, then change
+  config playback        Change playback method only
   config speed     Change default speed only
   config delete    Delete a downloaded model
   config show      Print current settings

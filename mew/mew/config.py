@@ -49,6 +49,8 @@ SPEED_PRESETS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
 
 DEFAULTS = {"model": "micro", "voice": "Hugo", "playback": "terminal", "speed": 1.0}
 
+PREVIEW_TEXT = "Here is a preview of this voice."
+
 
 # ── Prefs I/O ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +84,42 @@ def download_model(alias: str) -> None:
     print(f"  Model '{alias}' ready.")
 
 
+# ── Playback / preview helpers ────────────────────────────────────────────────
+
+def _play_audio(path, method: str) -> None:
+    """Play *path* using the configured playback method."""
+    import subprocess, sys
+    if method == "app":
+        cmd = ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
+        subprocess.Popen(cmd)
+        return
+    cmd = ["afplay", str(path)] if sys.platform == "darwin" else ["aplay", str(path)]
+    try:
+        proc = subprocess.Popen(cmd)
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.kill()
+
+
+def _preview_voice(voice_name: str, prefs: dict) -> None:
+    """Synthesize PREVIEW_TEXT with *voice_name* to a temp WAV and play it."""
+    import os, sys, tempfile
+    from mew import speak
+
+    model    = prefs.get("model",    DEFAULTS["model"])
+    playback = prefs.get("playback", DEFAULTS["playback"])
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        tmp_path = f.name
+    try:
+        print(f"  Previewing '{voice_name}'...", file=sys.stderr)
+        speak.synthesize(PREVIEW_TEXT, tmp_path, model=model, voice=voice_name)
+        _play_audio(tmp_path, playback)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 # ── Interactive selectors ─────────────────────────────────────────────────────
 
 def select_model(prefs: dict) -> str:
@@ -108,19 +146,23 @@ def select_model(prefs: dict) -> str:
         print(f"  Please enter a number (1–{len(MODEL_ALIASES)}) or a model name.")
 
 def select_voice(prefs: dict) -> str:
-    print("\nAvailable voices:")
-    for i, name in enumerate(VOICE_NAMES, 1):
-        code   = VOICE_REGISTRY[name]
-        gender = "female" if code.endswith("-f") else "male"
-        marker = "  ← current" if name == prefs["voice"] else ""
-        print(f"  {i}. {name:<8}  ({gender}){marker}")
-    print()
     while True:
+        print("\nAvailable voices:")
+        for i, name in enumerate(VOICE_NAMES, 1):
+            code   = VOICE_REGISTRY[name]
+            gender = "female" if code.endswith("-f") else "male"
+            marker = "  ← current" if name == prefs["voice"] else ""
+            print(f"  {i}. {name:<8}  ({gender}){marker}")
+        print()
         raw = input(
-            f"Choose voice [1–{len(VOICE_NAMES)}, name, or Enter to keep '{prefs['voice']}']: "
+            f"Choose voice [1–{len(VOICE_NAMES)}, name, p to preview, "
+            f"or Enter to keep '{prefs['voice']}']: "
         ).strip()
         if not raw:
             return prefs["voice"]
+        if raw.lower() == "p":
+            _do_voice_preview(prefs)
+            continue
         if raw.isdigit():
             n = int(raw)
             if 1 <= n <= len(VOICE_NAMES):
@@ -128,6 +170,30 @@ def select_voice(prefs: dict) -> str:
         for name in VOICE_NAMES:
             if name.lower() == raw.lower():
                 return name
+        print(f"  Please enter a number (1–{len(VOICE_NAMES)}), a voice name, or 'p' to preview.")
+
+
+def _do_voice_preview(prefs: dict) -> None:
+    """Prompt for a voice to preview, synthesize, play, return."""
+    while True:
+        praw = input(
+            f"  Preview which voice? [1–{len(VOICE_NAMES)}, name, or Enter to cancel]: "
+        ).strip()
+        if not praw:
+            return
+        preview_name = None
+        if praw.isdigit():
+            n = int(praw)
+            if 1 <= n <= len(VOICE_NAMES):
+                preview_name = VOICE_NAMES[n - 1]
+        if preview_name is None:
+            for name in VOICE_NAMES:
+                if name.lower() == praw.lower():
+                    preview_name = name
+                    break
+        if preview_name is not None:
+            _preview_voice(preview_name, prefs)
+            return
         print(f"  Please enter a number (1–{len(VOICE_NAMES)}) or a voice name.")
 
 
@@ -215,7 +281,11 @@ def cmd_model(prefs: dict) -> None:
     save_prefs(prefs)
     print(f"  Model set to '{chosen}'.")
 
-def cmd_voice(prefs: dict) -> None:
+def cmd_voice(prefs: dict, preview: bool = False) -> None:
+    if preview:
+        current = prefs.get("voice", DEFAULTS["voice"])
+        print(f"  Auto-previewing current voice: {current}")
+        _preview_voice(current, prefs)
     chosen = select_voice(prefs)
     if chosen == prefs["voice"]:
         print(f"  Voice unchanged ('{chosen}').")
@@ -321,7 +391,7 @@ def _run(args: list[str]) -> None:
     if subcmd == "model":
         cmd_model(prefs)
     elif subcmd == "voice":
-        cmd_voice(prefs)
+        cmd_voice(prefs, preview="--preview" in args[1:])
     elif subcmd == "playback":
         cmd_playback(prefs)
     elif subcmd == "speed":
