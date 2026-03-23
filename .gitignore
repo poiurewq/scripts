@@ -3,5 +3,5 @@
 **/build/
 **/*.egg-info/
 **/__pycache__/
-**/manual-testing/
+**/example/
 **/.DS_Store
