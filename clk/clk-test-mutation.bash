@@ -323,6 +323,28 @@ test_extend_tag_active_session_message() {
     clk_test__assert_output_contains "currently active" "$CLK_SCRIPT" extend work at 2026-01-01T11:00:00
 }
 
+test_extend_by_shifts_end_time() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" extend by 30 >/dev/null 2>&1
+    # End should now be 10:30, length should be 1h30m = 5400s
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:30:00	work	5400	0'
+}
+
+test_extend_by_with_tag() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out play at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" extend work by 15 >/dev/null 2>&1
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local work_end play_end
+    work_end="$(grep 'work' "$log_file" | cut -d"$(printf '\t')" -f3)"
+    play_end="$(grep 'play' "$log_file" | cut -d"$(printf '\t')" -f3)"
+    clk_test__assert_equals "2026-01-01T10:15:00" "$work_end" "extend by tag shifts correct record" &&
+    clk_test__assert_equals "2026-01-01T11:00:00" "$play_end" "extend by leaves other records unchanged"
+}
+
 #####################################################################
 # Tests — clk remove (integration)
 #####################################################################
@@ -624,6 +646,8 @@ CLK_TESTS_MUTATION=(
     test_extend_tag_no_done_records
     test_extend_tag_active_session_errors
     test_extend_tag_active_session_message
+    test_extend_by_shifts_end_time
+    test_extend_by_with_tag
 
     # clk remove (integration)
     test_remove_basic

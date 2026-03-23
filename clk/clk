@@ -44,7 +44,7 @@ clk [help]
     add | a <tag> for <minutes> [minus <minutes> | at <timestamp>] [on <description>]
     add | a <minutes> [to <tag>]
     add-break | ab <minutes> [to <tag>]
-    extend [<tag>] [minus <minutes> | at <timestamp>]
+    extend [<tag>] [minus <minutes> | at <timestamp> | by <minutes>]
     remove | pop
     pause | p [<tag>] [minus <minutes> | at <timestamp>]
     resume | r [<tag>] [minus <minutes> | at <timestamp>]
@@ -1233,10 +1233,10 @@ clk_do_add_break() {
 }
 
 # --- clk_do_extend ---
-# clk extend [minus <minutes> | at <timestamp>]
+# clk extend [minus <minutes> | at <timestamp> | by <minutes>]
 # Extends the last completed (done) record's end time.
 clk_do_extend() {
-    local tag="$1" at_ts="$2" minus_val="$3"
+    local tag="$1" at_ts="$2" minus_val="$3" by_val="$4"
 
     # Find the last done record (optionally filtered by tag)
     local last_done_lineno
@@ -1267,15 +1267,19 @@ clk_do_extend() {
     local break_secs="${CLK_F6:-0}"
     local description="$CLK_F8"
 
-    local new_end_ts
-    new_end_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
-
-    local old_end_epoch new_end_epoch
+    local old_end_epoch
     old_end_epoch="$(clk__to_epoch "$old_end_ts")"
-    new_end_epoch="$(clk__to_epoch "$new_end_ts")"
 
-    if [ "$new_end_epoch" -lt "$old_end_epoch" ]; then
-        clk__die 1 "New end time $(clk__fmt_ts_display "$new_end_ts") is before old end time $(clk__fmt_ts_display "$old_end_ts"). Cannot shrink a session with extend."
+    local new_end_ts new_end_epoch
+    if [ -n "$by_val" ]; then
+        new_end_epoch=$(( old_end_epoch + by_val * 60 ))
+        new_end_ts="$(clk__from_epoch "$new_end_epoch")"
+    else
+        new_end_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
+        new_end_epoch="$(clk__to_epoch "$new_end_ts")"
+        if [ "$new_end_epoch" -lt "$old_end_epoch" ]; then
+            clk__die 1 "New end time $(clk__fmt_ts_display "$new_end_ts") is before old end time $(clk__fmt_ts_display "$old_end_ts"). Cannot shrink a session with extend."
+        fi
     fi
 
     local extension_secs=$(( new_end_epoch - old_end_epoch ))
@@ -2393,10 +2397,11 @@ extend)
     shift
 
     # Tag is optional — peek at first arg
-    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ]; then
+    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ] && [ "$1" != "by" ]; then
         clk_tag="$1"; shift
     fi
 
+    clk_by_minutes=""
     while [ $# -gt 0 ]; do
         case "$1" in
             minus)
@@ -2409,13 +2414,18 @@ extend)
                 clk__validate_timestamp "$2"
                 clk_at_timestamp="$CLK_VALIDATED_TS"; shift 2
                 ;;
+            by)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'by'."
+                clk__validate_positive_int "$2" "<minutes> after 'by'"
+                clk_by_minutes="$2"; shift 2
+                ;;
             *)
                 clk__die 1 "Unknown option '$1' after 'clk extend'."
                 ;;
         esac
     done
 
-    clk_do_extend "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes"
+    clk_do_extend "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_by_minutes"
     ;;
 
 remove|pop)
