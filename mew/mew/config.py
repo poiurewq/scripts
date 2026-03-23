@@ -40,7 +40,14 @@ VOICE_REGISTRY = {
 }
 VOICE_NAMES = list(VOICE_REGISTRY.keys())
 
-DEFAULTS = {"model": "micro", "voice": "Hugo"}
+PLAYBACK_OPTIONS = {
+    "terminal": "Play in terminal via afplay/aplay",
+    "app":      "Open in default audio player",
+}
+
+SPEED_PRESETS = [1.0, 1.25, 1.5, 2.0]
+
+DEFAULTS = {"model": "micro", "voice": "Hugo", "playback": "terminal", "speed": 1.0}
 
 
 # ── Prefs I/O ─────────────────────────────────────────────────────────────────
@@ -124,15 +131,65 @@ def select_voice(prefs: dict) -> str:
         print(f"  Please enter a number (1–{len(VOICE_NAMES)}) or a voice name.")
 
 
+def select_playback(prefs: dict) -> str:
+    current = prefs.get("playback", DEFAULTS["playback"])
+    options = list(PLAYBACK_OPTIONS.items())
+    print(f"\nCurrent playback method: {current} ({PLAYBACK_OPTIONS.get(current, '?')})")
+    print()
+    for i, (key, desc) in enumerate(options, 1):
+        marker = "  ← current" if key == current else ""
+        print(f"  {i}. {key:<10}  {desc}{marker}")
+    print()
+    while True:
+        raw = input(
+            f"Choose [1-{len(options)}, or Enter to keep '{current}']: "
+        ).strip()
+        if not raw:
+            return current
+        if raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(options):
+                return options[n - 1][0]
+        if raw in PLAYBACK_OPTIONS:
+            return raw
+        print(f"  Please enter a number (1–{len(options)}) or a playback method name.")
+
+
+def select_speed(prefs: dict) -> float:
+    current = prefs.get("speed", DEFAULTS["speed"])
+    print(f"\nCurrent default speed: {current}x")
+    print()
+    labels = {1.0: "Normal", 1.25: "Slightly faster", 1.5: "Faster", 2.0: "Double speed"}
+    for i, preset in enumerate(SPEED_PRESETS, 1):
+        marker = "  ← current" if preset == current else ""
+        print(f"  {i}. {preset}x{'':<6}  {labels.get(preset, '')}{marker}")
+    print()
+    while True:
+        raw = input(
+            f"Choose [1-{len(SPEED_PRESETS)}, or Enter to keep '{current}x']: "
+        ).strip()
+        if not raw:
+            return current
+        if raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(SPEED_PRESETS):
+                return SPEED_PRESETS[n - 1]
+        print(f"  Please enter a number (1–{len(SPEED_PRESETS)}).")
+
+
 # ── Subcommand implementations ────────────────────────────────────────────────
 
 def cmd_show(prefs: dict) -> None:
-    model = prefs.get("model", DEFAULTS["model"])
-    voice = prefs.get("voice", DEFAULTS["voice"])
+    model    = prefs.get("model",    DEFAULTS["model"])
+    voice    = prefs.get("voice",    DEFAULTS["voice"])
+    playback = prefs.get("playback", DEFAULTS["playback"])
+    speed    = prefs.get("speed",    DEFAULTS["speed"])
     code  = VOICE_REGISTRY.get(voice, voice)
     repo  = MODEL_REGISTRY.get(model, {}).get("repo", "unknown")
-    print(f"model : {model}  ({repo})")
-    print(f"voice : {voice}  ({code})")
+    print(f"model    : {model}  ({repo})")
+    print(f"voice    : {voice}  ({code})")
+    print(f"playback : {playback}  ({PLAYBACK_OPTIONS.get(playback, '?')})")
+    print(f"speed    : {speed}x")
 
 def cmd_model(prefs: dict) -> None:
     chosen = select_model(prefs)
@@ -158,6 +215,24 @@ def cmd_voice(prefs: dict) -> None:
     prefs["voice"] = chosen
     save_prefs(prefs)
     print(f"  Voice set to '{chosen}'.")
+
+def cmd_playback(prefs: dict) -> None:
+    chosen = select_playback(prefs)
+    if chosen == prefs.get("playback", DEFAULTS["playback"]):
+        print(f"  Playback method unchanged ('{chosen}').")
+        return
+    prefs["playback"] = chosen
+    save_prefs(prefs)
+    print(f"  Playback method set to '{chosen}'.")
+
+def cmd_speed(prefs: dict) -> None:
+    chosen = select_speed(prefs)
+    if chosen == prefs.get("speed", DEFAULTS["speed"]):
+        print(f"  Speed unchanged ({chosen}x).")
+        return
+    prefs["speed"] = chosen
+    save_prefs(prefs)
+    print(f"  Default speed set to {chosen}x.")
 
 def cmd_delete(prefs: dict) -> None:
     downloaded = [a for a in MODEL_ALIASES if is_downloaded(a)]
@@ -239,6 +314,10 @@ def _run(args: list[str]) -> None:
         cmd_model(prefs)
     elif subcmd == "voice":
         cmd_voice(prefs)
+    elif subcmd == "playback":
+        cmd_playback(prefs)
+    elif subcmd == "speed":
+        cmd_speed(prefs)
     elif subcmd == "delete":
         cmd_delete(prefs)
         return
@@ -249,6 +328,12 @@ def _run(args: list[str]) -> None:
         yn = input("\nChange voice? [y/N]: ").strip().lower()
         if yn in ("y", "yes"):
             cmd_voice(prefs)
+        yn = input("\nChange playback method? [y/N]: ").strip().lower()
+        if yn in ("y", "yes"):
+            cmd_playback(prefs)
+        yn = input("\nChange default speed? [y/N]: ").strip().lower()
+        if yn in ("y", "yes"):
+            cmd_speed(prefs)
         yn = input("\nDelete a model? [y/N]: ").strip().lower()
         if yn in ("y", "yes"):
             cmd_delete(prefs)

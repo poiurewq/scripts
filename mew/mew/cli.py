@@ -11,7 +11,7 @@ from mew import __version__
 
 _SYNOPSIS = """\
 Usage: mew [options] file [file ...]
-       mew config [model|voice|show]
+       mew config [model|voice|playback|speed|show]
 
   Convert study notes to speech via KittenTTS.
 
@@ -19,16 +19,18 @@ Type 'mew --help' for full usage."""
 
 _HELP = """\
 Usage: mew [options] file [file ...]
-       mew config [model|voice|show]
+       mew config [model|voice|playback|speed|show]
 
   Preprocess note files and synthesize them to speech via KittenTTS.
 
 Subcommands:
-  config          Interactively set model and voice preferences
-  config model    Change model only
-  config voice    Change voice only
-  config delete   Delete a downloaded model
-  config show     Print current model and voice settings
+  config           Interactively set model, voice, playback, and speed
+  config model     Change model only
+  config voice     Change voice only
+  config playback  Change playback method only
+  config speed     Change default speed only
+  config delete    Delete a downloaded model
+  config show      Print current settings
 
 Options:
   -h, --help           Show this help message and exit
@@ -38,12 +40,32 @@ Options:
   -n, --dry-run        Preview preprocessed text + time estimate, no files
   -v, --voice VOICE    One-off voice override (does not change config)
   -m, --model MODEL    One-off model override (does not change config)
+  -P, --play           Auto-play audio after synthesis
+  -s, --speed SPEED    Playback speed multiplier 0.5–3.0 (default: 1.0)
 
 Output (default):   file.mew.wav
 Output (-i):        file.mew.md
 Input  (-p):        expects an already-preprocessed file
 
 Run 'man mew' for full documentation."""
+
+
+def _play_audio(path: Path, method: str) -> None:
+    """Play *path* using the configured playback method."""
+    import subprocess
+    if method == "app":
+        cmd = ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
+        subprocess.Popen(cmd)
+        return
+    # terminal (blocking)
+    cmd = ["afplay", str(path)] if sys.platform == "darwin" else ["aplay", str(path)]
+    print("  \u25b6 Playing...", file=sys.stderr)
+    try:
+        proc = subprocess.Popen(cmd)
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.kill()
+        sys.exit(0)
 
 
 def _deconflict(path: Path) -> Path:
@@ -102,6 +124,8 @@ def main() -> None:
     mode = "default"  # "default" | "intermediate" | "preprocessed" | "dry-run"
     voice_override: str | None = None
     model_override: str | None = None
+    play: bool = False
+    speed_override: float | None = None
     positional: list[str] = []
     i = 0
     while i < len(args):
@@ -138,6 +162,24 @@ def main() -> None:
             model_override = args[i + 1]
             i += 2
             continue
+        if a in ("-P", "--play"):
+            play = True
+            i += 1
+            continue
+        if a in ("-s", "--speed"):
+            if i + 1 >= len(args):
+                print("mew: --speed requires an argument", file=sys.stderr)
+                sys.exit(1)
+            try:
+                speed_override = float(args[i + 1])
+            except ValueError:
+                print(f"mew: --speed requires a number, got: {args[i + 1]!r}", file=sys.stderr)
+                sys.exit(1)
+            if not (0.5 <= speed_override <= 3.0):
+                print(f"mew: --speed must be between 0.5 and 3.0, got: {speed_override}", file=sys.stderr)
+                sys.exit(1)
+            i += 2
+            continue
         if a == "--":
             positional += args[i + 1:]
             break
@@ -157,12 +199,17 @@ def main() -> None:
             flags_present.add("-p")
         elif a in ("-n", "--dry-run"):
             flags_present.add("-n")
+        elif a in ("-P", "--play"):
+            flags_present.add("-P")
 
     if "-i" in flags_present and "-p" in flags_present:
         print("mew: -i and -p are mutually exclusive", file=sys.stderr)
         sys.exit(1)
     if "-n" in flags_present and "-p" in flags_present:
         print("mew: --dry-run and -p are mutually exclusive", file=sys.stderr)
+        sys.exit(1)
+    if "-P" in flags_present and "-i" in flags_present:
+        print("mew: --play and -i are mutually exclusive (no audio is produced with -i)", file=sys.stderr)
         sys.exit(1)
 
     # ── validate overrides ────────────────────────────────────────────────────
@@ -197,6 +244,12 @@ def main() -> None:
         print(_SYNOPSIS)
         return
 
+    # ── resolve speed and playback from prefs (with CLI overrides) ────────────
+    from mew.config import load_prefs
+    _prefs = load_prefs()
+    speed: float = speed_override if speed_override is not None else _prefs.get("speed", 1.0)
+    playback_method: str = _prefs.get("playback", "terminal")
+
     # ── process files ─────────────────────────────────────────────────────────
     multi = len(positional) > 1
     had_error = False
@@ -220,9 +273,9 @@ def main() -> None:
             elif mode == "intermediate":
                 _do_intermediate(input_path, stem)
             elif mode == "preprocessed":
-                _do_preprocessed(input_path, stem, model_override, voice_override)
+                _do_preprocessed(input_path, stem, model_override, voice_override, speed, play, playback_method)
             else:
-                _do_default(input_path, stem, model_override, voice_override)
+                _do_default(input_path, stem, model_override, voice_override, speed, play, playback_method)
         except Exception as exc:
             print(f"mew: error processing {filepath}: {exc}", file=sys.stderr)
             had_error = True
@@ -294,6 +347,9 @@ def _do_preprocessed(
     stem: Path,
     model_override: str | None,
     voice_override: str | None,
+    speed: float = 1.0,
+    play: bool = False,
+    playback_method: str = "terminal",
 ) -> None:
     """Skip preprocessing, synthesize directly."""
     from mew import speak
@@ -303,8 +359,11 @@ def _do_preprocessed(
         str(out_wav),
         model=model_override,
         voice=voice_override,
+        speed=speed,
     )
     print(out_wav)
+    if play:
+        _play_audio(out_wav, playback_method)
 
 
 def _do_default(
@@ -312,6 +371,9 @@ def _do_default(
     stem: Path,
     model_override: str | None,
     voice_override: str | None,
+    speed: float = 1.0,
+    play: bool = False,
+    playback_method: str = "terminal",
 ) -> None:
     """Preprocess + synthesize (default mode)."""
     from mew import preprocess, speak
@@ -330,8 +392,11 @@ def _do_default(
             str(out_wav),
             model=model_override,
             voice=voice_override,
+            speed=speed,
         )
     finally:
         os.unlink(tmp_path)
 
     print(out_wav)
+    if play:
+        _play_audio(out_wav, playback_method)

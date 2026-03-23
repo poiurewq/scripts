@@ -104,6 +104,27 @@ def _progress_spinner(elapsed: float) -> str:
     return f"\r  {frame} Synthesizing... {elapsed:.0f}s"
 
 
+# ── Speed adjustment ─────────────────────────────────────────────────────────
+
+def adjust_speed(samples, speed: float):
+    """Resample audio to change playback speed without pitch correction.
+
+    speed > 1.0: faster (shorter audio)
+    speed < 1.0: slower (longer audio)
+
+    Uses numpy linear interpolation — no scipy needed. Pitch shifts
+    proportionally with speed, which sounds natural for speech.
+    """
+    import numpy as np
+    if speed == 1.0:
+        return samples
+    old_len = len(samples)
+    new_len = int(old_len / speed)
+    old_indices = np.arange(old_len)
+    new_indices = np.linspace(0, old_len - 1, new_len)
+    return np.interp(new_indices, old_indices, samples)
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 def synthesize(
@@ -112,11 +133,12 @@ def synthesize(
     *,
     model: str | None = None,
     voice: str | None = None,
+    speed: float = 1.0,
 ) -> None:
     """Synthesize *text* and write a WAV file to *output_path*.
 
-    Optional *model* and *voice* override the values from prefs.json for
-    this invocation only (they do NOT write to prefs.json).
+    Optional *model*, *voice*, and *speed* override the values from
+    prefs.json for this invocation only (they do NOT write to prefs.json).
 
     Heavy imports (kittentts, soundfile) are deferred to this function so
     that importing the module does not load the TTS engine.
@@ -185,5 +207,8 @@ def synthesize(
     if error:
         raise error[0]
 
-    sf.write(output_path, result[0], 24_000)
+    audio = result[0]
+    if speed != 1.0:
+        audio = adjust_speed(audio, speed)
+    sf.write(output_path, audio, 24_000)
     _append_log(phonemes, elapsed, model_alias)
