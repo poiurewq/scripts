@@ -1,125 +1,27 @@
 #!/usr/bin/env zsh
 
+#######################################################################
+# Display formatting
+#######################################################################
+
 bf=$(tput bold)
 nf=$(tput sgr0)
 uf=$(tput smul)
 
-nt_syn_1="${bf}nt${nf}"
-nt_syn_2="${bf}-h${nf}|${bf}h${nf}"
-nt_syn_3="${bf}n${nf} [${uf}title${nf}]"
-nt_syn_4="${bf}l${nf} [${uf}title${nf} | ${bf}n${nf}]" 
-nt_syn_5="${uf}num${nf} [...]" 
-nt_syn_6="${bf}r${nf} ${uf}num${nf} ${uf}title${nf}"
-nt_syn_7="${bf}e${nf} ${uf}editor${nf}" 
-nt_syn_8="${bf}R${nf}"
-nt_syn_9="${bf}t${nf}"
-nt_syn_10="${bf}rn${nf} ${uf}n${nf} ${uf}m${nf}"
-nt_syn_11="${bf}a${nf}|${bf}ar${nf}"
+#######################################################################
+# Constants
+#######################################################################
 
 nt_template_name='nt_template'
+if [ -z "$NT_EDITOR" ]; then NT_EDITOR='vim'; fi
 
-read -d '' NT_MAN_VAR << NT_MANUAL
-${bf}NAME${nf}
-     ${nt_syn_1} - simple notes maintainer
+# Syntax references used in error messages
+nt_syn_6="${bf}r${nf} ${uf}num${nf} ${uf}title${nf}"
+nt_syn_10="${bf}rn${nf} ${uf}n${nf} ${uf}m${nf}"
 
-${bf}SYNOPSIS${nf}
-     ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_8}] [${nt_syn_9}] [${nt_syn_10}] [${nt_syn_11}]
-
-${bf}DESCRIPTION${nf}
-     The ${nt_syn_1} utility initializes and edits documents, ideal for building an indexed list of notes documents.
-
-     By default, the file extension for each new document is the extension of the last numbered document in the folder. If the folder has no numbered documents, ${nt_syn_1} defaults to ${bf}.md${nf}. If the folder has a template file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then each new document uses this template's content and ${uf}extension${nf}. The template supports the following macros: ${bf}%DATE${nf} is replaced with today's date (yyyy-mm-dd), and ${bf}%TITLE${nf} is replaced with the title passed to ${bf}n${nf}.
-
-     If ${nt_syn_1} is given a ${uf}title${nf} when creating or renaming a doc, the delimiter (underscores or hyphens) between the numeric index and the title portion of the file name will match the format of the last doc, defaulting to a single hyphen.
-
-     As a syntactic sugar, you can pass in multiple numeric indices, as well as ${nt_syn_8} and/or ${nt_syn_9} in a row to open the specified files all at once.
-
-     Options include:
-
-     ${nt_syn_2}
-             Print help page.
-     
-     ${nt_syn_3}
-             Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by a delimiter and a hyphenated version of the ${uf}title${nf}, with the same extension as the previous document (or .md), then open it in the preferred editor. If the current directory contains the file ${bf}${nt_template_name}${nf}.${uf}extension${nf}, then the new document uses this template's content and ${uf}extension${nf} instead.
-
-     ${nt_syn_4}
-             Open the document with the latest numeric index. A numeric index must be a 1-to-3-digit positive integer. If ${uf}title${nf} is provided, rename this document to ${uf}title${nf} without opening the document. Alternatively, if the optional argument is ${bf}n${nf}, ${bf}nt${nf} simply returns the numeric index of the last detected note in the current directory.
-
-     ${nt_syn_6}
-             Open the existing document(s) with the ${uf}num${nf} index (indices).
-
-     ${nt_syn_6}
-             Rename the existing document with the ${uf}num${nf} index to ${uf}title${nf} without opening the document.
-
-     ${nt_syn_10}
-             Starting from document index ${uf}n${nf}, renumber the consecutive run of documents so that ${uf}n${nf} becomes ${uf}m${nf}, ${uf}n${nf}+1 becomes ${uf}m${nf}+1, and so on, until the end of the consecutive sequence. Documents are renamed in the correct order to avoid collisions. Fails if any target index is already occupied by a document outside the source range.
-
-     ${nt_syn_11}
-             Show an activity summary of indexed documents grouped by last-modified month. ${bf}a${nf} searches the current directory only; ${bf}ar${nf} searches all subdirectories as well.
-
-     ${nt_syn_7}
-             Set the ${uf}editor${nf} that ${bf}nt${nf} will use for the current session. The ${uf}editor${nf} can be a command-line command or an application. If ${uf}editor${nf} name contains multiple words, single-quote the name. In effect, this option sets the NT_EDITOR environment variable. The default editor is vim. This option must be called by sourcing rather than executing the ${bf}nt${nf} script, as follows:
-             
-             $ source ${(%):-%x} e ${uf}editor${nf}
-
-     ${nt_syn_8}
-             Open the README.md (case-insensitive) document in the current working directory, if there is any.
-
-     ${nt_syn_9}
-             Open the ${bf}${nt_template_name}${nf} document in the current working directory, if there is any.
-
-${bf}ENVIRONMENT${nf}
-     NT_EDITOR  By default, the editor is set to vim. 
-
-${bf}EXIT STATUS${nf}
-     The ${bf}nt${nf} utility exits with one of the following values:
-
-     0     Document, either new or existing, was successfully opened.
-     1     Document, either new or existing, could not be opened.
-     >1    Another error occurred.
-NT_MANUAL
-
-last_num_getter() {
-	maybe_last_num="$(ls -1 | sed 's/[^0-9].*//' | sort -n | awk 'END{print}')"
-	if [[ $maybe_last_num =~ ^[0-9]+$ ]]; then
-		echo "${maybe_last_num}"
-	else
-		echo 0
-	fi
-}
-
-get_delimiter() {
-	# Returns the delimiter string between numeric index and title.
-	# e.g., "001__foo.md" -> "__", "001-foo.md" -> "-", "001.md" -> ""
-	name="$1"
-	if [[ "$name" =~ ^[0-9]+(_+) ]]; then
-		printf '%s' "${match[1]}"
-	elif [[ "$name" =~ ^[0-9]+(-+) ]]; then
-		printf '%s' "${match[1]}"
-	fi
-}
-
-last_ext_getter() {
-	ls -1 | tr '_-.' ' ' | sort -n -k1 | tail -1 | tr ' ' '\n' | tail -1
-}
-
-deprecated_update_modified() {
-	doc_list=("$@")
-	doc_count="${#doc_list[@]}"
-	doc_index=0
-	while [ "${doc_index}" -lt "${doc_count}" ]; do
-		doc="${doc_list[@]:${doc_index}:1}"
-		if [ -f "${doc}" ]; then
-			mod_time="$(date -r "${doc}" '+%Y%m%d%H%M%S')"
-			sed -i.bak "s/^modified=[0-9]*/modified=${mod_time}/" "${doc}" \
-				&& rm "${doc}.bak" \
-				&& printf "${doc} last modified at ${mod_time}\n"
-		else
-			printf "${doc} is no longer available.\n"
-		fi
-		doc_index=$(( doc_index + 1 ))
-	done
-}
+#######################################################################
+# Utility functions
+#######################################################################
 
 nt_open() {
 	app_or_cmd="$1"
@@ -135,317 +37,414 @@ nt_open() {
 		fi
 	else
 		case "$app_or_cmd" in
-		vi|vim) vim -p "${file_list[@]}" ;; # -p to open all files in tabbed mode
+		vi|vim) vim -p "${file_list[@]}" ;;
 		*) "${app_or_cmd}" "${file_list[@]}" ;;
 		esac
 	fi
 }
 
-if [ -z "$NT_EDITOR" ]; then NT_EDITOR='vim'; fi
-	
+# Returns the numeric index (as integer string) of the last indexed
+# document, or 0 if none exist.
+last_num_getter() {
+	maybe_last_num="$(ls -1 | sed 's/[^0-9].*//' | sort -n | awk 'END{print}')"
+	if [[ $maybe_last_num =~ ^[0-9]+$ ]]; then
+		echo "${maybe_last_num}"
+	else
+		echo 0
+	fi
+}
+
+# Returns the filename of the last indexed document (highest numeric
+# index). Uses zsh glob qualifiers for numeric sorting. Returns 1 if
+# no indexed documents exist.
+last_indexed_doc() {
+	local -a docs
+	docs=( [0-9]##*(N.on) )
+	if [[ ${#docs[@]} -eq 0 ]]; then
+		return 1
+	fi
+	printf '%s' "${docs[-1]}"
+}
+
+# Returns the delimiter string between the numeric index and title.
+# e.g. "001__foo.md" -> "__", "001-foo.md" -> "-", "001.md" -> ""
+get_delimiter() {
+	local name="$1"
+	if [[ "$name" =~ ^[0-9]+(_+) ]]; then
+		printf '%s' "${match[1]}"
+	elif [[ "$name" =~ ^[0-9]+(-+) ]]; then
+		printf '%s' "${match[1]}"
+	fi
+}
+
+# Returns the file extension (everything after the last dot, if
+# non-numeric). Returns 1 if no valid extension found.
+get_extension() {
+	local filename="$1"
+	local ext="${filename##*.}"
+	if [[ "$ext" == "$filename" ]] || [[ "$ext" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+	printf '%s' "$ext"
+}
+
+# Returns the matching filename for a given numeric index. Prints an
+# error to stderr and returns 1 if not found.
+find_doc_by_index() {
+	local padded
+	padded="$( printf '%03d' "$1" )"
+	local -a docs
+	docs=( ${padded}*(N.) )
+	if [[ ${#docs[@]} -eq 0 ]]; then
+		printf 'File with index %s not found.\n' "$padded" >&2
+		return 1
+	fi
+	printf '%s' "${docs[1]}"
+}
+
+# Consumes all arguments as a title. Sets globals:
+#   _consume_title_raw    — space-separated title
+#   _consume_title_result — hyphen-joined title
+consume_title() {
+	_consume_title_raw=""
+	_consume_title_result=""
+	local first=1
+	for arg in "$@"; do
+		if [[ $first -eq 1 ]]; then
+			_consume_title_raw="$arg"
+			first=0
+		else
+			_consume_title_raw+=" $arg"
+		fi
+	done
+	_consume_title_result="${_consume_title_raw// /-}"
+}
+
+# Composes a filename: build_filename <index> <delimiter> <title> <extension>
+# Delimiter defaults to "-" when title is non-empty and delimiter is empty.
+build_filename() {
+	local index="$1" delimiter="$2" title="$3" extension="$4"
+	local result="$index"
+	if [[ -n "$title" ]]; then
+		if [[ -z "$delimiter" ]]; then
+			delimiter="-"
+		fi
+		result+="${delimiter}${title}"
+	fi
+	if [[ -n "$extension" ]]; then
+		result+=".${extension}"
+	fi
+	printf '%s' "$result"
+}
+
+#######################################################################
+# Subcommand functions
+#######################################################################
+
+cmd_help() {
+	printf 'usage: nt [h] [n [title]] [l [title|n]] [num...] [r num title] [rn n m] [a|ar] [e editor] [R] [t]\n\n'
+	printf '  nt                    print usage\n'
+	printf '  nt h|-h               print this help\n'
+	printf '  nt n [title]          create new indexed document\n'
+	printf '  nt l [title|n]        open last doc; rename if title; print index if n\n'
+	printf '  nt <num> [num...]     open document(s) by numeric index\n'
+	printf '  nt r <num> <title>    rename document by index\n'
+	printf '  nt rn <n> <m>         renumber consecutive run starting at n to m\n'
+	printf '  nt a|ar               activity summary (ar: recursive)\n'
+	printf '  nt e <editor>         set editor for this session\n'
+	printf '  nt R                  open README.md\n'
+	printf '  nt t                  open template file\n'
+}
+
+cmd_new() {
+	local new_num_raw new_num
+	new_num_raw="$(last_num_getter)"
+	new_num_raw="$(( new_num_raw + 1 ))"
+	new_num="$( printf '%03d' "${new_num_raw}" )"
+
+	# Fetch last doc once for delimiter and extension inheritance
+	local last_doc
+	last_doc="$(last_indexed_doc 2>/dev/null)" || last_doc=""
+
+	local new_doc new_title_raw new_title
+	if [[ "$#" -gt 0 ]]; then
+		consume_title "$@"
+		new_title_raw="$_consume_title_raw"
+		new_title="$_consume_title_result"
+		local last_delim
+		last_delim="$(get_delimiter "$last_doc")"
+		if [[ -z "$last_delim" ]]; then
+			new_doc="${new_num}-${new_title}"
+		else
+			new_doc="${new_num}${last_delim}${new_title}"
+		fi
+	else
+		new_doc="${new_num}"
+		new_title_raw=""
+	fi
+
+	local template_count template_file
+	template_count="$( find . -name "${nt_template_name}.*" -maxdepth 1 | wc -l )"
+	if [ "$template_count" -eq 1 ]; then
+		template_file="$( find . -name "${nt_template_name}.*" -maxdepth 1 )"
+		new_doc+=".${template_file##*.}"
+		sed -e "s|%DATE|$(date '+%Y-%m-%d')|g" \
+			-e "s|%TITLE|${new_title_raw}|g" \
+			"$template_file" >> "$new_doc"
+	elif [ "$template_count" -gt 1 ]; then
+		printf "Too many nt template files in this folder.\n"
+		exit 5
+	else
+		local last_ext
+		if [ "${new_num_raw}" -eq 1 ]; then
+			last_ext="md"
+		else
+			last_ext="$(get_extension "$last_doc" 2>/dev/null)" || last_ext="md"
+		fi
+		new_doc+=".${last_ext}"
+		local new_time
+		new_time="$(date '+%Y.%m.%d-%H:%M')"
+		printf "created=${new_time}\n" >> "${new_doc}"
+		printf '\n\n\n' >> "${new_doc}"
+	fi
+	files_to_open+=( "${new_doc}" )
+}
+
+cmd_last() {
+	local last_num last_doc
+	last_num="$(last_num_getter)"
+	if [ "${last_num}" -ne 0 ]; then
+		if [ "$1" = 'n' ]; then
+			printf '%d\n' "${last_num}"
+			exit 0
+		fi
+		last_doc="$(last_indexed_doc)"
+		if [ "$#" -gt 0 ]; then
+			# rename the last doc
+			consume_title "$@"
+			local new_title="$_consume_title_result"
+			local last_num_padded last_delim last_ext new_doc
+			last_num_padded="$( printf '%03d' "${last_num}" )"
+			last_delim="$(get_delimiter "$last_doc")"
+			last_ext="$(get_extension "$last_doc" 2>/dev/null)" || last_ext="${last_doc##*.}"
+			if [ -z "$last_delim" ]; then
+				new_doc="${last_num_padded}-${new_title}.${last_ext}"
+			else
+				new_doc="${last_num_padded}${last_delim}${new_title}.${last_ext}"
+			fi
+			\mv "${last_doc}" "${new_doc}" \
+				&& printf '%s renamed to %s\n' "${last_doc}" "${new_doc}"
+		else
+			files_to_open+=( "${last_doc}" )
+		fi
+	else
+		printf 'No indexed document found.\n'
+		exit 2
+	fi
+}
+
+cmd_open() {
+	local doc
+	doc="$(find_doc_by_index "$1")" || exit 2
+	files_to_open+=( "$doc" )
+}
+
+cmd_rename() {
+	if [ "$#" -lt 2 ]; then
+		printf 'usage: %s\n' "${nt_syn_6}"
+		exit 1
+	fi
+	local try_num try_doc try_doc_ext new_title new_doc try_delim
+	try_num="$( printf '%03d' "$1" )"
+	try_doc="$( find * -name "${try_num}*" -maxdepth 0 2>/dev/null )"
+	if [ -f "${try_doc}" ]; then
+		shift
+		consume_title "$@"
+		new_title="$_consume_title_result"
+		try_doc_ext="$(get_extension "$try_doc" 2>/dev/null)" || try_doc_ext="${try_doc##*.}"
+		try_delim="$(get_delimiter "$try_doc")"
+		if [ -z "$try_delim" ]; then
+			new_doc="${try_num}-${new_title}.${try_doc_ext}"
+		else
+			new_doc="${try_num}${try_delim}${new_title}.${try_doc_ext}"
+		fi
+		\mv "${try_doc}" "${new_doc}" \
+			&& printf '%s renamed to %s\n' "${try_doc}" "${new_doc}"
+	else
+		printf 'File number %s not found.\n' "${try_num}"
+		exit 2
+	fi
+}
+
+cmd_renumber() {
+	if [ "$#" -lt 2 ]; then
+		printf 'usage: %s\n' "${nt_syn_10}"
+		exit 1
+	fi
+	local rn_start="$1" rn_target="$2"
+	if ! [[ "$rn_start" =~ ^[0-9]+$ ]] || ! [[ "$rn_target" =~ ^[0-9]+$ ]]; then
+		printf 'Both arguments must be positive integers.\n'
+		exit 2
+	fi
+	if [ "$rn_start" -eq "$rn_target" ]; then
+		printf 'Nothing to renumber.\n'
+		exit 0
+	fi
+	# verify starting file exists
+	local rn_start_padded rn_start_doc
+	rn_start_padded="$( printf '%03d' "$rn_start" )"
+	rn_start_doc="$( find * -name "${rn_start_padded}*" -maxdepth 0 2>/dev/null )"
+	if [ ! -f "${rn_start_doc}" ]; then
+		printf 'File with index %s not found.\n' "$rn_start_padded"
+		exit 2
+	fi
+	# find end of consecutive run starting from rn_start
+	local rn_end=$rn_start
+	while true; do
+		local rn_next=$(( rn_end + 1 ))
+		local rn_next_padded="$( printf '%03d' "$rn_next" )"
+		local rn_next_doc="$( find * -name "${rn_next_padded}*" -maxdepth 0 2>/dev/null )"
+		if [ -f "${rn_next_doc}" ]; then
+			rn_end=$rn_next
+		else
+			break
+		fi
+	done
+	local rn_count=$(( rn_end - rn_start ))
+	# check for collisions in target range
+	local rn_i rn_ti rn_ti_padded rn_ti_doc
+	for rn_i in $(seq 0 $rn_count); do
+		rn_ti=$(( rn_target + rn_i ))
+		# skip if target is within source range (will be moved)
+		if [ "$rn_ti" -ge "$rn_start" ] && [ "$rn_ti" -le "$rn_end" ]; then
+			continue
+		fi
+		rn_ti_padded="$( printf '%03d' "$rn_ti" )"
+		rn_ti_doc="$( find * -name "${rn_ti_padded}*" -maxdepth 0 2>/dev/null )"
+		if [ -f "${rn_ti_doc}" ]; then
+			printf 'Target index %s already occupied by %s.\n' "$rn_ti_padded" "$rn_ti_doc"
+			exit 2
+		fi
+	done
+	# rename in correct order to avoid collisions
+	local rn_seq
+	if [ "$rn_target" -gt "$rn_start" ]; then
+		rn_seq="$(seq $rn_count -1 0)"
+	else
+		rn_seq="$(seq 0 $rn_count)"
+	fi
+	local rn_si rn_ti_inner rn_si_padded rn_ti_padded_inner rn_si_doc rn_ti_doc_inner
+	for rn_i in ${=rn_seq}; do
+		rn_si=$(( rn_start + rn_i ))
+		rn_ti_inner=$(( rn_target + rn_i ))
+		rn_si_padded="$( printf '%03d' "$rn_si" )"
+		rn_ti_padded_inner="$( printf '%03d' "$rn_ti_inner" )"
+		rn_si_doc="$( find * -name "${rn_si_padded}*" -maxdepth 0 )"
+		rn_ti_doc_inner="${rn_ti_padded_inner}${rn_si_doc#${rn_si_padded}}"
+		\mv "${rn_si_doc}" "${rn_ti_doc_inner}" \
+			&& printf '%s -> %s\n' "${rn_si_doc}" "${rn_ti_doc_inner}"
+	done
+}
+
+cmd_activity() {
+	local -a nt_files
+	if [ "$1" = "ar" ]; then
+		nt_files=( **/[0-9][0-9][0-9]([_-]*|.?*)(N.) )
+	else
+		nt_files=( [0-9][0-9][0-9]([_-]*|.?*)(N.) )
+	fi
+	if [ "${#nt_files[@]}" -eq 0 ]; then
+		printf 'No indexed documents found.\n'
+		exit 0
+	fi
+	printf '\nActivity Summary\n================\n\n'
+	stat -f "%Sm" -t "%Y-%m" "${nt_files[@]}" \
+		| sort | uniq -c | sort -k2 \
+		| while read count month; do
+			bar=$(printf '%*s' "$count" '' | tr ' ' '#')
+			printf "  %s  %3d  %s\n" "$month" "$count" "$bar"
+		done
+	printf '\n  Total: %d documents\n\n' "${#nt_files[@]}"
+}
+
+cmd_editor() {
+	if [ -z "$1" ]; then
+		printf 'No editor given.\n'
+		exit 2
+	fi
+	local chosen_editor="$1"
+	copy_to_clipboard() {
+		if [[ "$OSTYPE" == darwin* ]]; then
+			pbcopy
+		elif [[ "$OSTYPE" == linux* ]] && command -v xsel >/dev/null 2>&1; then
+			xsel --clipboard --input
+		else
+			return 1
+		fi
+	}
+	local export_cmd="export NT_EDITOR=${chosen_editor}"
+	if printf '%s' "${export_cmd}" | copy_to_clipboard; then
+		printf "The command to update the ${bf}nt${nf} editor has been placed in your clipboard.\n"
+		printf 'Please paste it into the command line to update it.\n'
+	else
+		printf 'Run this command to set the editor:\n  %s\n' "${export_cmd}"
+	fi
+}
+
+cmd_readme() {
+	local readme_file
+	readme_file="$( find . -iname readme.md -maxdepth 1 )"
+	if [ -z "$readme_file" ]; then
+		printf "No README.md found in current working directory.\n"
+		exit 4
+	fi
+	files_to_open+=( "$readme_file" )
+}
+
+cmd_template() {
+	local template_count template_file
+	template_count="$( find . -name "${nt_template_name}.*" -maxdepth 1 | wc -l )"
+	if [ "$template_count" -eq 1 ]; then
+		template_file="$( find . -name "${nt_template_name}.*" -maxdepth 1 )"
+		files_to_open+=( "${template_file}" )
+	elif [ "$template_count" -gt 1 ]; then
+		printf "Too many nt template files in this folder.\n"
+		exit 5
+	else
+		printf "No nt template found in this folder.\n"
+		exit 0
+	fi
+}
+
+#######################################################################
+# Main entry point
+#######################################################################
+
 if [ "$#" -eq 0 ]; then
-	printf "usage: ${nt_syn_1} [${nt_syn_2}] [${nt_syn_3}] [${nt_syn_4}] [${nt_syn_5}] [${nt_syn_6}] [${nt_syn_7}] [${nt_syn_10}] [${nt_syn_11}]\n"
+	printf "usage: nt [h] [n [title]] [l [title|n]] [num...] [r num title] [rn n m] [a|ar] [e editor] [R] [t]\n"
 	exit 0
 fi
 
-files_to_open=() # arrays are not POSIX-compliant
+files_to_open=()
 setopt extended_glob 2>/dev/null
+
 while [ "$#" -gt 0 ]; do
 	case "$1" in
-
-		-h|h)
-			clear
-			printf '%s' "${NT_MAN_VAR}"
-			printf '\n'
-			;;
-
-		n)
-			new_num="$(last_num_getter)"
-			new_num="$(( new_num + 1 ))"
-			new_num="$( printf '%03d' "${new_num}" )"
-			# make sure to consume the full argv
-			if [ "$#" -gt 1 ]; then
-				shift
-				new_title="${1}"
-				while [ "$#" -gt 1 ]; do
-					shift
-					new_title+=" ${1}"
-				done
-				new_title_raw="${new_title}"
-				new_title="${new_title// /-}"
-				last_doc="$(ls -1 | sort -n | awk 'END{print}')"
-				last_delim="$(get_delimiter "$last_doc")"
-				if [ -z "$last_delim" ]; then
-					new_doc="${new_num}-${new_title}"
-				else
-					new_doc="${new_num}${last_delim}${new_title}"
-				fi
-			else
-				new_doc="${new_num}"
-				new_title_raw=""
-			fi
-			template_count="$( find . -name "${nt_template_name}.*" -maxdepth 1 | wc -l )"
-			if [ "$template_count" -eq 1 ]; then
-				template_file="$( find . -name "${nt_template_name}.*" -maxdepth 1 )"
-				new_doc+=".${template_file##*.}"
-				sed -e "s|%DATE|$(date '+%Y-%m-%d')|g" \
-					-e "s|%TITLE|${new_title_raw}|g" \
-					"$template_file" >> "$new_doc"
-			elif [ "$template_count" -gt 1 ]; then
-				printf "Too many nt template files in this folder.\n"
-				exit 5
-			else
-				if [ "$new_num" -eq 1 ]; then
-					new_doc+=".md"
-				else
-					new_doc+=".$(last_ext_getter)"
-				fi
-				new_time="$(date '+%Y.%m.%d-%H:%M')"
-				printf "created=${new_time}\n" >> "${new_doc}"
-				printf '\n\n\n' >> "${new_doc}"
-			fi
-			files_to_open+=( "${new_doc}" )
-			;;
-
-		l)
-			last_num="$(last_num_getter)"
-			if [ "${last_num}" -ne 0 ]; then
-				if [ "$2" = 'n' ]; then
-					printf '%d\n' "${last_num}"
-					exit
-				else
-					last_doc="$(ls -1 | sort -n | awk 'END{print}')"
-					if [ "$#" -gt 1 ]; then
-						shift
-						new_title="$1"
-						while [ "$#" -gt 1 ]; do
-							shift
-							new_title+=" ${1}"
-						done
-						new_title="${new_title// /-}"
-
-						last_delim="$(get_delimiter "$last_doc")"
-						if [ -z "$last_delim" ]; then
-							new_doc="${last_num}-${new_title}.$(last_ext_getter)"
-						else
-							new_doc="${last_num}${last_delim}${new_title}.$(last_ext_getter)"
-						fi
-
-						mv "${last_doc}" "${new_doc}" \
-							&& printf '%s renamed to %s\n' "${last_doc}" "${new_doc}"
-					else
-						files_to_open+=( "${last_doc}" )
-					fi
-				fi
-			else
-				printf 'No indexed document found.\n'
-				exit 2
-			fi
-			;;
-
+		n)           shift; cmd_new "$@";       break ;;
+		l)           shift; cmd_last "$@";      break ;;
+		r)           shift; cmd_rename "$@";    break ;;
+		rn)          shift; cmd_renumber "$@";  break ;;
+		a|ar)        cmd_activity "$1";         break ;;
+		e)           shift; cmd_editor "$@";    break ;;
+		R)           cmd_readme;                shift ;;
+		t)           cmd_template;              shift ;;
+		-h|h)        cmd_help;                  break ;;
 		[0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-			try_num="$( printf '%03d' "$1" )"
-			try_doc="$( find * -name "${try_num}*" -maxdepth 0 )"
-			if [ -f "${try_doc}" ]; then
-				files_to_open+=( "${try_doc}" )
-			else
-				printf 'File with index %s not found.\n' "$try_num"
-				exit 2
-			fi
-			;;
-
-		r)
-			if [ "$#" -le 2 ]; then
-				printf 'usage: %s\n' "${nt_syn_6}"
-				exit 1
-			fi
-			shift
-			try_num="$( printf '%03d' "$1" )"
-			try_doc="$( find * -name "${try_num}*" -maxdepth 0 )"
-			if [ -f "${try_doc}" ]; then
-				try_doc_ext="$( printf "$try_doc" | tr '.' '\n' | tail -1 )"
-				if [ "$#" -gt 1 ]; then
-					shift
-					new_title="$1"
-					while [ "$#" -gt 1 ]; do
-						shift
-						new_title+=" ${1}"
-					done
-					new_title="${new_title// /-}"
-
-					try_delim="$(get_delimiter "$try_doc")"
-					if [ -z "$try_delim" ]; then
-						new_doc="${try_num}-${new_title}.${try_doc_ext}"
-					else
-						new_doc="${try_num}${try_delim}${new_title}.${try_doc_ext}"
-					fi
-
-					mv "${try_doc}" "${new_doc}" \
-						&& printf '%s renamed to %s\n' "${try_doc}" "${new_doc}"
-				else
-					files_to_open+=( "${try_doc}" )
-				fi
-			else
-				printf 'File number %s not found.\n' "${try_num}"
-				exit 2
-			fi
-			;;
-
-		rn)
-			if [ "$#" -le 2 ]; then
-				printf 'usage: %s\n' "${nt_syn_10}"
-				exit 1
-			fi
-			shift
-			rn_start="$1"
-			shift
-			rn_target="$1"
-			if ! [[ "$rn_start" =~ ^[0-9]+$ ]] || ! [[ "$rn_target" =~ ^[0-9]+$ ]]; then
-				printf 'Both arguments must be positive integers.\n'
-				exit 2
-			fi
-			if [ "$rn_start" -eq "$rn_target" ]; then
-				printf 'Nothing to renumber.\n'
-				exit 0
-			fi
-			# verify starting file exists
-			rn_start_padded="$( printf '%03d' "$rn_start" )"
-			rn_start_doc="$( find * -name "${rn_start_padded}*" -maxdepth 0 2>/dev/null )"
-			if [ ! -f "${rn_start_doc}" ]; then
-				printf 'File with index %s not found.\n' "$rn_start_padded"
-				exit 2
-			fi
-			# find end of consecutive run starting from rn_start
-			rn_end=$rn_start
-			while true; do
-				rn_next=$(( rn_end + 1 ))
-				rn_next_padded="$( printf '%03d' "$rn_next" )"
-				rn_next_doc="$( find * -name "${rn_next_padded}*" -maxdepth 0 2>/dev/null )"
-				if [ -f "${rn_next_doc}" ]; then
-					rn_end=$rn_next
-				else
-					break
-				fi
-			done
-			rn_count=$(( rn_end - rn_start ))
-			# check for collisions in target range
-			for rn_i in $(seq 0 $rn_count); do
-				rn_ti=$(( rn_target + rn_i ))
-				# skip if target is within source range (will be moved)
-				if [ "$rn_ti" -ge "$rn_start" ] && [ "$rn_ti" -le "$rn_end" ]; then
-					continue
-				fi
-				rn_ti_padded="$( printf '%03d' "$rn_ti" )"
-				rn_ti_doc="$( find * -name "${rn_ti_padded}*" -maxdepth 0 2>/dev/null )"
-				if [ -f "${rn_ti_doc}" ]; then
-					printf 'Target index %s already occupied by %s.\n' "$rn_ti_padded" "$rn_ti_doc"
-					exit 2
-				fi
-			done
-			# rename in correct order to avoid collisions
-			if [ "$rn_target" -gt "$rn_start" ]; then
-				rn_seq="$(seq $rn_count -1 0)"
-			else
-				rn_seq="$(seq 0 $rn_count)"
-			fi
-			for rn_i in ${=rn_seq}; do
-				rn_si=$(( rn_start + rn_i ))
-				rn_ti=$(( rn_target + rn_i ))
-				rn_si_padded="$( printf '%03d' "$rn_si" )"
-				rn_ti_padded="$( printf '%03d' "$rn_ti" )"
-				rn_si_doc="$( find * -name "${rn_si_padded}*" -maxdepth 0 )"
-				rn_ti_doc="${rn_ti_padded}${rn_si_doc#${rn_si_padded}}"
-				mv "${rn_si_doc}" "${rn_ti_doc}" \
-					&& printf '%s -> %s\n' "${rn_si_doc}" "${rn_ti_doc}"
-			done
-			;;
-
-		a|ar)
-			if [ "$1" = "ar" ]; then
-				nt_files=( **/[0-9][0-9][0-9]([_-]*|.?*)(N.) )
-			else
-				nt_files=( [0-9][0-9][0-9]([_-]*|.?*)(N.) )
-			fi
-			if [ "${#nt_files[@]}" -eq 0 ]; then
-				printf 'No indexed documents found.\n'
-				exit 0
-			fi
-			printf '\nActivity Summary\n================\n\n'
-			stat -f "%Sm" -t "%Y-%m" "${nt_files[@]}" \
-				| sort | uniq -c | sort -k2 \
-				| while read count month; do
-					bar=$(printf '%*s' "$count" '' | tr ' ' '#')
-					printf "  %s  %3d  %s\n" "$month" "$count" "$bar"
-				done
-			printf '\n  Total: %d documents\n\n' "${#nt_files[@]}"
-			;;
-
-		e)
-			shift
-			if [ -z "$1" ]; then
-				printf 'No editor given.\n'
-				exit 2
-			fi
-			chosen_editor="$1"
-			copy_to_clipboard() {
-				if [[ "$OSTYPE" == darwin* ]]; then
-					pbcopy
-				elif [[ "$OSTYPE" == linux* ]] && command -v xsel >/dev/null 2>&1; then
-					xsel --clipboard --input
-				else
-					return 1
-				fi
-			}
-			export_cmd="export NT_EDITOR=${chosen_editor}"
-			if printf '%s' "${export_cmd}" | copy_to_clipboard; then
-				printf "The command to update the ${bf}nt${nf} editor has been placed in your clipboard.\n"
-				printf 'Please paste it into the command line to update it.\n'
-			else
-				printf 'Run this command to set the editor:\n  %s\n' "${export_cmd}"
-			fi
-
-			#if [ ${ZSH_EVAL_CONTEXT} = 'toplevel' ]; then
-			#	printf "In order to set the ${bf}nt${nf} editor, you must source the ${bf}nt${nf} script instead of executing it.\n"
-			#	exit 3
-			#elif [ ${ZSH_EVAL_CONTEXT} = 'toplevel:file' ]; then
-			#	export NT_EDITOR="${chosen_editor}"
-			#	printf "${bf}nt${nf} editor set to '${chosen_editor}'\n"
-			#else
-			#	printf "Unknown zsh eval context: ${ZSH_EVAL_CONTEXT}\n"
-			#	exit 3
-			#fi
-			;;
-
-		R)
-			readme_file="$( find . -iname readme.md -maxdepth 1 )"
-			if [ -z "$readme_file" ]; then
-				printf "No README.md found in current working directory.\n"
-				exit 4
-			fi
-			files_to_open+=( "$readme_file" )
-			;;
-
-		t)
-			template_count="$( find . -name "${nt_template_name}.*" -maxdepth 1 | wc -l )"
-			if [ "$template_count" -eq 1 ]; then
-				template_file="$( find . -name "${nt_template_name}.*" -maxdepth 1 )"
-				files_to_open+=( "${template_file}" )
-			elif [ "$template_count" -gt 1 ]; then
-				printf "Too many nt template files in this folder.\n"
-				exit 5
-			else
-				printf "No nt template found in this folder.\n"
-				exit 0
-			fi
-			;;
-
-		*)
-			printf "Unknown option '$1'\n"
-			exit 2
-			;;
+		             cmd_open "$1"; shift ;;
+		*)           printf "Unknown option '$1'\n"; exit 2 ;;
 	esac
-	shift
 done
+
 unsetopt extended_glob 2>/dev/null
 
 if [ "${#files_to_open[@]}" -gt 0 ]; then
