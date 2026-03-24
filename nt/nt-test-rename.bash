@@ -73,6 +73,19 @@ test_rename_nonexistent_index_message() {
 }
 
 #####################################################################
+# Tests — Phase 2: input validation
+#####################################################################
+
+test_rename_index_zero_fails() {
+    nt_test__create_file "001-note.md"
+    nt_test__assert_exit 2 "$NT_SCRIPT" r 0 "title"
+}
+
+test_rename_non_integer_index_fails() {
+    nt_test__assert_exit 2 "$NT_SCRIPT" r abc "title"
+}
+
+#####################################################################
 # Test registry
 #####################################################################
 
@@ -87,4 +100,6 @@ NT_TESTS_RENAME=(
     test_rename_missing_title_fails
     test_rename_nonexistent_index_fails
     test_rename_nonexistent_index_message
+    test_rename_index_zero_fails
+    test_rename_non_integer_index_fails
 )

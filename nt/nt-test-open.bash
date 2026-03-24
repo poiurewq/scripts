@@ -84,6 +84,26 @@ test_open_exits_zero() {
 }
 
 #####################################################################
+# Tests — Phase 2: input validation
+#####################################################################
+
+test_open_index_zero_fails() {
+    nt_test__assert_exit 2 "$NT_SCRIPT" 0
+}
+
+test_open_error_to_stderr() {
+    # Error for missing index should go to stderr, not stdout
+    local stdout_only
+    stdout_only="$("$NT_SCRIPT" 99 2>/dev/null)" || true
+    if [ -n "$stdout_only" ]; then
+        printf 'FAIL: error output appeared on stdout: %s\n' "$stdout_only"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    fi
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+#####################################################################
 # Test registry
 #####################################################################
 
@@ -96,4 +116,6 @@ NT_TESTS_OPEN=(
     test_open_multiple_indices
     test_open_with_readme
     test_open_exits_zero
+    test_open_index_zero_fails
+    test_open_error_to_stderr
 )

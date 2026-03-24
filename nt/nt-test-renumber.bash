@@ -103,6 +103,20 @@ test_renumber_non_integer_fails() {
 }
 
 #####################################################################
+# Tests — Phase 2: input validation
+#####################################################################
+
+test_renumber_index_zero_start_fails() {
+    nt_test__create_file "003.md"
+    nt_test__assert_exit 2 "$NT_SCRIPT" rn 0 3
+}
+
+test_renumber_index_zero_target_fails() {
+    nt_test__create_file "003.md"
+    nt_test__assert_exit 2 "$NT_SCRIPT" rn 3 0
+}
+
+#####################################################################
 # Test registry
 #####################################################################
 
@@ -120,4 +134,6 @@ NT_TESTS_RENUMBER=(
     test_renumber_same_index_exits_zero
     test_renumber_nonexistent_start_fails
     test_renumber_non_integer_fails
+    test_renumber_index_zero_start_fails
+    test_renumber_index_zero_target_fails
 )
