@@ -14,6 +14,7 @@
 #   nt-test-renumber.bash   — tests for rn/renumber
 #   nt-test-activity.bash   — tests for a/ar (activity summary)
 #   nt-test-misc.bash       — tests for help, R, t, editor, usage
+#   nt-test-hierarchical.bash — tests for Phase 4 hierarchical indices
 
 set -u
 
@@ -219,6 +220,7 @@ source "$_test_dir/nt-test-rename.bash"
 source "$_test_dir/nt-test-renumber.bash"
 source "$_test_dir/nt-test-activity.bash"
 source "$_test_dir/nt-test-misc.bash"
+source "$_test_dir/nt-test-hierarchical.bash"
 
 #####################################################################
 # Collect all tests
@@ -232,6 +234,7 @@ ALL_TESTS=(
     "${NT_TESTS_RENUMBER[@]}"
     "${NT_TESTS_ACTIVITY[@]}"
     "${NT_TESTS_MISC[@]}"
+    "${NT_TESTS_HIERARCHICAL[@]}"
 )
 
 #####################################################################
@@ -247,8 +250,9 @@ if [ "${1:-}" != "" ]; then
         open)      SELECTED_TESTS=("${NT_TESTS_OPEN[@]}") ;;
         rename)    SELECTED_TESTS=("${NT_TESTS_RENAME[@]}") ;;
         renumber)  SELECTED_TESTS=("${NT_TESTS_RENUMBER[@]}") ;;
-        activity)  SELECTED_TESTS=("${NT_TESTS_ACTIVITY[@]}") ;;
-        misc)      SELECTED_TESTS=("${NT_TESTS_MISC[@]}") ;;
+        activity)      SELECTED_TESTS=("${NT_TESTS_ACTIVITY[@]}") ;;
+        misc)          SELECTED_TESTS=("${NT_TESTS_MISC[@]}") ;;
+        hierarchical)  SELECTED_TESTS=("${NT_TESTS_HIERARCHICAL[@]}") ;;
         *)
             found=0
             for t in "${ALL_TESTS[@]}"; do
@@ -260,7 +264,7 @@ if [ "${1:-}" != "" ]; then
             done
             if [ "$found" -eq 0 ]; then
                 printf 'Unknown test or group: %s\n' "$1" >&2
-                printf 'Groups: new, last, open, rename, renumber, activity, misc\n' >&2
+                printf 'Groups: new, last, open, rename, renumber, activity, misc, hierarchical\n' >&2
                 exit 1
             fi
             ;;
