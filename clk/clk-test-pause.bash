@@ -345,30 +345,28 @@ test_switch_confirmation_output() {
 #####################################################################
 
 test_out_while_paused() {
-    # Use real "now" for both pause and out so timing is consistent
+    # Session ends at the pause timestamp; idle time since pause is discarded
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" pause >/dev/null 2>&1
-    sleep 1
+    "$CLK_SCRIPT" pause at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work >/dev/null 2>&1
-    # Should succeed — pause auto-finalized
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
-    local last_line status break_secs
+    local last_line status end_ts break_secs
     last_line="$(tail -1 "$log_file")"
     status="$(printf '%s' "$last_line" | cut -d"$(printf '\t')" -f1)"
+    end_ts="$(printf '%s' "$last_line" | cut -d"$(printf '\t')" -f3)"
     break_secs="$(printf '%s' "$last_line" | cut -d"$(printf '\t')" -f6)"
     clk_test__assert_equals "done" "$status" "out while paused creates done record" &&
-    if [ "$break_secs" -lt 1 ]; then
-        printf 'FAIL: out while paused should have break_secs > 0, got %s\n' "$break_secs"
-        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
-        return 1
-    fi
-    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+    clk_test__assert_equals "2026-01-01T10:00:00" "$end_ts" "out while paused uses pause time as end" &&
+    clk_test__assert_equals "0" "$break_secs" "out while paused has no extra break time"
 }
 
-test_out_while_paused_shows_break() {
+test_out_while_paused_shows_prior_break() {
+    # Prior pause/resume break is preserved; only the final unresolved pause is discarded.
+    # Use "pause minus 30" + immediate "resume" to accumulate ~30 min of break_secs.
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" pause >/dev/null 2>&1
-    sleep 1
+    "$CLK_SCRIPT" pause minus 30 >/dev/null 2>&1   # paused 30 min ago
+    "$CLK_SCRIPT" resume >/dev/null 2>&1            # resume now: ~30 min added to break_secs
+    "$CLK_SCRIPT" pause >/dev/null 2>&1             # pause again immediately
     clk_test__assert_output_contains "break" "$CLK_SCRIPT" out work
 }
 
@@ -448,7 +446,7 @@ CLK_TESTS_PAUSE=(
 
     # out while paused
     test_out_while_paused
-    test_out_while_paused_shows_break
+    test_out_while_paused_shows_prior_break
 
     # pause/resume cycle
     test_pause_resume_then_out
