@@ -36,9 +36,13 @@ test_help_long_form_exits_zero() {
     nt_test__assert_exit 0 "$NT_SCRIPT" help
 }
 
-test_help_dash_h_now_unknown() {
-    # -h was removed in Phase 3; it should now be an unknown option
-    nt_test__assert_exit 2 "$NT_SCRIPT" -h
+test_help_dash_h_works() {
+    # -h is the hyphen-prefixed form of help; it should print help
+    nt_test__assert_exit 0 "$NT_SCRIPT" -h
+}
+
+test_help_double_dash_works() {
+    nt_test__assert_output_contains "nt" "$NT_SCRIPT" --help
 }
 
 #####################################################################
@@ -65,6 +69,12 @@ test_readme_not_found_message() {
     nt_test__assert_output_contains "No README.md" "$NT_SCRIPT" R
 }
 
+test_readme_hyphen_form() {
+    nt_test__create_file "README.md" "# readme"
+    nt_test__assert_output_contains "README.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" -R
+}
+
 #####################################################################
 # Tests — nt t: open template
 #####################################################################
@@ -81,6 +91,12 @@ test_template_not_found() {
 
 test_template_not_found_exits_zero() {
     nt_test__assert_exit 0 "$NT_SCRIPT" t
+}
+
+test_template_hyphen_form() {
+    nt_test__create_file "nt_template.md" "template"
+    nt_test__assert_output_contains "nt_template.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" -t
 }
 
 test_template_too_many_fails() {
@@ -184,14 +200,17 @@ NT_TESTS_MISC=(
     test_help_long_form
     test_help_exits_zero
     test_help_long_form_exits_zero
-    test_help_dash_h_now_unknown
+    test_help_dash_h_works
+    test_help_double_dash_works
     test_readme_opens
     test_readme_case_insensitive
     test_readme_not_found_fails
     test_readme_not_found_message
+    test_readme_hyphen_form
     test_template_opens
     test_template_not_found
     test_template_not_found_exits_zero
+    test_template_hyphen_form
     test_template_too_many_fails
     test_editor_nt_editor_wins
     test_editor_visual_fallback

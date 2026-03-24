@@ -147,6 +147,65 @@ test_new_exits_zero() {
 }
 
 #####################################################################
+# Tests — nt n: greedy bare mode (Phase 3)
+# Reserved words are consumed as part of the title in bare mode.
+#####################################################################
+
+test_new_bare_greedy_consumes_reserved_word() {
+    # 'new' would have been a reserved token in the old non-greedy design;
+    # in bare mode it becomes part of the title
+    "$NT_SCRIPT" n my new note >/dev/null 2>&1
+    nt_test__assert_file_exists "$NT_TEST_DIR/001-my-new-note.md" \
+        "bare n should greedily consume 'new' as part of the title"
+}
+
+test_new_bare_greedy_consumes_rename_word() {
+    "$NT_SCRIPT" n title rename something >/dev/null 2>&1
+    nt_test__assert_file_exists "$NT_TEST_DIR/001-title-rename-something.md" \
+        "bare n should greedily consume 'rename' as part of the title"
+}
+
+#####################################################################
+# Tests — nt -n / --new: hyphen-prefixed non-greedy mode (Phase 3)
+#####################################################################
+
+test_new_hyphen_short_creates_doc() {
+    env NT_EDITOR="true" "$NT_SCRIPT" -n my note >/dev/null 2>&1
+    nt_test__assert_file_exists "$NT_TEST_DIR/001-my-note.md" \
+        "-n should create titled doc"
+}
+
+test_new_hyphen_long_creates_doc() {
+    env NT_EDITOR="true" "$NT_SCRIPT" --new my note >/dev/null 2>&1
+    nt_test__assert_file_exists "$NT_TEST_DIR/001-my-note.md" \
+        "--new should create titled doc"
+}
+
+test_new_hyphen_stops_at_number() {
+    # In non-greedy mode, a bare number stops the title
+    env NT_EDITOR="true" "$NT_SCRIPT" -n my note 5 >/dev/null 2>&1
+    nt_test__assert_file_exists "$NT_TEST_DIR/001-my-note.md" \
+        "-n should stop title at bare number"
+    nt_test__assert_file_not_exists "$NT_TEST_DIR/001-my-note-5.md" \
+        "number should not be part of title in non-greedy mode"
+}
+
+test_new_hyphen_stops_at_flag() {
+    # -R following --new should open the README, not be part of the title
+    nt_test__create_file "README.md"
+    local output
+    output="$(env NT_EDITOR="echo" "$NT_SCRIPT" --new my note -R 2>&1)"
+    nt_test__assert_file_exists "$NT_TEST_DIR/001-my-note.md" \
+        "--new should create titled doc, stopping before -R"
+    printf '%s' "$output" | grep -q "README.md" || {
+        printf 'FAIL: README.md not opened after --new ...\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 ))
+        return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+#####################################################################
 # Test registry
 #####################################################################
 
@@ -169,4 +228,10 @@ NT_TESTS_NEW=(
     test_new_template_title_macro
     test_new_too_many_templates_fails
     test_new_exits_zero
+    test_new_bare_greedy_consumes_reserved_word
+    test_new_bare_greedy_consumes_rename_word
+    test_new_hyphen_short_creates_doc
+    test_new_hyphen_long_creates_doc
+    test_new_hyphen_stops_at_number
+    test_new_hyphen_stops_at_flag
 )

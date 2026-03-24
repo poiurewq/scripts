@@ -22,15 +22,6 @@ nt_editor="${NT_EDITOR:-${VISUAL:-${EDITOR:-vim}}}"
 nt_syn_r="${bf}rename${nf} ${uf}num${nf} ${uf}title${nf}"
 nt_syn_rn="${bf}renumber${nf} ${uf}n${nf} ${uf}m${nf}"
 
-# Reserved tokens for non-greedy title parsing (§3.1 / Appendix B)
-# Any argument matching one of these stops consume_title.
-_nt_reserved_tokens=(
-	n new l last r rename rl rn renumber
-	a activity ar activity-recursive
-	h help R t
-	i index c copy
-)
-
 #######################################################################
 # Cross-platform abstraction (§2.5)
 #######################################################################
@@ -104,7 +95,7 @@ nt_open() {
 }
 
 # Returns the numeric index (as integer string) of the last indexed
-# document, or 0 if none exist. Uses zsh globs instead of ls|sort|awk.
+# document, or 0 if none exist.
 last_num_getter() {
 	local -a docs
 	docs=( [0-9]##*(N.on) )
@@ -114,13 +105,10 @@ last_num_getter() {
 	fi
 	local last="${docs[-1]}"
 	local num="${last%%[^0-9]*}"
-	# Force base-10 to strip leading zeros for arithmetic
 	printf '%d' "$(( 10#${num} ))"
 }
 
-# Returns the filename of the last indexed document (highest numeric
-# index). Uses zsh glob qualifiers for numeric sorting. Returns 1 if
-# no indexed documents exist.
+# Returns the filename of the last indexed document. Returns 1 if none.
 last_indexed_doc() {
 	local -a docs
 	docs=( [0-9]##*(N.on) )
@@ -131,7 +119,6 @@ last_indexed_doc() {
 }
 
 # Returns the delimiter string between the numeric index and title.
-# e.g. "001__foo.md" -> "__", "001-foo.md" -> "-", "001.md" -> ""
 get_delimiter() {
 	local name="$1"
 	if [[ "$name" =~ ^[0-9]+(_+) ]]; then
@@ -141,8 +128,7 @@ get_delimiter() {
 	fi
 }
 
-# Returns the file extension (everything after the last dot, if
-# non-numeric). Returns 1 if no valid extension found.
+# Returns the file extension (after last dot, if non-numeric). Returns 1 if none.
 get_extension() {
 	local filename="$1"
 	local ext="${filename##*.}"
@@ -152,8 +138,7 @@ get_extension() {
 	printf '%s' "$ext"
 }
 
-# Returns the matching filename for a given numeric index. Prints an
-# error to stderr and returns 1 if not found.
+# Returns the matching filename for a given numeric index.
 find_doc_by_index() {
 	local padded
 	padded="$( printf '%03d' "$1" )"
@@ -167,7 +152,6 @@ find_doc_by_index() {
 }
 
 # Validates a simple numeric index (must be integer, 1–999).
-# Prints an error to stderr and returns 1 if invalid.
 validate_index() {
 	local idx="$1"
 	if ! [[ "$idx" =~ ^[0-9]+$ ]]; then
@@ -180,8 +164,17 @@ validate_index() {
 	fi
 }
 
-# Consumes arguments as a title, stopping at any reserved token or
-# numeric index. Sets globals:
+# Consumes arguments as a title. Behaviour depends on $_nt_greedy:
+#
+#   Greedy mode   ($_nt_greedy=1, set when command has no leading hyphen):
+#     Consume ALL arguments — no stopping at reserved words or numbers.
+#     Allows titles like "my new note 5" without quoting.
+#
+#   Non-greedy mode ($_nt_greedy=0, set when command has a leading hyphen):
+#     Stop at the first bare number, range token (N-M), or any arg that
+#     starts with '-'.  Those tokens belong to the next chained option.
+#
+# Sets globals:
 #   _consume_title_raw    — space-separated title
 #   _consume_title_result — hyphen-joined title
 #   _nt_consumed          — number of arguments consumed
@@ -189,22 +182,15 @@ consume_title() {
 	_consume_title_raw=""
 	_consume_title_result=""
 	_nt_consumed=0
-	local arg t matched
+	local arg
 	for arg in "$@"; do
-		# Stop at numeric tokens (simple index or range)
-		if [[ "$arg" =~ ^[0-9]+$ ]] || [[ "$arg" =~ ^[0-9]+-[0-9]+$ ]]; then
-			break
-		fi
-		# Stop at reserved tokens
-		matched=0
-		for t in "${_nt_reserved_tokens[@]}"; do
-			if [[ "$arg" == "$t" ]]; then
-				matched=1
+		if [[ $_nt_greedy -eq 0 ]]; then
+			# Non-greedy stop conditions
+			if [[ "$arg" =~ ^[0-9]+$ ]] \
+				|| [[ "$arg" =~ ^[0-9]+-[0-9]+$ ]] \
+				|| [[ "$arg" == -* ]]; then
 				break
 			fi
-		done
-		if [[ $matched -eq 1 ]]; then
-			break
 		fi
 		if [[ $_nt_consumed -eq 0 ]]; then
 			_consume_title_raw="$arg"
@@ -217,7 +203,6 @@ consume_title() {
 }
 
 # Composes a filename: build_filename <index> <delimiter> <title> <extension>
-# Delimiter defaults to "-" when title is non-empty and delimiter is empty.
 build_filename() {
 	local index="$1" delimiter="$2" title="$3" extension="$4"
 	local result="$index"
@@ -239,19 +224,21 @@ build_filename() {
 
 cmd_help() {
 	printf 'usage: nt <command> [args]\n\n'
-	printf '  nt                           print usage\n'
-	printf '  nt help                      print this help (alias: h)\n'
-	printf '  nt new [i INDEX] [TITLE]     create new indexed document (alias: n)\n'
-	printf '  nt last [N]                  open last (or Nth-to-last) document (alias: l)\n'
-	printf '  nt last n                    print last index number (alias: l n)\n'
+	printf 'Bare commands are greedy (consume all remaining args as title).\n'
+	printf 'Hyphen-prefixed commands are non-greedy (stop at numbers or -flags),\n'
+	printf 'enabling chaining: nt --new my note -3 -R\n\n'
+	printf '  nt help|-h                   print this help (alias: h)\n'
+	printf '  nt new [TITLE]               create new indexed document (alias: n, -n, --new)\n'
+	printf '  nt last [N]                  open last (or Nth-to-last) document (alias: l, -l, --last)\n'
+	printf '  nt last i                    print last index number (alias: l i, --last i)\n'
 	printf '  nt NUM [NUM ...]             open document(s) by numeric index\n'
-	printf '  nt rename NUM TITLE          rename document by index (alias: r)\n'
-	printf '  nt rl TITLE                  rename last document\n'
-	printf '  nt renumber N M              renumber consecutive run (alias: rn)\n'
-	printf '  nt activity                  activity summary, current dir (alias: a)\n'
-	printf '  nt activity-recursive        activity summary, recursive (alias: ar)\n'
-	printf '  nt R                         open README.md\n'
-	printf '  nt t                         open template file\n'
+	printf '  nt rename NUM TITLE          rename document by index (alias: r, -r, --rename)\n'
+	printf '  nt rl TITLE                  rename last document (alias: -rl, --rl)\n'
+	printf '  nt renumber N M              renumber consecutive run (alias: rn, -rn, --renumber)\n'
+	printf '  nt activity                  activity summary, current dir (alias: a, -a, --activity)\n'
+	printf '  nt activity-recursive        activity summary, recursive (alias: ar, --activity-recursive)\n'
+	printf '  nt R|-R                      open README.md\n'
+	printf '  nt t|-t                      open template file\n'
 }
 
 cmd_new() {
@@ -260,7 +247,6 @@ cmd_new() {
 	new_num_raw="$(( new_num_raw + 1 ))"
 	new_num="$( printf '%03d' "${new_num_raw}" )"
 
-	# Fetch last doc once for delimiter and extension inheritance
 	local last_doc
 	last_doc="$(last_indexed_doc 2>/dev/null)" || last_doc=""
 
@@ -318,16 +304,23 @@ cmd_last() {
 		exit 2
 	fi
 
+	# In non-greedy mode, a leading-hyphen arg belongs to the next command.
+	if [[ "$#" -gt 0 ]] && [[ "$1" == -* ]] && [[ $_nt_greedy -eq 0 ]]; then
+		_nt_consumed=0
+		files_to_open+=( "$(last_indexed_doc)" )
+		return 0
+	fi
+
 	if [ "$#" -eq 0 ]; then
 		# No argument: open the last doc
 		_nt_consumed=0
 		files_to_open+=( "$(last_indexed_doc)" )
-	elif [ "$1" = 'n' ]; then
-		# Special token 'n': print numeric index and exit
+	elif [ "$1" = 'i' ] || [ "$1" = 'index' ]; then
+		# Print the numeric index of the last document
 		printf '%d\n' "${last_num}"
 		exit 0
 	elif [[ "$1" =~ ^[0-9]+$ ]]; then
-		# Positive integer: open nth-to-last
+		# Positive integer N: open Nth-to-last
 		_nt_consumed=1
 		local nth="$1"
 		local -a docs
@@ -425,10 +418,8 @@ cmd_renumber() {
 		printf 'Nothing to renumber.\n'
 		exit 0
 	fi
-	# verify starting file exists
 	local rn_start_doc
 	rn_start_doc="$(find_doc_by_index "$rn_start")" || exit 2
-	# find end of consecutive run starting from rn_start
 	local rn_end=$rn_start
 	local rn_next rn_next_padded
 	local -a rn_next_docs
@@ -443,12 +434,10 @@ cmd_renumber() {
 		fi
 	done
 	local rn_count=$(( rn_end - rn_start ))
-	# check for collisions in target range
 	local rn_i rn_ti rn_ti_padded
 	local -a rn_ti_docs
 	for rn_i in $(seq 0 $rn_count); do
 		rn_ti=$(( rn_target + rn_i ))
-		# skip if target is within source range (will be moved)
 		if [ "$rn_ti" -ge "$rn_start" ] && [ "$rn_ti" -le "$rn_end" ]; then
 			continue
 		fi
@@ -459,7 +448,6 @@ cmd_renumber() {
 			exit 2
 		fi
 	done
-	# rename in correct order to avoid collisions
 	local rn_seq
 	if [ "$rn_target" -gt "$rn_start" ]; then
 		rn_seq="$(seq $rn_count -1 0)"
@@ -537,52 +525,98 @@ fi
 nt_platform_detect
 typeset -aU files_to_open=()
 _nt_consumed=0
+_nt_greedy=0
 setopt extended_glob 2>/dev/null
+
+# Helper: shift past _nt_consumed args in the main arg list.
+# Used after title-consuming commands so the dispatcher loop can continue.
+_nt_shift_consumed() {
+	_nc=$_nt_consumed
+	while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+}
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 
+		# ── Bare (greedy) forms ──────────────────────────────────────
+		# Consume ALL remaining args as the title.  No stopping at
+		# reserved words or numbers.  Chaining is not supported in
+		# bare mode; use the hyphen forms for that.
+
 		n|new)
-			shift
-			cmd_new "$@"
+			shift; _nt_greedy=1; cmd_new "$@"
 			_nc=$_nt_consumed
 			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
 			;;
 
 		l|last)
-			shift
-			cmd_last "$@"
+			shift; _nt_greedy=1; cmd_last "$@"
 			_nc=$_nt_consumed
 			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
 			;;
 
 		r|rename)
-			shift
-			cmd_rename "$@"
-			# 1 for the index arg + title consumed
+			shift; _nt_greedy=1; cmd_rename "$@"
 			_nc=$(( 1 + _nt_consumed ))
 			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
 			;;
 
 		rl)
-			shift
-			cmd_rename_last "$@"
+			shift; _nt_greedy=1; cmd_rename_last "$@"
 			_nc=$_nt_consumed
 			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
 			;;
 
-		rn|renumber)    shift; cmd_renumber "$@"; break ;;
-		a|activity)     cmd_activity "a";         break ;;
-		ar|activity-recursive)
-		                cmd_activity "ar";         break ;;
-		h|help)         cmd_help;                  break ;;
-		R)              cmd_readme;                shift ;;
-		t)              cmd_template;              shift ;;
+		# ── Hyphen-prefixed (non-greedy) forms ───────────────────────
+		# Stop title consumption at the first bare number, range, or
+		# any -flag arg.  Those tokens are left in $@ for the next
+		# iteration, enabling option chaining.
+
+		-n|--new)
+			shift; _nt_greedy=0; cmd_new "$@"
+			_nc=$_nt_consumed
+			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+			;;
+
+		-l|--last)
+			shift; _nt_greedy=0; cmd_last "$@"
+			_nc=$_nt_consumed
+			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+			;;
+
+		-r|--rename)
+			shift; _nt_greedy=0; cmd_rename "$@"
+			_nc=$(( 1 + _nt_consumed ))
+			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+			;;
+
+		-rl|--rl)
+			shift; _nt_greedy=0; cmd_rename_last "$@"
+			_nc=$_nt_consumed
+			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+			;;
+
+		# ── Stateless commands (greedy/non-greedy irrelevant) ────────
+
+		rn|renumber|-rn|--renumber)
+			shift; cmd_renumber "$@"; break ;;
+
+		a|activity|-a|--activity)
+			cmd_activity "a"; break ;;
+
+		ar|activity-recursive|-ar|--activity-recursive)
+			cmd_activity "ar"; break ;;
+
+		h|help|-h|--help)
+			cmd_help; break ;;
+
+		R|-R)     cmd_readme;   shift ;;
+		t|-t)     cmd_template; shift ;;
 
 		[0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-		                cmd_open "$1"; shift ;;
+			cmd_open "$1"; shift ;;
 
-		*)              nt_err "Unknown option '$1'"; exit 2 ;;
+		*)        nt_err "Unknown option '$1'"; exit 2 ;;
 	esac
 done
 
