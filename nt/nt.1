@@ -68,43 +68,28 @@ and/or
 .Cm t
 in a row to open the specified files all at once.
 .Pp
-.Nm
-supports two option styles for title-consuming commands
-.Pq Cm new , Cm rename , Cm rl :
-.Bl -bullet -compact
-.It
-.Em Bare style
-(no leading hyphen, e.g.\&
-.Cm n ,
-.Cm rename ) :
-greedy \(em consumes ALL remaining arguments as the title.
-Useful for quick one-liners.
-.It
-.Em Hyphen style
-(with leading hyphen(s), e.g.\&
-.Cm -n ,
-.Cm --rename ) :
-non-greedy \(em stops title consumption at the first bare number, range
-.Pq N-M ,
-or any
-.Fl Ns Ar flag
-argument.
-Those remaining tokens are processed as additional commands, enabling chaining:
+Title-consuming commands
+.Pq Cm n , Cm r , Cm rl
+accept an optional hyphen prefix
+.Pq e.g., Fl n , Fl r .
+Without a hyphen, the command treats all remaining words as the title.
+With a hyphen, it stops at the first number or flag, so you can chain
+multiple commands on one line:
 .Pp
-.Dl nt --new my note -3 --rename 7 new-title -R
+.Dl nt -n my note -3 -r 7 new-title -R
 .Pp
 creates a note titled
 .Dq my note ,
-then opens doc 3, renames doc 7, and opens the README in one invocation.
-Titles that contain hyphens or numbers must be quoted when using hyphen style.
-.El
+then opens doc 3, renames doc 7, and opens the README \(em all in one go.
+Titles containing hyphens or numbers must be quoted when using the hyphen-prefixed form.
 .Pp
 Options include:
 .Bl -tag -width indent
-.It Cm h | Cm help | Fl h | Fl -help
+.It Cm h
+.Pq alias: Cm help
 Print help page.
-.It Cm n | Cm new Op Ar title
-.It Fl n | Fl -new Op Ar title
+.It Cm n Op Ar title
+.Pq alias: Cm new
 Create a new document named with the highest unused numeric index (0-padded to 3 digits)
 followed by a delimiter and a hyphenated version of the
 .Ar title ,
@@ -114,51 +99,36 @@ If the current directory contains the file
 then the new document uses this template's content and
 .Ar extension
 instead.
-Bare
-.Cm n / Cm new
-is greedy; hyphen-prefixed
-.Fl n / Fl -new
-is non-greedy.
-.It Cm l | Cm last Op Ar N
-.It Fl l | Fl -last Op Ar N
+.It Cm l Op Ar N
+.Pq alias: Cm last
 Open the document with the latest numeric index.
 If
 .Ar N
 is a positive integer, open the
 .Ar N Ns th-to-last
 indexed document (1 = last, 2 = second-to-last, etc.).
-In hyphen style, a leading-hyphen next argument is passed on to the next chained command rather than treated as an argument to
-.Cm last .
-.It Cm li | Cm last-index | Fl li | Fl -last-index
+When using the hyphen-prefixed form, a leading-hyphen next argument is passed on to the next chained command rather than treated as an argument to
+.Cm l .
+.It Cm li
+.Pq alias: Cm last-index
 Print the numeric index of the last indexed document in the current directory.
 .It Ar num Op Ar ...
 Open the existing document(s) with the
 .Ar num
 index (indices).
-.It Cm r | Cm rename Ar num Ar title
-.It Fl r | Fl -rename Ar num Ar title
+.It Cm r Ar num Ar title
+.Pq alias: Cm rename
 Rename the existing document with the
 .Ar num
 index to
 .Ar title
 without opening the document.
-Bare
-.Cm r / Cm rename
-is greedy; hyphen-prefixed
-.Fl r / Fl -rename
-is non-greedy.
 .It Cm rl Ar title
-.It Fl rl | Fl -rl Ar title
 Rename the last indexed document to
 .Ar title
 without opening the document.
-Bare
-.Cm rl
-is greedy; hyphen-prefixed
-.Fl rl / Fl -rl
-is non-greedy.
-.It Cm rn | Cm renumber Ar n Ar m
-.It Fl rn | Fl -renumber Ar n Ar m
+.It Cm rn Ar n Ar m
+.Pq alias: Cm renumber
 Starting from document index
 .Ar n ,
 renumber the consecutive run of documents so that
@@ -171,15 +141,17 @@ becomes
 and so on, until the end of the consecutive sequence.
 Documents are renamed in the correct order to avoid collisions.
 Fails if any target index is already occupied by a document outside the source range.
-.It Cm a | Cm activity | Fl a | Fl -activity
+.It Cm a
+.Pq alias: Cm activity
 Show an activity summary of indexed documents grouped by last-modified month.
 Searches the current directory only.
-.It Cm ar | Cm activity-recursive | Fl ar | Fl -activity-recursive
+.It Cm ar
+.Pq alias: Cm activity-recursive
 Show an activity summary of indexed documents grouped by last-modified month.
 Searches all subdirectories as well.
-.It Cm R | Fl R
+.It Cm R
 Open the README.md (case-insensitive) document in the current working directory, if there is any.
-.It Cm t | Fl t
+.It Cm t
 Open the
 .Pa nt_template
 document in the current working directory, if there is any.
