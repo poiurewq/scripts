@@ -46,7 +46,7 @@ test_edit_start_after_end() {
 
 test_edit_start_on_active() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" edit -1 start 2026-01-01T08:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" edit 1 start 2026-01-01T08:30:00 >/dev/null 2>&1
     clk_test__assert_log_line 1 '^active	2026-01-01T08:30:00	'
 }
 
@@ -73,8 +73,8 @@ test_edit_end_recalculates_length() {
 
 test_edit_end_on_active() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    clk_test__assert_exit 1 "$CLK_SCRIPT" edit -1 end 2026-01-01T10:00:00
-    clk_test__assert_output_contains "active record" "$CLK_SCRIPT" edit -1 end 2026-01-01T10:00:00
+    clk_test__assert_exit 1 "$CLK_SCRIPT" edit 1 end 2026-01-01T10:00:00
+    clk_test__assert_output_contains "active record" "$CLK_SCRIPT" edit 1 end 2026-01-01T10:00:00
 }
 
 test_edit_end_before_start() {
@@ -102,7 +102,7 @@ test_edit_break_exceeds_span() {
 test_edit_break_on_active() {
     # Break on active records should work (no length recalc needed)
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" edit -1 break 10 >/dev/null 2>&1
+    "$CLK_SCRIPT" edit 1 break 10 >/dev/null 2>&1
     clk_test__assert_log_line 1 '	600	'
 }
 
@@ -112,7 +112,7 @@ test_edit_break_on_active() {
 
 test_edit_pause() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" edit -1 pause 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" edit 1 pause 2026-01-01T10:00:00 >/dev/null 2>&1
     # PAUSED_AT should be set to epoch of 2026-01-01T10:00:00
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local line paused_field
@@ -129,7 +129,7 @@ test_edit_pause() {
 test_edit_pause_clear() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause work at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" edit -1 pause clear >/dev/null 2>&1
+    "$CLK_SCRIPT" edit 1 pause clear >/dev/null 2>&1
     local log_file="$CLK_TEST_DIR/clk/clk.tsv"
     local line paused_field
     line="$(tail -1 "$log_file")"
@@ -180,7 +180,7 @@ test_edit_delete() {
 
 test_edit_delete_active() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" edit -1 delete >/dev/null 2>&1
+    "$CLK_SCRIPT" edit 1 delete >/dev/null 2>&1
     local count
     count="$(clk__record_count)"
     clk_test__assert_equals "0" "$count" "should have 0 records after deleting active"

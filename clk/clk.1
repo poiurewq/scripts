@@ -30,7 +30,10 @@
 .Cm extend Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp | Cm by Ar minutes
 .br
 .Nm
-.Bro Cm remove | Cm pop Brc
+.Bro Cm remove | Cm pop Brc Op Fl Ar n
+.br
+.Nm
+.Bro Cm reactivate | Cm ra Brc Fl Ar n
 .br
 .Nm
 .Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
@@ -51,13 +54,16 @@
 .Bro Cm status | Cm s Brc
 .br
 .Nm
-.Bro Cm last | Cm l Brc Op Ar n
+.Bro Cm last | Cm l Brc Op Bro Fl Ar n | Ar n Brc
 .br
 .Nm
 .Fl Ar n
 .br
 .Nm
-.Bro Cm last-done | Cm ld Brc Op Ar n
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
+.br
+.Nm
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm delete
 .br
 .Nm
 .Cm log
@@ -70,12 +76,6 @@
 .br
 .Nm
 .Bro Cm view | Cm v Brc Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
-.br
-.Nm
-.Bro Cm edit | Cm e Brc Fl Ar n Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
-.br
-.Nm
-.Bro Cm edit | Cm e Brc Fl Ar n Cm delete
 .br
 .Nm
 .Cm alias
@@ -117,9 +117,7 @@ and timestamps from the current date show only the time
 .Pq e.g.\& Ql 12:16 .
 The
 .Cm last
-and
-.Cm last-done
-commands show full ISO\ 8601 timestamps for inspection.
+command shows full ISO\ 8601 timestamps for inspection.
 .Pp
 .Nm
 offers a shell alias
@@ -223,10 +221,25 @@ or
 the new end time must be at or after the original end time.
 .Cm by Ar minutes
 shifts the end timestamp forward by exactly that many minutes.
-.It Bro Cm remove | Cm pop Brc
-Remove the last record from the log
+.It Bro Cm remove | Cm pop Brc Op Fl Ar n
+Without an index, removes the last record from the log
 .Pq whether active or completed
-and display the removed record.
+and displays the removed record.
+With
+.Fl Ar n ,
+removes the nth-to-last completed session
+.Pq same negative-index convention as Cm edit and Cm reactivate .
+.It Bro Cm reactivate | Cm ra Brc Fl Ar n
+Convert a completed session back to active.
+.Fl Ar n
+is a negative index counting back from the most recent completed session:
+.Fl 1
+is the most recent,
+.Fl 2
+is second-to-last, and so on.
+The session's start time, tag, accumulated break time, and description are
+preserved; end time, length, and pause state are cleared.
+Fails if the same tag already has an active session.
 .El
 .Ss Pause and resume
 .Bl -tag -width indent
@@ -268,35 +281,36 @@ Show all active sessions with their tag, start time, elapsed active time,
 break time, pause state, and description.
 If no sessions are active, prints
 .Dq \&No active sessions .
-.It Bro Cm last | Cm l Brc Op Ar n
-Print the last
-.Ar n
-records from the log
-.Pq default 1 .
-Includes both active and completed records.
-Each record is prefixed with a
-.Fl Ar N
-index that corresponds to the index used by
-.Cm edit .
-Records are displayed with
+.It Bro Cm last | Cm l Brc Op Bro Fl Ar n | Ar n Brc
+Show a single session by index.
+A negative index
+.Fl Ar n
+counts back from the most recent completed session:
 .Fl 1
-.Pq most recent
-on top.
-Fields are column-aligned across rows.
+is the most recent done session,
+.Fl 2
+is second-to-last, and so on.
+A positive index
+.Ar n
+counts forward from the oldest active session:
+.Ar 1
+is the oldest active session,
+.Ar 2
+is second-oldest, and so on.
+With no argument,
+.Fl 1
+is the default.
+The index prefix in the output
+.Pq e.g.\& Fl 3 No or No +2
+matches the convention used by
+.Cm edit .
+Full ISO\ 8601 timestamps are shown for inspection.
 .Pp
 The shorthand
 .Nm Fl Ar n
 .Pq e.g., Nm Fl 3
 is equivalent to
-.Nm Cm last Ar n .
-.It Bro Cm last-done | Cm ld Brc Op Ar n
-Print the last
-.Ar n
-completed records
-.Pq default 1 .
-Unlike
-.Cm last ,
-active records are excluded and no index prefix is shown.
+.Nm Cm last Fl Ar n .
 .It Cm log
 Open the log file in
 .Ev VISUAL ,
@@ -405,39 +419,39 @@ Active sessions whose start time falls within the range are excluded
 from totals and noted separately.
 .Ss Editing records
 .Bl -tag -width indent
-.It Cm edit Fl Ar n Cm tag Ar new-tag
-Change the tag of record
-.Fl Ar n .
-.It Cm edit Fl Ar n Cm start Ar timestamp
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm tag Ar new-tag
+Change the tag of the specified record.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm start Ar timestamp
 Change the start time.
 Recalculates length on completed records.
-.It Cm edit Fl Ar n Cm end Ar timestamp
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm end Ar timestamp
 Change the end time.
 Only valid on completed records; recalculates length.
-.It Cm edit Fl Ar n Cm break Ar minutes
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm break Ar minutes
 Set break time to
 .Ar minutes .
 Recalculates length on completed records.
-.It Cm edit Fl Ar n Cm pause Bro Ar timestamp | Cm clear Brc
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm pause Bro Ar timestamp | Cm clear Brc
 Set or clear the paused-at timestamp on an active record.
-.It Cm edit Fl Ar n Cm on Ar description
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm on Ar description
 Change the description.
 All arguments after
 .Cm on
 are collected as the description.
-.It Cm edit Fl Ar n Cm delete
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm delete
 Delete the record entirely.
 .El
 .Pp
-The
+The index uses the same signed convention as
+.Cm last :
+a negative index
 .Fl Ar n
-index counts from the end of the log:
-.Fl 1
-is the last record,
-.Fl 2
-is second-to-last, and so on.
-This index matches the one shown by
-.Cm last .
+counts back from the most recent completed session
+.Pq Fl 1 No = most recent done ;
+a positive index
+.Ar n
+counts forward from the oldest active session
+.Pq Ar 1 No = oldest active .
 All edit operations save an undo snapshot.
 Non-delete edits show the record before and after the change for comparison.
 .Ss Miscellaneous

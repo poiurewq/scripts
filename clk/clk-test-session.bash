@@ -91,14 +91,6 @@ test_last_shows_full_timestamps() {
     clk_test__assert_output_contains "2026-01-15T10:00:00" printf '%s' "$output"
 }
 
-test_last_done_shows_full_timestamps() {
-    "$CLK_SCRIPT" in work at 2026-01-15T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026-01-15T10:00:00 >/dev/null 2>&1
-    local output
-    output="$("$CLK_SCRIPT" last-done 2>&1)"
-    clk_test__assert_output_contains "2026-01-15T09:00:00" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026-01-15T10:00:00" printf '%s' "$output"
-}
 
 #####################################################################
 # Tests — clk out (integration)
@@ -251,51 +243,88 @@ test_status_alias_s() {
 #####################################################################
 
 test_last_default() {
+    # Default (no arg) shows most recent done session with -1 prefix
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last 2>&1)"
-    local line_count
-    line_count="$(printf '%s\n' "$output" | wc -l | tr -d ' ')"
-    clk_test__assert_equals "1" "$line_count" "last shows 1 record by default"
-}
-
-test_last_n() {
-    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in c at 2026-01-01T11:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out c at 2026-01-01T12:00:00 >/dev/null 2>&1
-    local output
-    output="$("$CLK_SCRIPT" last 2 2>&1)"
-    local line_count
-    line_count="$(printf '%s\n' "$output" | wc -l | tr -d ' ')"
-    clk_test__assert_equals "2" "$line_count" "last 2 shows 2 records"
-}
-
-test_last_includes_active() {
-    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "active" "$CLK_SCRIPT" last
-}
-
-test_last_shows_index() {
-    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
-    local output
-    output="$("$CLK_SCRIPT" last 2 2>&1)"
-    if ! printf '%s' "$output" | grep -q '\-1'; then
-        printf 'FAIL: last output should include -1 index\n  actual: %s\n' "$output"
+    if ! printf '%s' "$output" | grep -q 'work'; then
+        printf 'FAIL: last default should show work\n  actual: %s\n' "$output"
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
         return 1
     fi
-    if ! printf '%s' "$output" | grep -q '\-2'; then
-        printf 'FAIL: last output should include -2 index\n  actual: %s\n' "$output"
+    if ! printf '%s' "$output" | grep -q '^\-1'; then
+        printf 'FAIL: last default should show -1 prefix\n  actual: %s\n' "$output"
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
         return 1
     fi
     CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_last_negative_index() {
+    # -1 = most recent done, -2 = second-to-last done
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
+    local out1 out2
+    out1="$("$CLK_SCRIPT" last -1 2>&1)"
+    out2="$("$CLK_SCRIPT" last -2 2>&1)"
+    if ! printf '%s' "$out1" | grep -q 'b' || ! printf '%s' "$out1" | grep -q '^\-1'; then
+        printf 'FAIL: last -1 should show b with -1 prefix\n  actual: %s\n' "$out1"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$out2" | grep -q '  a  ' || ! printf '%s' "$out2" | grep -q '^\-2'; then
+        printf 'FAIL: last -2 should show a with -2 prefix\n  actual: %s\n' "$out2"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_last_positive_index() {
+    # 1 = oldest active, 2 = second-oldest active
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T09:30:00 >/dev/null 2>&1
+    local out1 out2
+    out1="$("$CLK_SCRIPT" last 1 2>&1)"
+    out2="$("$CLK_SCRIPT" last 2 2>&1)"
+    if ! printf '%s' "$out1" | grep -q '  a  ' || ! printf '%s' "$out1" | grep -q '^\+1'; then
+        printf 'FAIL: last 1 should show a with +1 prefix\n  actual: %s\n' "$out1"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$out2" | grep -q 'b' || ! printf '%s' "$out2" | grep -q '^\+2'; then
+        printf 'FAIL: last 2 should show b with +2 prefix\n  actual: %s\n' "$out2"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_last_negative_excludes_active() {
+    # Negative index only touches done pool; active sessions are invisible to it
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" last -1 2>&1)"
+    clk_test__assert_output_contains "a" printf '%s' "$output"
+    if printf '%s' "$output" | grep -q "(active"; then
+        printf 'FAIL: last -1 should not show active session\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_last_positive_shows_active() {
+    # Positive index shows active sessions
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" last 1 2>&1)"
+    clk_test__assert_output_contains "active" printf '%s' "$output"
 }
 
 test_last_alias_l() {
@@ -305,19 +334,39 @@ test_last_alias_l() {
 }
 
 test_last_empty_log() {
-    clk_test__assert_output_contains "No records" "$CLK_SCRIPT" last
+    clk_test__assert_output_contains "No completed records" "$CLK_SCRIPT" last
+}
+
+test_last_no_active_sessions() {
+    clk_test__assert_output_contains "No active sessions" "$CLK_SCRIPT" last 1
+}
+
+test_last_negative_out_of_range() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" last -5
+}
+
+test_last_positive_out_of_range() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" last 5
 }
 
 test_last_shorthand_dash_n() {
+    # clk -2 = clk last -2 = second-to-last done session
     "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" -2 2>&1)"
-    # Should show both records, same as 'clk last 2'
-    clk_test__assert_output_contains "a" printf '%s' "$output" &&
-    clk_test__assert_output_contains "b" printf '%s' "$output"
+    clk_test__assert_output_contains "a" printf '%s' "$output"
+    if printf '%s' "$output" | grep -q "b  "; then
+        printf 'FAIL: clk -2 should show only the second-to-last done (a), not b\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
 }
 
 test_last_shorthand_dash_1() {
@@ -326,108 +375,6 @@ test_last_shorthand_dash_1() {
     local output
     output="$("$CLK_SCRIPT" -1 2>&1)"
     clk_test__assert_output_contains "work" printf '%s' "$output"
-}
-
-test_last_display_order_reversed() {
-    # -1 (most recent) should appear on top (first line)
-    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
-    local output first_line last_line
-    output="$("$CLK_SCRIPT" last 2 2>&1)"
-    first_line="$(printf '%s\n' "$output" | head -1)"
-    last_line="$(printf '%s\n' "$output" | tail -1)"
-    # First line should be -1 (most recent = b), last line should be -2 (older = a)
-    if ! printf '%s' "$first_line" | grep -q '\-1'; then
-        printf 'FAIL: first line should be -1 (most recent)\n  first: %s\n' "$first_line"
-        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
-        return 1
-    fi
-    if ! printf '%s' "$last_line" | grep -q '\-2'; then
-        printf 'FAIL: last line should be -2 (oldest)\n  last: %s\n' "$last_line"
-        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
-        return 1
-    fi
-    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
-}
-
-test_last_columns_aligned() {
-    # With different tag lengths, fields should still align
-    "$CLK_SCRIPT" add ab for 30 at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" add longertag for 60 at 2026-01-01T12:00:00 >/dev/null 2>&1
-    local output
-    output="$("$CLK_SCRIPT" last 2 2>&1)"
-    # Both lines should have the same column position for the timestamp
-    # The tag column is padded so the start timestamps should be at the same offset
-    local line1_ts_pos line2_ts_pos
-    line1_ts_pos="$(printf '%s\n' "$output" | head -1 | sed 's/[^ ]* *[^ ]*//' | grep -o '20[0-9][0-9]-' | head -1)"
-    line2_ts_pos="$(printf '%s\n' "$output" | tail -1 | sed 's/[^ ]* *[^ ]*//' | grep -o '20[0-9][0-9]-' | head -1)"
-    # Both should have timestamps
-    if [ -z "$line1_ts_pos" ] || [ -z "$line2_ts_pos" ]; then
-        printf 'FAIL: could not find timestamps in aligned output\n  output:\n%s\n' "$output"
-        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
-        return 1
-    fi
-    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
-}
-
-#####################################################################
-# Tests — clk last-done (integration)
-#####################################################################
-
-test_last_done_excludes_active() {
-    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
-    local output
-    output="$("$CLK_SCRIPT" last-done 2>&1)"
-    # Should show 'a' (done) but not 'b' (active)
-    if printf '%s' "$output" | grep -q "active"; then
-        printf 'FAIL: last-done should not show active records\n  actual: %s\n' "$output"
-        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
-        return 1
-    fi
-    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 )) &&
-    clk_test__assert_output_contains "2026-01-01T10:00:00" printf '%s' "$output"
-}
-
-test_last_done_no_index() {
-    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
-    local output
-    output="$("$CLK_SCRIPT" last-done 2>&1)"
-    # Should NOT have -N prefix
-    if printf '%s' "$output" | grep -Eq '^\-[0-9]'; then
-        printf 'FAIL: last-done should not show -N index\n  actual: %s\n' "$output"
-        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
-        return 1
-    fi
-    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
-}
-
-test_last_done_alias_ld() {
-    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
-    clk_test__assert_output_contains "work" "$CLK_SCRIPT" ld
-}
-
-test_last_done_empty() {
-    clk_test__assert_output_contains "No completed records" "$CLK_SCRIPT" last-done
-}
-
-test_last_done_n() {
-    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in c at 2026-01-01T11:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" out c at 2026-01-01T12:00:00 >/dev/null 2>&1
-    local output
-    output="$("$CLK_SCRIPT" last-done 2 2>&1)"
-    local line_count
-    line_count="$(printf '%s\n' "$output" | wc -l | tr -d ' ')"
-    clk_test__assert_equals "2" "$line_count" "last-done 2 shows 2 records"
 }
 
 #####################################################################
@@ -449,15 +396,16 @@ test_lifecycle_in_out_last() {
 }
 
 test_lifecycle_multiple_sessions() {
-    # Two sessions, only one active at a time
+    # Two sessions done: last -1 shows play (most recent), last -2 shows work
     "$CLK_SCRIPT" in work at 2026-03-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work at 2026-03-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in play at 2026-03-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out play at 2026-03-01T11:00:00 >/dev/null 2>&1
-    local output
-    output="$("$CLK_SCRIPT" last 2 2>&1)"
-    clk_test__assert_output_contains "work" printf '%s' "$output" &&
-    clk_test__assert_output_contains "play" printf '%s' "$output"
+    local out1 out2
+    out1="$("$CLK_SCRIPT" last -1 2>&1)"
+    out2="$("$CLK_SCRIPT" last -2 2>&1)"
+    clk_test__assert_output_contains "play" printf '%s' "$out1" &&
+    clk_test__assert_output_contains "work" printf '%s' "$out2"
 }
 
 test_lifecycle_concurrent_sessions() {
@@ -495,7 +443,6 @@ CLK_TESTS_SESSION=(
     test_in_space_format_timestamp
     test_out_display_simplified_timestamps
     test_last_shows_full_timestamps
-    test_last_done_shows_full_timestamps
 
     # clk out (integration)
     test_out_basic
@@ -523,22 +470,17 @@ CLK_TESTS_SESSION=(
 
     # clk last (integration)
     test_last_default
-    test_last_n
-    test_last_includes_active
-    test_last_shows_index
+    test_last_negative_index
+    test_last_positive_index
+    test_last_negative_excludes_active
+    test_last_positive_shows_active
     test_last_alias_l
     test_last_empty_log
+    test_last_no_active_sessions
+    test_last_negative_out_of_range
+    test_last_positive_out_of_range
     test_last_shorthand_dash_n
     test_last_shorthand_dash_1
-    test_last_display_order_reversed
-    test_last_columns_aligned
-
-    # clk last-done (integration)
-    test_last_done_excludes_active
-    test_last_done_no_index
-    test_last_done_alias_ld
-    test_last_done_empty
-    test_last_done_n
 
     # core lifecycle (end-to-end)
     test_lifecycle_in_out_last
