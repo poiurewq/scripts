@@ -30,7 +30,7 @@
 .Cm extend Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp | Cm by Ar minutes
 .br
 .Nm
-.Bro Cm remove | Cm pop Brc
+.Bro Cm remove | Cm pop Brc Op Fl Ar n
 .br
 .Nm
 .Bro Cm reactivate | Cm ra Brc Fl Ar n
@@ -221,10 +221,14 @@ or
 the new end time must be at or after the original end time.
 .Cm by Ar minutes
 shifts the end timestamp forward by exactly that many minutes.
-.It Bro Cm remove | Cm pop Brc
-Remove the last record from the log
+.It Bro Cm remove | Cm pop Brc Op Fl Ar n
+Without an index, removes the last record from the log
 .Pq whether active or completed
-and display the removed record.
+and displays the removed record.
+With
+.Fl Ar n ,
+removes the nth-to-last completed session
+.Pq same negative-index convention as Cm edit and Cm reactivate .
 .It Bro Cm reactivate | Cm ra Brc Fl Ar n
 Convert a completed session back to active.
 .Fl Ar n

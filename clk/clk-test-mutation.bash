@@ -414,6 +414,50 @@ test_remove_preserves_other_records() {
 }
 
 #####################################################################
+# Tests — clk remove -<n> (indexed)
+#####################################################################
+
+test_remove_by_index_basic() {
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove -1 >/dev/null 2>&1
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$count" "remove -1 removes last done session" &&
+    clk_test__assert_log_line 1 'done.*a	3600'
+}
+
+test_remove_by_index_n2() {
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in c at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out c at 2026-01-01T12:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove -2 >/dev/null 2>&1
+    # -2 removes 'b'; a and c remain
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "2" "$count" "remove -2 removes second-to-last done session"
+    local tags
+    tags="$(awk -F'\t' '/^[^#]/ && NF>0 {print $4}' "$CLK_TEST_DIR/clk/clk.tsv" | tr '\n' ' ' | sed 's/ *$//')"
+    clk_test__assert_equals "a c" "$tags" "remove -2 leaves first and last sessions"
+}
+
+test_remove_by_index_out_of_range() {
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" remove -5
+}
+
+test_remove_by_index_no_done_records() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" remove -1
+}
+
+#####################################################################
 # Tests — clk undo (integration)
 #####################################################################
 
@@ -783,6 +827,10 @@ CLK_TESTS_MUTATION=(
     test_remove_creates_undo
     test_remove_alias_pop
     test_remove_preserves_other_records
+    test_remove_by_index_basic
+    test_remove_by_index_n2
+    test_remove_by_index_out_of_range
+    test_remove_by_index_no_done_records
 
     # clk reactivate (integration)
     test_reactivate_basic
