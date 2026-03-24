@@ -1,4 +1,4 @@
-.Dd March 21, 2026
+.Dd March 24, 2026
 .Dt NT 1
 .Os
 .Sh NAME
@@ -6,25 +6,35 @@
 .Nd simple notes maintainer
 .Sh SYNOPSIS
 .Nm
-.Op Fl h | Cm h
+.Op Cm help
 .br
-.Op Cm n Op Ar title
+.Op Cm new Op Ar title
 .br
-.Op Cm l Op Ar title | Cm n
+.Op Cm -n | --new Op Ar title
+.br
+.Op Cm last Op Ar N
+.br
+.Op Cm last-index | Cm li
+.br
+.Op Cm -l | --last Op Ar N
+.br
+.Op Fl li | Fl -last-index
 .br
 .Op Ar num Op Ar ...
 .br
-.Op Cm r Ar num Ar title
+.Op Cm rename Ar num Ar title
 .br
-.Op Cm rn Ar n Ar m
+.Op Cm -r | --rename Ar num Ar title
 .br
-.Op Cm e Ar editor
+.Op Cm rl Ar title
 .br
-.Op Cm R
+.Op Cm renumber Ar n Ar m
 .br
-.Op Cm t
+.Op Cm activity | Cm activity-recursive
 .br
-.Op Cm a | Cm ar
+.Op Cm R | Cm -R
+.br
+.Op Cm t | Cm -t
 .Sh DESCRIPTION
 The
 .Nm
@@ -44,7 +54,7 @@ The template supports the following macros:
 is replaced with today's date (yyyy-mm-dd), and
 .Cm %TITLE
 is replaced with the title passed to
-.Cm n .
+.Cm new .
 .Pp
 If
 .Nm
@@ -58,12 +68,30 @@ and/or
 .Cm t
 in a row to open the specified files all at once.
 .Pp
+Title-consuming commands
+.Pq Cm n , Cm r , Cm rl
+accept an optional hyphen prefix
+.Pq e.g., Fl n , Fl r .
+Without a hyphen, the command treats all remaining words as the title.
+With a hyphen, it stops at the first number or flag, so you can chain
+multiple commands on one line:
+.Pp
+.Dl nt -n my note -3 -r 7 new-title -R
+.Pp
+creates a note titled
+.Dq my note ,
+then opens doc 3, renames doc 7, and opens the README \(em all in one go.
+Titles containing hyphens or numbers must be quoted when using the hyphen-prefixed form.
+.Pp
 Options include:
 .Bl -tag -width indent
-.It Fl h | Cm h
+.It Cm h
+.Pq alias: Cm help
 Print help page.
 .It Cm n Op Ar title
-Create a new document named with the highest unused numeric index (0-padded to 3 digits) followed by a delimiter and a hyphenated version of the
+.Pq alias: Cm new
+Create a new document named with the highest unused numeric index (0-padded to 3 digits)
+followed by a delimiter and a hyphenated version of the
 .Ar title ,
 with the same extension as the previous document (or .md), then open it in the preferred editor.
 If the current directory contains the file
@@ -71,29 +99,36 @@ If the current directory contains the file
 then the new document uses this template's content and
 .Ar extension
 instead.
-.It Cm l Op Ar title | Cm n
+.It Cm l Op Ar N
+.Pq alias: Cm last
 Open the document with the latest numeric index.
-A numeric index must be a 1-to-3-digit positive integer.
 If
-.Ar title
-is provided, rename this document to
-.Ar title
-without opening the document.
-Alternatively, if the optional argument is
-.Cm n ,
-.Nm
-simply returns the numeric index of the last detected note in the current directory.
+.Ar N
+is a positive integer, open the
+.Ar N Ns th-to-last
+indexed document (1 = last, 2 = second-to-last, etc.).
+When using the hyphen-prefixed form, a leading-hyphen next argument is passed on to the next chained command rather than treated as an argument to
+.Cm l .
+.It Cm li
+.Pq alias: Cm last-index
+Print the numeric index of the last indexed document in the current directory.
 .It Ar num Op Ar ...
 Open the existing document(s) with the
 .Ar num
 index (indices).
 .It Cm r Ar num Ar title
+.Pq alias: Cm rename
 Rename the existing document with the
 .Ar num
 index to
 .Ar title
 without opening the document.
+.It Cm rl Ar title
+Rename the last indexed document to
+.Ar title
+without opening the document.
 .It Cm rn Ar n Ar m
+.Pq alias: Cm renumber
 Starting from document index
 .Ar n ,
 renumber the consecutive run of documents so that
@@ -106,33 +141,14 @@ becomes
 and so on, until the end of the consecutive sequence.
 Documents are renamed in the correct order to avoid collisions.
 Fails if any target index is already occupied by a document outside the source range.
-.It Cm a | Cm ar
+.It Cm a
+.Pq alias: Cm activity
 Show an activity summary of indexed documents grouped by last-modified month.
-.Cm a
-searches the current directory only;
-.Cm ar
-searches all subdirectories as well.
-.It Cm e Ar editor
-Set the
-.Ar editor
-that
-.Nm
-will use for the current session.
-The
-.Ar editor
-can be a command-line command or an application.
-If
-.Ar editor
-name contains multiple words, single-quote the name.
-In effect, this option sets the
-.Ev NT_EDITOR
-environment variable.
-The default editor is vim.
-This option must be called by sourcing rather than executing the
-.Nm
-script, as follows:
-.Pp
-.Dl $ source nt e Ar editor
+Searches the current directory only.
+.It Cm ar
+.Pq alias: Cm activity-recursive
+Show an activity summary of indexed documents grouped by last-modified month.
+Searches all subdirectories as well.
 .It Cm R
 Open the README.md (case-insensitive) document in the current working directory, if there is any.
 .It Cm t
@@ -143,8 +159,25 @@ document in the current working directory, if there is any.
 .Sh ENVIRONMENT
 .Bl -tag -width indent
 .It Ev NT_EDITOR
-The editor used to open documents.
-By default, the editor is set to vim.
+Highest-priority editor override for
+.Nm .
+.It Ev VISUAL
+Used when
+.Ev NT_EDITOR
+is not set.
+Typically a GUI editor.
+.It Ev EDITOR
+Used when neither
+.Ev NT_EDITOR
+nor
+.Ev VISUAL
+is set.
+Typically a terminal editor.
+.Pp
+If none of the above are set,
+.Nm
+falls back to
+.Xr vim 1 .
 .El
 .Sh EXIT STATUS
 The
