@@ -51,16 +51,15 @@ clk [help]
     unpause [<tag>]
     undo | redo
     status | s
-    last | l [<n>] | -<n>
-    last-done | ld [<n>]
+    last | l [-<n> | <n>]
     log
     view | v all
     view | v <offset> [through <offset>]
     view | v past [<n>] <hour(s)|day(s)|week(s)|month(s)|year(s)> [before <timestamp> | before minus <minutes>]
     view | v from <timestamp> until|to <timestamp>
     view | v <range> [for <tag|tag1|tag2|...>] [by <day|week|month|session>]
-    edit | e -<n> <field> <value>
-    edit | e -<n> delete
+    edit | e (-<n> | <n>) <field> <value>
+    edit | e (-<n> | <n>) delete
     alias
 
 <offset>    = today | yesterday | {-<n> | current | this} <day(s)|week(s)|month(s)>
@@ -791,136 +790,92 @@ clk_do_status() {
 }
 
 # --- clk_do_last ---
-# clk last [<n>] | l [<n>]
+# clk last [-<n>] | clk last [<n>]
 #
-# --- RATIONALE: clk last includes active records ---
-# last and edit -N form a pair: last shows what's there with -N indices,
-# edit -N modifies by index. If last excluded active records but edit counted
-# them, the indices would be misaligned. Alignment > separation.
+# Negative index: show the Nth-to-last completed session (-1 = most recent done,
+#   -2 = second-to-last done, etc.). Default when no argument is given.
+# Positive index: show the Nth-oldest active session (1 = oldest active,
+#   2 = second-oldest active, etc.).
+#
+# --- RATIONALE: signed index convention ---
+# Negative integers count back from the most recent done session; positive
+# integers count forward from the oldest active session. The sign tells you
+# which pool you are indexing into: negative = done, positive = active.
+# edit mirrors this exact convention so last and edit stay aligned.
 clk_do_last() {
-    local n="${1:-1}"
-    clk__validate_positive_int "$n" "<n> in 'clk last <n>'"
+    local signed_n="${1:--1}"
 
-    # Count data lines (non-comment, non-empty)
-    local total
-    total="$(clk__record_count)"
-
-    if [ "$total" -eq 0 ]; then
-        printf 'No records in log.\n'
-        return 0
+    local is_negative=0 abs_n
+    if printf '%s' "$signed_n" | grep -Eq '^-[0-9]+$'; then
+        is_negative=1
+        abs_n="${signed_n#-}"
+    else
+        abs_n="$signed_n"
     fi
 
-    if [ "$n" -gt "$total" ]; then
-        n="$total"
-    fi
+    if [ "$is_negative" = "1" ]; then
+        # Show the abs_n-th most recent done session
+        local done_lines
+        done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
 
-    # Collect data line numbers (skipping comments)
-    local data_lines
-    data_lines="$(awk '/^[^#]/ && NF>0 {print NR}' "$CLK_LOG")"
-
-    # Get the last N data line numbers
-    local selected
-    selected="$(printf '%s\n' "$data_lines" | tail -n "$n")"
-
-    # Display with -N index, -1 (most recent) on top, -N (oldest) at bottom.
-    # clk last shows full timestamps (CLK_FMT_RAW=1) for inspection.
-    # Column-aligned output: collect all formatted lines, then pad fields.
-    CLK_FMT_RAW=1
-    local lines_arr_idx=""
-    local lines_arr_fmt=""
-    local i="$n"
-    while IFS= read -r lineno; do
-        local line_content
-        line_content="$(clk__get_line "$lineno")"
-        local formatted
-        formatted="$(clk__fmt_record "$line_content")"
-        lines_arr_idx="${lines_arr_idx}${i}${CLK_TAB}"
-        lines_arr_fmt="${lines_arr_fmt}${formatted}${CLK_TAB}"
-        i=$(( i - 1 ))
-    done <<< "$selected"
-    CLK_FMT_RAW=0
-
-    # Reverse order: -1 on top, then -2, etc.
-    # Split tab-separated lists and reverse
-    local rev_idx="" rev_fmt="" idx_item fmt_item
-    while [ -n "$lines_arr_idx" ]; do
-        idx_item="${lines_arr_idx%%${CLK_TAB}*}"
-        fmt_item="${lines_arr_fmt%%${CLK_TAB}*}"
-        lines_arr_idx="${lines_arr_idx#*${CLK_TAB}}"
-        lines_arr_fmt="${lines_arr_fmt#*${CLK_TAB}}"
-        rev_idx="${idx_item}${CLK_TAB}${rev_idx}"
-        rev_fmt="${fmt_item}${CLK_TAB}${rev_fmt}"
-    done
-
-    # Find max tag width for alignment
-    local max_tag=0
-    local tmp_fmt="$rev_fmt"
-    while [ -n "$tmp_fmt" ]; do
-        fmt_item="${tmp_fmt%%${CLK_TAB}*}"
-        tmp_fmt="${tmp_fmt#*${CLK_TAB}}"
-        if [ -z "$fmt_item" ]; then continue; fi
-        # Tag is the first space-delimited word
-        local this_tag="${fmt_item%%  *}"
-        local this_len=${#this_tag}
-        if [ "$this_len" -gt "$max_tag" ]; then
-            max_tag="$this_len"
+        if [ -z "$done_lines" ]; then
+            printf 'No completed records in log.\n'
+            return 0
         fi
-    done
 
-    # Print with aligned columns
-    local idx_width=${#n}
-    while [ -n "$rev_idx" ]; do
-        idx_item="${rev_idx%%${CLK_TAB}*}"
-        fmt_item="${rev_fmt%%${CLK_TAB}*}"
-        rev_idx="${rev_idx#*${CLK_TAB}}"
-        rev_fmt="${rev_fmt#*${CLK_TAB}}"
-        if [ -z "$idx_item" ]; then continue; fi
-        # Split formatted record: tag is before first double-space, rest is after
-        local this_tag="${fmt_item%%  *}"
-        local this_rest="${fmt_item#*  }"
-        printf -- "-%-${idx_width}d  %-${max_tag}s  %s\n" "$idx_item" "$this_tag" "$this_rest"
-    done
-}
+        local total_done
+        total_done="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
 
-# --- clk_do_last_done ---
-# clk last-done [<n>] | ld [<n>]
-#
-# --- RATIONALE: last-done omits -N index ---
-# The index would skip active records but edit -N doesn't, so showing a
-# wrong index is worse than showing none.
-clk_do_last_done() {
-    local n="${1:-1}"
-    clk__validate_positive_int "$n" "<n> in 'clk last-done <n>'"
+        if [ "$abs_n" -gt "$total_done" ]; then
+            clk__die 1 "Index -${abs_n} out of range. Only ${total_done} completed record(s) in log."
+        fi
 
-    # Collect only 'done' lines
-    local done_lines
-    done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+        # tail -n abs_n gives the last abs_n lines; head -n 1 picks the oldest of those
+        local lineno
+        lineno="$(printf '%s\n' "$done_lines" | tail -n "${abs_n}" | head -n 1)"
 
-    if [ -z "$done_lines" ]; then
-        printf 'No completed records in log.\n'
-        return 0
-    fi
-
-    local total
-    total="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
-
-    if [ "$n" -gt "$total" ]; then
-        n="$total"
-    fi
-
-    local selected
-    selected="$(printf '%s\n' "$done_lines" | tail -n "$n")"
-
-    # clk last-done shows full timestamps (CLK_FMT_RAW=1) for inspection
-    CLK_FMT_RAW=1
-    while IFS= read -r lineno; do
         local line_content
         line_content="$(clk__get_line "$lineno")"
+        CLK_FMT_RAW=1
         local formatted
         formatted="$(clk__fmt_record "$line_content")"
-        printf '  %s\n' "$formatted"
-    done <<< "$selected"
-    CLK_FMT_RAW=0
+        CLK_FMT_RAW=0
+
+        local this_tag="${formatted%%  *}"
+        local this_rest="${formatted#*  }"
+        printf -- "-%d  %s  %s\n" "$abs_n" "$this_tag" "$this_rest"
+    else
+        # Show the abs_n-th oldest active session
+        local active_lines
+        active_lines="$(awk -F'\t' '$1=="active" {print NR}' "$CLK_LOG")"
+
+        if [ -z "$active_lines" ]; then
+            printf 'No active sessions.\n'
+            return 0
+        fi
+
+        local total_active
+        total_active="$(printf '%s\n' "$active_lines" | wc -l | tr -d ' ')"
+
+        if [ "$abs_n" -gt "$total_active" ]; then
+            clk__die 1 "Index ${abs_n} out of range. Only ${total_active} active session(s)."
+        fi
+
+        # head -n abs_n gives the first abs_n lines; tail -n 1 picks the newest of those
+        local lineno
+        lineno="$(printf '%s\n' "$active_lines" | head -n "${abs_n}" | tail -n 1)"
+
+        local line_content
+        line_content="$(clk__get_line "$lineno")"
+        CLK_FMT_RAW=1
+        local formatted
+        formatted="$(clk__fmt_record "$line_content")"
+        CLK_FMT_RAW=0
+
+        local this_tag="${formatted%%  *}"
+        local this_rest="${formatted#*  }"
+        printf "+%d  %s  %s\n" "$abs_n" "$this_tag" "$this_rest"
+    fi
 }
 
 # --- clk_do_pause ---
@@ -1324,13 +1279,17 @@ clk_do_remove() {
 }
 
 # --- clk_do_edit ---
-# clk edit -<n> tag <new-tag>
+# clk edit -<n> tag <new-tag>    — edit the Nth-to-last done session
 # clk edit -<n> start <timestamp>
 # clk edit -<n> end <timestamp>
 # clk edit -<n> break <minutes>
 # clk edit -<n> pause <timestamp> | clear
 # clk edit -<n> on <description>
 # clk edit -<n> delete
+# clk edit <n>  ...              — edit the Nth-oldest active session
+#
+# Negative index targets done sessions; positive index targets active sessions.
+# Mirrors the convention used by clk last.
 #
 # --- RATIONALE: pause editing ---
 # Occasionally the user pauses at the wrong time and minus on the initial
@@ -1338,27 +1297,43 @@ clk_do_remove() {
 # direct editing of the PAUSED_AT field via edit is more surgical and
 # doesn't disturb the undo stack.
 clk_do_edit() {
-    local n="$1" field="$2"
+    local signed_n="$1" field="$2"
     shift 2
     local value="$*"
 
-    # Resolve the -N index to a log line number
-    # N counts from end of data lines (non-comment, non-empty), 1-indexed
-    local data_lines total
-    data_lines="$(awk '/^[^#]/ && NF>0 {print NR}' "$CLK_LOG")"
-    total="$(printf '%s\n' "$data_lines" | wc -l | tr -d ' ')"
-
-    if [ "$total" -eq 0 ]; then
-        clk__die 5 "No records in log."
-    fi
-    if [ "$n" -gt "$total" ]; then
-        clk__die 1 "Index -${n} out of range. Only ${total} record(s) in log."
+    local is_negative=0 abs_n
+    if printf '%s' "$signed_n" | grep -Eq '^-[0-9]+$'; then
+        is_negative=1
+        abs_n="${signed_n#-}"
+    else
+        abs_n="$signed_n"
     fi
 
-    # Get the actual line number: pick the (total - n + 1)th data line
-    local target_pos=$(( total - n + 1 ))
+    # Resolve signed index to a log line number
     local lineno
-    lineno="$(printf '%s\n' "$data_lines" | awk -v p="$target_pos" 'NR==p')"
+    if [ "$is_negative" = "1" ]; then
+        local done_lines total_done
+        done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+        if [ -z "$done_lines" ]; then
+            clk__die 5 "No completed records in log."
+        fi
+        total_done="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
+        if [ "$abs_n" -gt "$total_done" ]; then
+            clk__die 1 "Index -${abs_n} out of range. Only ${total_done} completed record(s) in log."
+        fi
+        lineno="$(printf '%s\n' "$done_lines" | tail -n "${abs_n}" | head -n 1)"
+    else
+        local active_lines total_active
+        active_lines="$(awk -F'\t' '$1=="active" {print NR}' "$CLK_LOG")"
+        if [ -z "$active_lines" ]; then
+            clk__die 5 "No active sessions in log."
+        fi
+        total_active="$(printf '%s\n' "$active_lines" | wc -l | tr -d ' ')"
+        if [ "$abs_n" -gt "$total_active" ]; then
+            clk__die 1 "Index ${abs_n} out of range. Only ${total_active} active session(s) in log."
+        fi
+        lineno="$(printf '%s\n' "$active_lines" | head -n "${abs_n}" | tail -n 1)"
+    fi
 
     local line_content
     line_content="$(clk__get_line "$lineno")"
@@ -1375,7 +1350,7 @@ clk_do_edit() {
 
     case "$field" in
         tag)
-            [ -n "$value" ] || clk__die 1 "Missing new tag for 'edit -${n} tag <new-tag>'."
+            [ -n "$value" ] || clk__die 1 "Missing new tag for 'edit ${signed_n} tag <new-tag>'."
             clk__validate_tag "$value"
             clk__save_undo
             tag="$value"
@@ -1383,7 +1358,7 @@ clk_do_edit() {
             clk__replace_line "$lineno" "$new_record"
             ;;
         start)
-            [ -n "$value" ] || clk__die 1 "Missing timestamp for 'edit -${n} start <timestamp>'."
+            [ -n "$value" ] || clk__die 1 "Missing timestamp for 'edit ${signed_n} start <timestamp>'."
             clk__validate_timestamp "$value"
             value="$CLK_VALIDATED_TS"
             local new_start_epoch
@@ -1408,7 +1383,7 @@ clk_do_edit() {
             if [ "$status" = "active" ]; then
                 clk__die 1 "Cannot set end time on an active record. Use 'clk out' instead."
             fi
-            [ -n "$value" ] || clk__die 1 "Missing timestamp for 'edit -${n} end <timestamp>'."
+            [ -n "$value" ] || clk__die 1 "Missing timestamp for 'edit ${signed_n} end <timestamp>'."
             clk__validate_timestamp "$value"
             value="$CLK_VALIDATED_TS"
             local new_end_epoch start_epoch
@@ -1427,8 +1402,8 @@ clk_do_edit() {
             clk__replace_line "$lineno" "$new_record"
             ;;
         break)
-            [ -n "$value" ] || clk__die 1 "Missing minutes for 'edit -${n} break <minutes>'."
-            clk__validate_positive_int "$value" "<minutes> in 'edit -${n} break'"
+            [ -n "$value" ] || clk__die 1 "Missing minutes for 'edit ${signed_n} break <minutes>'."
+            clk__validate_positive_int "$value" "<minutes> in 'edit ${signed_n} break'"
             local new_break_secs=$(( value * 60 ))
             if [ "$status" = "done" ]; then
                 local start_epoch end_epoch
@@ -1449,7 +1424,7 @@ clk_do_edit() {
             if [ "$status" != "active" ]; then
                 clk__die 1 "Cannot set pause on a completed record. 'pause' only applies to active records."
             fi
-            [ -n "$value" ] || clk__die 1 "Missing value for 'edit -${n} pause <timestamp|clear>'."
+            [ -n "$value" ] || clk__die 1 "Missing value for 'edit ${signed_n} pause <timestamp|clear>'."
             if [ "$value" = "clear" ]; then
                 paused_at=""
             else
@@ -1462,7 +1437,7 @@ clk_do_edit() {
             clk__replace_line "$lineno" "$new_record"
             ;;
         on)
-            [ -n "$value" ] || clk__die 1 "Missing description for 'edit -${n} on <description>'."
+            [ -n "$value" ] || clk__die 1 "Missing description for 'edit ${signed_n} on <description>'."
             clk__save_undo
             description="$value"
             local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
@@ -1489,7 +1464,7 @@ clk_do_edit() {
     fmt_before="$(clk__fmt_record "$line_content")"
     fmt_after="$(clk__fmt_record "$updated_line")"
     CLK_FMT_RAW=0
-    printf '\nUpdated record -%d:\n  before: %s\n   after: %s\n\n' "$n" "$fmt_before" "$fmt_after"
+    printf '\nUpdated record %s:\n  before: %s\n   after: %s\n\n' "$signed_n" "$fmt_before" "$fmt_after"
 }
 
 # --- clk_do_log ---
@@ -2190,20 +2165,13 @@ last|l)
     clk_subcmd="last"
     shift
     if [ $# -gt 0 ]; then
-        clk__validate_positive_int "$1" "<n> in 'clk last <n>'"
-        clk_last_n="$1"
+        if printf '%s' "$1" | grep -Eq '^-[1-9][0-9]*$' || printf '%s' "$1" | grep -Eq '^[1-9][0-9]*$'; then
+            clk_last_n="$1"
+        else
+            clk__die 1 "Expected a nonzero integer (e.g., -1 or 2) for 'clk last', got '$1'."
+        fi
     fi
-    clk_do_last "${clk_last_n:-1}"
-    ;;
-
-last-done|ld)
-    clk_subcmd="last-done"
-    shift
-    if [ $# -gt 0 ]; then
-        clk__validate_positive_int "$1" "<n> in 'clk last-done <n>'"
-        clk_last_n="$1"
-    fi
-    clk_do_last_done "${clk_last_n:-1}"
+    clk_do_last "${clk_last_n:--1}"
     ;;
 
 pause|p)
@@ -2737,20 +2705,21 @@ edit|e)
     clk_subcmd="edit"
     shift
     if [ $# -eq 0 ]; then
-        clk__die 1 "Missing index. Usage: 'clk edit -<n> <field> <value>'."
+        clk__die 1 "Missing index. Usage: 'clk edit (-<n> | <n>) <field> <value>'."
     fi
 
-    # Parse -N index
+    # Parse signed index: -<n> targets done sessions, <n> targets active sessions
     clk_edit_n=""
-    if printf '%s' "$1" | grep -Eq '^-[0-9]+$'; then
-        clk_edit_n="${1#-}"; shift
+    if printf '%s' "$1" | grep -Eq '^-[1-9][0-9]*$'; then
+        clk_edit_n="$1"; shift
+    elif printf '%s' "$1" | grep -Eq '^[1-9][0-9]*$'; then
+        clk_edit_n="$1"; shift
     else
-        clk__die 1 "Expected -<n> index, got '$1'. Usage: 'clk edit -<n> <field> <value>'."
+        clk__die 1 "Expected -<n> (done) or <n> (active) index, got '$1'. Usage: 'clk edit (-<n> | <n>) <field> <value>'."
     fi
-    clk__validate_positive_int "$clk_edit_n" "<n> in 'clk edit -<n>'"
 
     if [ $# -eq 0 ]; then
-        clk__die 1 "Missing field. Usage: 'clk edit -${clk_edit_n} <field> <value>'."
+        clk__die 1 "Missing field. Usage: 'clk edit ${clk_edit_n} <field> <value>'."
     fi
 
     clk_edit_field="$1"; shift
@@ -2768,9 +2737,9 @@ edit|e)
             [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'delete'."
             ;;
         tag|start|end|break|pause)
-            [ $# -ge 1 ] || clk__die 1 "Missing value for 'edit -${clk_edit_n} ${clk_edit_field}'."
+            [ $# -ge 1 ] || clk__die 1 "Missing value for 'edit ${clk_edit_n} ${clk_edit_field}'."
             clk_edit_value="$1"; shift
-            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk edit -${clk_edit_n} ${clk_edit_field} ${clk_edit_value}'."
+            [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk edit ${clk_edit_n} ${clk_edit_field} ${clk_edit_value}'."
             ;;
         *)
             clk__die 1 "Unknown field '${clk_edit_field}'. Expected: tag, start, end, break, pause, on, delete."
@@ -2795,10 +2764,10 @@ alias)
     ;;
 
 -[0-9]*)
-    # Syntactic sugar: clk -<n> → clk last <n>
+    # Syntactic sugar: clk -<n> → clk last -<n>
     clk_subcmd="last"
-    clk_last_n="${1#-}"
-    clk__validate_positive_int "$clk_last_n" "<n> in 'clk -<n>'"
+    clk_last_n="$1"
+    clk__validate_positive_int "${clk_last_n#-}" "<n> in 'clk -<n>'"
     clk_do_last "$clk_last_n"
     ;;
 
