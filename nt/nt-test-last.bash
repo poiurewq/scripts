@@ -45,32 +45,66 @@ test_last_n_no_docs() {
 }
 
 #####################################################################
-# Tests — nt l: with title (rename — current behavior, pre-Phase 3)
-#
-# NOTE: After Phase 3, `l <title>` will be removed. These tests
-# document the current behavior and should be replaced with `rl`
-# tests when Phase 3 lands.
+# Tests — nt l <N>: open nth-to-last (Phase 3)
 #####################################################################
 
-test_last_rename_with_title() {
-    nt_test__create_file "001-old-name.md"
-    "$NT_SCRIPT" l "new name" >/dev/null 2>&1
-    nt_test__assert_file_exists "$NT_TEST_DIR/001-new-name.md" \
-        "l with title should rename last doc"
-    nt_test__assert_file_not_exists "$NT_TEST_DIR/001-old-name.md" \
-        "original file should be gone after rename"
+test_last_nth_to_last_1() {
+    # l 1 is the same as l (opens the last doc)
+    nt_test__create_file "001-first.md"
+    nt_test__create_file "002-second.md"
+    nt_test__create_file "003-third.md"
+    nt_test__assert_output_contains "003-third.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" l 1
 }
 
-test_last_rename_preserves_delimiter() {
-    nt_test__create_file "001__old-name.md"
-    "$NT_SCRIPT" l "new name" >/dev/null 2>&1
-    nt_test__assert_file_exists "$NT_TEST_DIR/001__new-name.md" \
-        "l rename should preserve __ delimiter"
+test_last_nth_to_last_2() {
+    nt_test__create_file "001-first.md"
+    nt_test__create_file "002-second.md"
+    nt_test__create_file "003-third.md"
+    nt_test__assert_output_contains "002-second.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" l 2
 }
 
-test_last_rename_confirmation_message() {
-    nt_test__create_file "001-old.md"
-    nt_test__assert_output_contains "renamed to" "$NT_SCRIPT" l "new"
+test_last_nth_to_last_3() {
+    nt_test__create_file "001-first.md"
+    nt_test__create_file "002-second.md"
+    nt_test__create_file "003-third.md"
+    nt_test__assert_output_contains "001-first.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" l 3
+}
+
+test_last_nth_exceeds_count_fails() {
+    nt_test__create_file "001-first.md"
+    nt_test__create_file "002-second.md"
+    nt_test__assert_exit 2 "$NT_SCRIPT" l 5
+}
+
+test_last_nth_exceeds_count_message() {
+    nt_test__create_file "001-first.md"
+    nt_test__assert_output_contains "Only 1 indexed document" "$NT_SCRIPT" l 2
+}
+
+#####################################################################
+# Tests — nt last: long-form alias (Phase 3)
+#####################################################################
+
+test_last_alias_opens_last_doc() {
+    nt_test__create_file "001-first.md"
+    nt_test__create_file "005-fifth.md"
+    nt_test__assert_output_contains "005-fifth.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" last
+}
+
+test_last_alias_n_prints_number() {
+    nt_test__create_file "004-note.md"
+    nt_test__assert_output_equals "4" "$NT_SCRIPT" last n
+}
+
+test_last_alias_nth_to_last() {
+    nt_test__create_file "001-a.md"
+    nt_test__create_file "002-b.md"
+    nt_test__assert_output_contains "001-a.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" last 2
 }
 
 #####################################################################
@@ -84,7 +118,12 @@ NT_TESTS_LAST=(
     test_last_n_prints_number
     test_last_n_prints_highest
     test_last_n_no_docs
-    test_last_rename_with_title
-    test_last_rename_preserves_delimiter
-    test_last_rename_confirmation_message
+    test_last_nth_to_last_1
+    test_last_nth_to_last_2
+    test_last_nth_to_last_3
+    test_last_nth_exceeds_count_fails
+    test_last_nth_exceeds_count_message
+    test_last_alias_opens_last_doc
+    test_last_alias_n_prints_number
+    test_last_alias_nth_to_last
 )

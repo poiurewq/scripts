@@ -14,11 +14,22 @@ uf=$(tput smul 2>/dev/null) || uf=''
 #######################################################################
 
 nt_template_name='nt_template'
-if [ -z "$NT_EDITOR" ]; then NT_EDITOR='vim'; fi
+
+# Editor resolution order: NT_EDITOR > VISUAL > EDITOR > vim  (§3.4)
+nt_editor="${NT_EDITOR:-${VISUAL:-${EDITOR:-vim}}}"
 
 # Syntax references used in error messages
-nt_syn_6="${bf}r${nf} ${uf}num${nf} ${uf}title${nf}"
-nt_syn_10="${bf}rn${nf} ${uf}n${nf} ${uf}m${nf}"
+nt_syn_r="${bf}rename${nf} ${uf}num${nf} ${uf}title${nf}"
+nt_syn_rn="${bf}renumber${nf} ${uf}n${nf} ${uf}m${nf}"
+
+# Reserved tokens for non-greedy title parsing (§3.1 / Appendix B)
+# Any argument matching one of these stops consume_title.
+_nt_reserved_tokens=(
+	n new l last r rename rl rn renumber
+	a activity ar activity-recursive
+	h help R t
+	i index c copy
+)
 
 #######################################################################
 # Cross-platform abstraction (§2.5)
@@ -169,20 +180,38 @@ validate_index() {
 	fi
 }
 
-# Consumes all arguments as a title. Sets globals:
+# Consumes arguments as a title, stopping at any reserved token or
+# numeric index. Sets globals:
 #   _consume_title_raw    — space-separated title
 #   _consume_title_result — hyphen-joined title
+#   _nt_consumed          — number of arguments consumed
 consume_title() {
 	_consume_title_raw=""
 	_consume_title_result=""
-	local first=1
+	_nt_consumed=0
+	local arg t matched
 	for arg in "$@"; do
-		if [[ $first -eq 1 ]]; then
+		# Stop at numeric tokens (simple index or range)
+		if [[ "$arg" =~ ^[0-9]+$ ]] || [[ "$arg" =~ ^[0-9]+-[0-9]+$ ]]; then
+			break
+		fi
+		# Stop at reserved tokens
+		matched=0
+		for t in "${_nt_reserved_tokens[@]}"; do
+			if [[ "$arg" == "$t" ]]; then
+				matched=1
+				break
+			fi
+		done
+		if [[ $matched -eq 1 ]]; then
+			break
+		fi
+		if [[ $_nt_consumed -eq 0 ]]; then
 			_consume_title_raw="$arg"
-			first=0
 		else
 			_consume_title_raw+=" $arg"
 		fi
+		(( _nt_consumed++ )) || true
 	done
 	_consume_title_result="${_consume_title_raw// /-}"
 }
@@ -209,18 +238,20 @@ build_filename() {
 #######################################################################
 
 cmd_help() {
-	printf 'usage: nt [h] [n [title]] [l [title|n]] [num...] [r num title] [rn n m] [a|ar] [e editor] [R] [t]\n\n'
-	printf '  nt                    print usage\n'
-	printf '  nt h|-h               print this help\n'
-	printf '  nt n [title]          create new indexed document\n'
-	printf '  nt l [title|n]        open last doc; rename if title; print index if n\n'
-	printf '  nt <num> [num...]     open document(s) by numeric index\n'
-	printf '  nt r <num> <title>    rename document by index\n'
-	printf '  nt rn <n> <m>         renumber consecutive run starting at n to m\n'
-	printf '  nt a|ar               activity summary (ar: recursive)\n'
-	printf '  nt e <editor>         set editor for this session\n'
-	printf '  nt R                  open README.md\n'
-	printf '  nt t                  open template file\n'
+	printf 'usage: nt <command> [args]\n\n'
+	printf '  nt                           print usage\n'
+	printf '  nt help                      print this help (alias: h)\n'
+	printf '  nt new [i INDEX] [TITLE]     create new indexed document (alias: n)\n'
+	printf '  nt last [N]                  open last (or Nth-to-last) document (alias: l)\n'
+	printf '  nt last n                    print last index number (alias: l n)\n'
+	printf '  nt NUM [NUM ...]             open document(s) by numeric index\n'
+	printf '  nt rename NUM TITLE          rename document by index (alias: r)\n'
+	printf '  nt rl TITLE                  rename last document\n'
+	printf '  nt renumber N M              renumber consecutive run (alias: rn)\n'
+	printf '  nt activity                  activity summary, current dir (alias: a)\n'
+	printf '  nt activity-recursive        activity summary, recursive (alias: ar)\n'
+	printf '  nt R                         open README.md\n'
+	printf '  nt t                         open template file\n'
 }
 
 cmd_new() {
@@ -246,6 +277,7 @@ cmd_new() {
 			new_doc="${new_num}${last_delim}${new_title}"
 		fi
 	else
+		_nt_consumed=0
 		new_doc="${new_num}"
 		new_title_raw=""
 	fi
@@ -279,34 +311,36 @@ cmd_new() {
 }
 
 cmd_last() {
-	local last_num last_doc
+	local last_num
 	last_num="$(last_num_getter)"
-	if [ "${last_num}" -ne 0 ]; then
-		if [ "$1" = 'n' ]; then
-			printf '%d\n' "${last_num}"
-			exit 0
-		fi
-		last_doc="$(last_indexed_doc)"
-		if [ "$#" -gt 0 ]; then
-			# rename the last doc
-			consume_title "$@"
-			local new_title="$_consume_title_result"
-			local last_num_padded last_delim last_ext new_doc
-			last_num_padded="$( printf '%03d' "${last_num}" )"
-			last_delim="$(get_delimiter "$last_doc")"
-			last_ext="$(get_extension "$last_doc" 2>/dev/null)" || last_ext="${last_doc##*.}"
-			if [ -z "$last_delim" ]; then
-				new_doc="${last_num_padded}-${new_title}.${last_ext}"
-			else
-				new_doc="${last_num_padded}${last_delim}${new_title}.${last_ext}"
-			fi
-			\mv "${last_doc}" "${new_doc}" \
-				&& printf '%s renamed to %s\n' "${last_doc}" "${new_doc}"
-		else
-			files_to_open+=( "${last_doc}" )
-		fi
-	else
+	if [ "${last_num}" -eq 0 ]; then
 		nt_err "No indexed document found."
+		exit 2
+	fi
+
+	if [ "$#" -eq 0 ]; then
+		# No argument: open the last doc
+		_nt_consumed=0
+		files_to_open+=( "$(last_indexed_doc)" )
+	elif [ "$1" = 'n' ]; then
+		# Special token 'n': print numeric index and exit
+		printf '%d\n' "${last_num}"
+		exit 0
+	elif [[ "$1" =~ ^[0-9]+$ ]]; then
+		# Positive integer: open nth-to-last
+		_nt_consumed=1
+		local nth="$1"
+		local -a docs
+		docs=( [0-9]##*(N.on) )
+		local total=${#docs[@]}
+		if (( nth < 1 )) || (( nth > total )); then
+			nt_err "Only ${total} indexed document(s) found."
+			exit 2
+		fi
+		local idx=$(( total - nth + 1 ))
+		files_to_open+=( "${docs[$idx]}" )
+	else
+		nt_err "Invalid argument for last: $1"
 		exit 2
 	fi
 }
@@ -320,7 +354,7 @@ cmd_open() {
 
 cmd_rename() {
 	if [ "$#" -lt 2 ]; then
-		printf 'usage: %s\n' "${nt_syn_6}"
+		printf 'usage: %s\n' "${nt_syn_r}"
 		exit 1
 	fi
 	validate_index "$1" || exit 2
@@ -329,6 +363,10 @@ cmd_rename() {
 	try_num="$( printf '%03d' "$1" )"
 	shift
 	consume_title "$@"
+	if [ -z "$_consume_title_result" ]; then
+		printf 'usage: %s\n' "${nt_syn_r}"
+		exit 1
+	fi
 	local new_title="$_consume_title_result"
 	local try_doc_ext try_delim new_doc
 	try_doc_ext="$(get_extension "$try_doc" 2>/dev/null)" || try_doc_ext="${try_doc##*.}"
@@ -342,9 +380,42 @@ cmd_rename() {
 		&& printf '%s renamed to %s\n' "${try_doc}" "${new_doc}"
 }
 
+# Rename the last indexed document to the given title.
+cmd_rename_last() {
+	if [ "$#" -eq 0 ]; then
+		nt_err "usage: nt rl <title>"
+		exit 1
+	fi
+	local last_num
+	last_num="$(last_num_getter)"
+	if [ "${last_num}" -eq 0 ]; then
+		nt_err "No indexed document found."
+		exit 2
+	fi
+	local last_doc
+	last_doc="$(last_indexed_doc)"
+	consume_title "$@"
+	if [ -z "$_consume_title_result" ]; then
+		nt_err "usage: nt rl <title>"
+		exit 1
+	fi
+	local new_title="$_consume_title_result"
+	local last_num_padded last_delim last_ext new_doc
+	last_num_padded="$( printf '%03d' "${last_num}" )"
+	last_delim="$(get_delimiter "$last_doc")"
+	last_ext="$(get_extension "$last_doc" 2>/dev/null)" || last_ext="${last_doc##*.}"
+	if [ -z "$last_delim" ]; then
+		new_doc="${last_num_padded}-${new_title}.${last_ext}"
+	else
+		new_doc="${last_num_padded}${last_delim}${new_title}.${last_ext}"
+	fi
+	\mv "${last_doc}" "${new_doc}" \
+		&& printf '%s renamed to %s\n' "${last_doc}" "${new_doc}"
+}
+
 cmd_renumber() {
 	if [ "$#" -lt 2 ]; then
-		printf 'usage: %s\n' "${nt_syn_10}"
+		printf 'usage: %s\n' "${nt_syn_rn}"
 		exit 1
 	fi
 	local rn_start="$1" rn_target="$2"
@@ -429,21 +500,6 @@ cmd_activity() {
 	printf '\n  Total: %d documents\n\n' "${#nt_files[@]}"
 }
 
-cmd_editor() {
-	if [ -z "$1" ]; then
-		nt_err "No editor given."
-		exit 2
-	fi
-	local chosen_editor="$1"
-	local export_cmd="export NT_EDITOR=${chosen_editor}"
-	if nt_copy_to_clipboard "$export_cmd"; then
-		printf "The command to update the ${bf}nt${nf} editor has been placed in your clipboard.\n"
-		printf 'Please paste it into the command line to update it.\n'
-	else
-		printf 'Run this command to set the editor:\n  %s\n' "${export_cmd}"
-	fi
-}
-
 cmd_readme() {
 	local -a readmes
 	readmes=( (#i)readme.md(N.) )
@@ -474,33 +530,64 @@ cmd_template() {
 #######################################################################
 
 if [ "$#" -eq 0 ]; then
-	printf "usage: nt [h] [n [title]] [l [title|n]] [num...] [r num title] [rn n m] [a|ar] [e editor] [R] [t]\n"
+	printf 'usage: nt <command> [args] — run "nt help" for full reference\n'
 	exit 0
 fi
 
 nt_platform_detect
 typeset -aU files_to_open=()
+_nt_consumed=0
 setopt extended_glob 2>/dev/null
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
-		n)           shift; cmd_new "$@";       break ;;
-		l)           shift; cmd_last "$@";      break ;;
-		r)           shift; cmd_rename "$@";    break ;;
-		rn)          shift; cmd_renumber "$@";  break ;;
-		a|ar)        cmd_activity "$1";         break ;;
-		e)           shift; cmd_editor "$@";    break ;;
-		R)           cmd_readme;                shift ;;
-		t)           cmd_template;              shift ;;
-		-h|h)        cmd_help;                  break ;;
+
+		n|new)
+			shift
+			cmd_new "$@"
+			_nc=$_nt_consumed
+			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+			;;
+
+		l|last)
+			shift
+			cmd_last "$@"
+			_nc=$_nt_consumed
+			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+			;;
+
+		r|rename)
+			shift
+			cmd_rename "$@"
+			# 1 for the index arg + title consumed
+			_nc=$(( 1 + _nt_consumed ))
+			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+			;;
+
+		rl)
+			shift
+			cmd_rename_last "$@"
+			_nc=$_nt_consumed
+			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
+			;;
+
+		rn|renumber)    shift; cmd_renumber "$@"; break ;;
+		a|activity)     cmd_activity "a";         break ;;
+		ar|activity-recursive)
+		                cmd_activity "ar";         break ;;
+		h|help)         cmd_help;                  break ;;
+		R)              cmd_readme;                shift ;;
+		t)              cmd_template;              shift ;;
+
 		[0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-		             cmd_open "$1"; shift ;;
-		*)           nt_err "Unknown option '$1'"; exit 2 ;;
+		                cmd_open "$1"; shift ;;
+
+		*)              nt_err "Unknown option '$1'"; exit 2 ;;
 	esac
 done
 
 unsetopt extended_glob 2>/dev/null
 
 if [ "${#files_to_open[@]}" -gt 0 ]; then
-	nt_open "${NT_EDITOR}" "${files_to_open[@]}"
+	nt_open "${nt_editor}" "${files_to_open[@]}"
 fi
