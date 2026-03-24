@@ -14,9 +14,11 @@
 .br
 .Op Cm last Op Ar N
 .br
-.Op Cm last Cm i
+.Op Cm last-index | Cm li
 .br
 .Op Cm -l | --last Op Ar N
+.br
+.Op Fl li | Fl -last-index
 .br
 .Op Ar num Op Ar ...
 .br
@@ -127,8 +129,7 @@ is a positive integer, open the
 indexed document (1 = last, 2 = second-to-last, etc.).
 In hyphen style, a leading-hyphen next argument is passed on to the next chained command rather than treated as an argument to
 .Cm last .
-.It Cm l | Cm last Cm i | Cm index
-.It Fl l | Fl -last Cm i | Cm index
+.It Cm li | Cm last-index | Fl li | Fl -last-index
 Print the numeric index of the last indexed document in the current directory.
 .It Ar num Op Ar ...
 Open the existing document(s) with the

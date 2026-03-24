@@ -31,22 +31,22 @@ test_last_no_docs_message() {
 
 test_last_n_prints_number() {
     nt_test__create_file "007-note.md"
-    nt_test__assert_output_equals "7" "$NT_SCRIPT" l i
+    nt_test__assert_output_equals "7" "$NT_SCRIPT" li
 }
 
 test_last_n_prints_highest() {
     nt_test__create_file "003.md"
     nt_test__create_file "010-note.md"
-    nt_test__assert_output_equals "10" "$NT_SCRIPT" l i
+    nt_test__assert_output_equals "10" "$NT_SCRIPT" li
 }
 
 test_last_n_no_docs() {
-    nt_test__assert_exit 2 "$NT_SCRIPT" l i
+    nt_test__assert_exit 2 "$NT_SCRIPT" li
 }
 
 test_last_index_long_form() {
     nt_test__create_file "005-note.md"
-    nt_test__assert_output_equals "5" "$NT_SCRIPT" l index
+    nt_test__assert_output_equals "5" "$NT_SCRIPT" last-index
 }
 
 #####################################################################
@@ -102,7 +102,7 @@ test_last_alias_opens_last_doc() {
 
 test_last_alias_n_prints_number() {
     nt_test__create_file "004-note.md"
-    nt_test__assert_output_equals "4" "$NT_SCRIPT" last i
+    nt_test__assert_output_equals "4" "$NT_SCRIPT" last-index
 }
 
 test_last_alias_nth_to_last() {
@@ -131,7 +131,7 @@ test_last_hyphen_long_opens_last() {
 
 test_last_hyphen_index() {
     nt_test__create_file "006-note.md"
-    nt_test__assert_output_equals "6" "$NT_SCRIPT" --last i
+    nt_test__assert_output_equals "6" "$NT_SCRIPT" --last-index
 }
 
 test_last_hyphen_nth_to_last() {

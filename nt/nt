@@ -230,7 +230,7 @@ cmd_help() {
 	printf '  nt help|-h                   print this help (alias: h)\n'
 	printf '  nt new [TITLE]               create new indexed document (alias: n, -n, --new)\n'
 	printf '  nt last [N]                  open last (or Nth-to-last) document (alias: l, -l, --last)\n'
-	printf '  nt last i                    print last index number (alias: l i, --last i)\n'
+	printf '  nt last-index                print last index number (alias: li, -li, --last-index)\n'
 	printf '  nt NUM [NUM ...]             open document(s) by numeric index\n'
 	printf '  nt rename NUM TITLE          rename document by index (alias: r, -r, --rename)\n'
 	printf '  nt rl TITLE                  rename last document (alias: -rl, --rl)\n'
@@ -315,10 +315,6 @@ cmd_last() {
 		# No argument: open the last doc
 		_nt_consumed=0
 		files_to_open+=( "$(last_indexed_doc)" )
-	elif [ "$1" = 'i' ] || [ "$1" = 'index' ]; then
-		# Print the numeric index of the last document
-		printf '%d\n' "${last_num}"
-		exit 0
 	elif [[ "$1" =~ ^[0-9]+$ ]]; then
 		# Positive integer N: open Nth-to-last
 		_nt_consumed=1
@@ -336,6 +332,16 @@ cmd_last() {
 		nt_err "Invalid argument for last: $1"
 		exit 2
 	fi
+}
+
+cmd_last_index() {
+	local last_num
+	last_num="$(last_num_getter)"
+	if [ "${last_num}" -eq 0 ]; then
+		nt_err "No indexed document found."
+		exit 2
+	fi
+	printf '%d\n' "${last_num}"
 }
 
 cmd_open() {
@@ -554,6 +560,9 @@ while [ "$#" -gt 0 ]; do
 			_nc=$_nt_consumed
 			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
 			;;
+
+		li|last-index|-li|--last-index)
+			cmd_last_index; break ;;
 
 		r|rename)
 			shift; _nt_greedy=1; cmd_rename "$@"
