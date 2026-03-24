@@ -52,14 +52,14 @@ clk [help]
     undo | redo
     status | s
     last | l [-<n> | <n>]
+    edit | e (-<n> | <n>) <field> <value>
+    edit | e (-<n> | <n>) delete
     log
     view | v all
     view | v <offset> [through <offset>]
     view | v past [<n>] <hour(s)|day(s)|week(s)|month(s)|year(s)> [before <timestamp> | before minus <minutes>]
     view | v from <timestamp> until|to <timestamp>
     view | v <range> [for <tag|tag1|tag2|...>] [by <day|week|month|session>]
-    edit | e (-<n> | <n>) <field> <value>
-    edit | e (-<n> | <n>) delete
     alias
 
 <offset>    = today | yesterday | {-<n> | current | this} <day(s)|week(s)|month(s)>
