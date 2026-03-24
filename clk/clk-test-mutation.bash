@@ -597,6 +597,131 @@ test_undo_clears_redo() {
 }
 
 #####################################################################
+# Tests — clk reactivate (integration)
+#####################################################################
+
+test_reactivate_basic() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" reactivate -1 >/dev/null 2>&1
+    # Should now have one active record for work
+    local count
+    count="$(awk -F'\t' '$1=="active" && $4=="work"' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$count" "reactivate converts done to active"
+}
+
+test_reactivate_preserves_start_time() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" reactivate -1 >/dev/null 2>&1
+    local start
+    start="$(awk -F'\t' '$1=="active" && $4=="work" {print $2}' "$CLK_TEST_DIR/clk/clk.tsv")"
+    clk_test__assert_equals "2026-01-01T09:00:00" "$start" "reactivate preserves start time"
+}
+
+test_reactivate_clears_end_time() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" reactivate -1 >/dev/null 2>&1
+    local end
+    end="$(awk -F'\t' '$1=="active" && $4=="work" {print $3}' "$CLK_TEST_DIR/clk/clk.tsv")"
+    clk_test__assert_equals "" "$end" "reactivate clears end time"
+}
+
+test_reactivate_preserves_break() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add-break 10 to work >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" reactivate -1 >/dev/null 2>&1
+    local break_secs
+    break_secs="$(awk -F'\t' '$1=="active" && $4=="work" {print $6}' "$CLK_TEST_DIR/clk/clk.tsv")"
+    clk_test__assert_equals "600" "$break_secs" "reactivate preserves accumulated break time"
+}
+
+test_reactivate_removes_done_record() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" reactivate -1 >/dev/null 2>&1
+    local done_count
+    done_count="$(awk -F'\t' '$1=="done"' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "0" "$done_count" "reactivate removes the done record"
+}
+
+test_reactivate_creates_undo() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    "$CLK_SCRIPT" reactivate -1 >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: reactivate should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_reactivate_alias_ra() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" ra -1
+}
+
+test_reactivate_no_done_records() {
+    clk_test__assert_exit 5 "$CLK_SCRIPT" reactivate -1
+}
+
+test_reactivate_no_done_records_message() {
+    clk_test__assert_output_contains "No completed records" "$CLK_SCRIPT" reactivate -1
+}
+
+test_reactivate_index_out_of_range() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" reactivate -2
+}
+
+test_reactivate_duplicate_active_tag() {
+    "$CLK_SCRIPT" in work at 2026-01-01T08:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    # Reactivating the done record should fail because 'work' is already active
+    clk_test__assert_exit 5 "$CLK_SCRIPT" reactivate -1
+}
+
+test_reactivate_confirmation_output() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" reactivate -1 2>&1)"
+    clk_test__assert_output_contains "Reactivated" printf '%s' "$output" &&
+    clk_test__assert_output_contains "work" printf '%s' "$output"
+}
+
+test_reactivate_second_index() {
+    "$CLK_SCRIPT" in a at 2026-01-01T08:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out b at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" reactivate -2 >/dev/null 2>&1
+    # -2 should reactivate 'a' (older done), 'b' remains done
+    local a_active b_done
+    a_active="$(awk -F'\t' '$1=="active" && $4=="a"' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    b_done="$(awk -F'\t' '$1=="done" && $4=="b"' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$a_active" "reactivate -2 targets second-to-last done session" &&
+    clk_test__assert_equals "1" "$b_done" "reactivate -2 leaves most recent done session intact"
+}
+
+test_reactivate_missing_index() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" reactivate
+}
+
+test_reactivate_positive_index_rejected() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" reactivate 1
+}
+
+#####################################################################
 # Test list
 #####################################################################
 
@@ -658,6 +783,23 @@ CLK_TESTS_MUTATION=(
     test_remove_creates_undo
     test_remove_alias_pop
     test_remove_preserves_other_records
+
+    # clk reactivate (integration)
+    test_reactivate_basic
+    test_reactivate_preserves_start_time
+    test_reactivate_clears_end_time
+    test_reactivate_preserves_break
+    test_reactivate_removes_done_record
+    test_reactivate_creates_undo
+    test_reactivate_alias_ra
+    test_reactivate_no_done_records
+    test_reactivate_no_done_records_message
+    test_reactivate_index_out_of_range
+    test_reactivate_duplicate_active_tag
+    test_reactivate_confirmation_output
+    test_reactivate_second_index
+    test_reactivate_missing_index
+    test_reactivate_positive_index_rejected
 
     # clk undo (integration)
     test_undo_basic

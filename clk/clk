@@ -46,6 +46,7 @@ clk [help]
     add-break | ab <minutes> [to <tag>]
     extend [<tag>] [minus <minutes> | at <timestamp> | by <minutes>]
     remove | pop
+    reactivate | ra -<n>
     pause | p [<tag>] [minus <minutes> | at <timestamp>]
     resume | r [<tag>] [minus <minutes> | at <timestamp>]
     unpause [<tag>]
@@ -1278,6 +1279,57 @@ clk_do_remove() {
     printf '\nRemoved record:\n  %s\n\n' "$formatted"
 }
 
+# --- clk_do_reactivate ---
+# clk reactivate | ra -<n>
+# Converts a completed session back to active. START_TIME, TAG, BREAK_SECS,
+# and DESCRIPTION are preserved; END_TIME, LENGTH_SECS, and PAUSED_AT are
+# cleared. Uses the same negative-index convention as last and edit.
+#
+# --- RATIONALE: delete-then-append ---
+# Active records must live at the end of the log (see clk__insert_before_active).
+# The done record may be anywhere, so we delete it at its current line and
+# append the new active record, preserving the sort invariant.
+clk_do_reactivate() {
+    local signed_n="$1"
+    local abs_n="${signed_n#-}"
+
+    # Resolve to log line number
+    local done_lines total_done lineno
+    done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+    if [ -z "$done_lines" ]; then
+        clk__die 5 "No completed records in log."
+    fi
+    total_done="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
+    if [ "$abs_n" -gt "$total_done" ]; then
+        clk__die 1 "Index -${abs_n} out of range. Only ${total_done} completed record(s) in log."
+    fi
+    lineno="$(printf '%s\n' "$done_lines" | tail -n "${abs_n}" | head -n 1)"
+
+    # Read done record fields
+    local line_content
+    line_content="$(clk__get_line "$lineno")"
+    clk__read_line "$line_content"
+
+    local start_ts="$CLK_F2"
+    local tag="$CLK_F4"
+    local break_secs="$CLK_F6"
+    local description="$CLK_F8"
+
+    # Prevent duplicate active session for same tag
+    if clk__find_active "$tag" >/dev/null 2>&1; then
+        clk__die 5 "Tag '$tag' already has an active session. Clock out first with 'clk out $tag'."
+    fi
+
+    # Build new active record (END_TIME, LENGTH_SECS, PAUSED_AT cleared)
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${tag}${CLK_TAB}${CLK_TAB}${break_secs}${CLK_TAB}${CLK_TAB}${description}"
+
+    clk__save_undo
+    clk__delete_line "$lineno"
+    clk__append_line "$new_record"
+
+    printf '\nReactivated session in\n  %s\n  started at %s\n\n' "$tag" "$(clk__fmt_ts_display "$start_ts")"
+}
+
 # --- clk_do_edit ---
 # clk edit -<n> tag <new-tag>    — edit the Nth-to-last done session
 # clk edit -<n> start <timestamp>
@@ -2401,6 +2453,20 @@ remove|pop)
     shift
     [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk remove'"
     clk_do_remove
+    ;;
+
+reactivate|ra)
+    clk_subcmd="reactivate"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing index. Usage: 'clk reactivate -<n>'"
+    fi
+    if ! printf '%s' "$1" | grep -Eq '^-[1-9][0-9]*$'; then
+        clk__die 1 "Expected -<n> index (done session), got '$1'. Usage: 'clk reactivate -<n>'"
+    fi
+    clk_ra_n="$1"; shift
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk reactivate -<n>'"
+    clk_do_reactivate "$clk_ra_n"
     ;;
 
 undo)

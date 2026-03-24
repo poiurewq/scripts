@@ -33,6 +33,9 @@
 .Bro Cm remove | Cm pop Brc
 .br
 .Nm
+.Bro Cm reactivate | Cm ra Brc Fl Ar n
+.br
+.Nm
 .Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
 .Nm
@@ -222,6 +225,17 @@ shifts the end timestamp forward by exactly that many minutes.
 Remove the last record from the log
 .Pq whether active or completed
 and display the removed record.
+.It Bro Cm reactivate | Cm ra Brc Fl Ar n
+Convert a completed session back to active.
+.Fl Ar n
+is a negative index counting back from the most recent completed session:
+.Fl 1
+is the most recent,
+.Fl 2
+is second-to-last, and so on.
+The session's start time, tag, accumulated break time, and description are
+preserved; end time, length, and pause state are cleared.
+Fails if the same tag already has an active session.
 .El
 .Ss Pause and resume
 .Bl -tag -width indent
