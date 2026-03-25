@@ -406,6 +406,11 @@ cmd_new() {
 		esac
 	done
 
+	# Account for sub-option args consumed (i/index + val = 2, c/copy + val = 2)
+	local _subopts_consumed=0
+	[[ -n "$custom_idx" ]] && (( _subopts_consumed += 2 ))
+	[[ -n "$copy_src" ]]   && (( _subopts_consumed += 2 ))
+
 	# Validate custom index if specified
 	local new_idx
 	if [[ -n "$custom_idx" ]]; then
@@ -460,6 +465,7 @@ cmd_new() {
 		new_doc="${new_idx}"
 		new_title_raw=""
 	fi
+	(( _nt_consumed += _subopts_consumed )) || true
 
 	# Determine content source and extension
 	if [[ -n "$copy_doc" ]]; then
