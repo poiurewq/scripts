@@ -714,7 +714,7 @@ cmd_template() {
 #######################################################################
 
 if [ "$#" -eq 0 ]; then
-	printf 'usage: nt <command> [args] — run "nt help" for full reference\n'
+	printf 'usage: nt <command> [args] — run "nt h" for full reference\n'
 	exit 0
 fi
 
