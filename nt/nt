@@ -14,6 +14,7 @@ uf=$(tput smul 2>/dev/null) || uf=''
 #######################################################################
 
 nt_template_name='nt_template'
+NT_VERSION="0.1.8"
 
 # Regex patterns (stored in variables to prevent zsh backslash removal in =~)
 _nt_idx_pat='^([0-9]+(\.[0-9]+)*)([-_]|\.[^0-9]|$)'  # extract: index + boundary
@@ -363,6 +364,11 @@ cmd_help() {
 	printf '  nt ar               activity summary, recursive (alias: activity-recursive)\n'
 	printf '  nt R                open README.md\n'
 	printf '  nt t                open template file\n'
+	printf '  nt v                print version (alias: version)\n'
+}
+
+cmd_version() {
+	printf 'nt %s\n' "$NT_VERSION"
 }
 
 cmd_new() {
@@ -808,6 +814,9 @@ while [ "$#" -gt 0 ]; do
 
 		h|help|-h|--help)
 			cmd_help; break ;;
+
+		v|version|-v|--version)
+			cmd_version; break ;;
 
 		R|-R)     cmd_readme;   shift ;;
 		t|-t)     cmd_template; shift ;;
