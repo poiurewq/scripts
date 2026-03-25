@@ -310,10 +310,8 @@ consume_title() {
 	local arg
 	for arg in "$@"; do
 		if [[ $_nt_greedy -eq 0 ]]; then
-			# Non-greedy stop conditions
-			if [[ "$arg" =~ $_nt_idx_strict ]] \
-				|| [[ "$arg" =~ $_nt_range_pat ]] \
-				|| [[ "$arg" == -* ]]; then
+			# Non-greedy stop condition: only hyphen-prefixed args
+			if [[ "$arg" == -* ]]; then
 				break
 			fi
 		fi
@@ -348,10 +346,8 @@ build_filename() {
 #######################################################################
 
 cmd_help() {
+	printf 'nt — simple notes maintainer\n\n'
 	printf 'usage: nt <command> [args]\n\n'
-	printf 'Commands without a hyphen prefix consume all remaining words as the title.\n'
-	printf 'Add a hyphen prefix to stop at the first number or flag, letting you\n'
-	printf 'chain multiple commands on one line: nt -n my note -3 -R\n\n'
 	printf '  nt h                print this help (alias: help)\n'
 	printf '  nt n [TITLE]        create new indexed document (alias: new)\n'
 	printf '  nt l [N]            open last (or Nth-to-last) document (alias: last)\n'
@@ -365,6 +361,10 @@ cmd_help() {
 	printf '  nt R                open README.md\n'
 	printf '  nt t                open template file\n'
 	printf '  nt v                print version (alias: version)\n'
+	printf '\nBare commands (no hyphen) consume all remaining words as the title.\n'
+	printf 'Hyphen-prefixed commands stop at numbers/flags, enabling chaining:\n'
+	printf '  nt -n new note one -n new note two\n'
+	printf '  creates two new notes and opens both of them\n'
 }
 
 cmd_version() {
@@ -720,7 +720,7 @@ cmd_template() {
 #######################################################################
 
 if [ "$#" -eq 0 ]; then
-	printf 'usage: nt <command> [args] — run "nt h" for full reference\n'
+	cmd_help
 	exit 0
 fi
 
@@ -822,10 +822,19 @@ while [ "$#" -gt 0 ]; do
 		t|-t)     cmd_template; shift ;;
 
 		# ── Numeric index (simple or hierarchical) ───────────────────
-		# Matches: 3, 007, 1.1, 004.7.10, etc.
+		# Bare form:    3, 007, 1.1, 004.7.10, etc.
+		# Hyphen form: -3, -007, -1.1, etc. (for use in chained commands)
 		[0123456789]*)
 			if [[ "$1" =~ $_nt_idx_strict ]]; then
 				cmd_open "$1"; shift
+			else
+				nt_err "Unknown option '$1'"; exit 2
+			fi
+			;;
+
+		-[0123456789]*)
+			if [[ "${1#-}" =~ $_nt_idx_strict ]]; then
+				cmd_open "${1#-}"; shift
 			else
 				nt_err "Unknown option '$1'"; exit 2
 			fi

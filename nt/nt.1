@@ -78,7 +78,7 @@ Title-consuming commands
 accept an optional hyphen prefix
 .Pq e.g., Fl n , Fl r .
 Without a hyphen, the command treats all remaining words as the title.
-With a hyphen, it stops at the first number or flag, so you can chain
+With a hyphen, it stops at the first hyphen-prefixed flag, so you can chain
 multiple commands on one line:
 .Pp
 .Dl nt -n my note -3 -r 7 new-title -R
@@ -86,7 +86,6 @@ multiple commands on one line:
 creates a note titled
 .Dq my note ,
 then opens doc 3, renames doc 7, and opens the README \(em all in one go.
-Titles containing hyphens or numbers must be quoted when using the hyphen-prefixed form.
 .Pp
 Options include:
 .Bl -tag -width indent
