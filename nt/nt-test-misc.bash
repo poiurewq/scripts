@@ -61,12 +61,10 @@ test_readme_case_insensitive() {
     nt_test__assert_exit 0 env NT_EDITOR="true" "$NT_SCRIPT" R
 }
 
-test_readme_not_found_fails() {
-    nt_test__assert_exit 4 "$NT_SCRIPT" R
-}
-
-test_readme_not_found_message() {
-    nt_test__assert_output_contains "No README.md" "$NT_SCRIPT" R
+test_readme_creates_if_missing() {
+    nt_test__assert_exit 0 env NT_EDITOR="true" "$NT_SCRIPT" R
+    nt_test__assert_file_exists "$NT_TEST_DIR/README.md" \
+        "R should create README.md if missing"
 }
 
 test_readme_hyphen_form() {
@@ -85,8 +83,10 @@ test_template_opens() {
         env NT_EDITOR="echo" "$NT_SCRIPT" t
 }
 
-test_template_not_found() {
-    nt_test__assert_output_contains "No nt template" "$NT_SCRIPT" t
+test_template_creates_if_missing() {
+    env NT_EDITOR="true" "$NT_SCRIPT" t >/dev/null 2>&1
+    nt_test__assert_file_exists "$NT_TEST_DIR/nt_template.md" \
+        "t should create nt_template.md if missing"
 }
 
 test_template_not_found_exits_zero() {
@@ -204,11 +204,10 @@ NT_TESTS_MISC=(
     test_help_double_dash_works
     test_readme_opens
     test_readme_case_insensitive
-    test_readme_not_found_fails
-    test_readme_not_found_message
+    test_readme_creates_if_missing
     test_readme_hyphen_form
     test_template_opens
-    test_template_not_found
+    test_template_creates_if_missing
     test_template_not_found_exits_zero
     test_template_hyphen_form
     test_template_too_many_fails

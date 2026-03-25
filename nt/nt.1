@@ -9,7 +9,7 @@
 .Op Bro Cm h | Cm help Brc
 .br
 .Nm
-.Bro Cm n | Cm new Brc Op Ar title
+.Bro Cm n | Cm new Brc Op Cm i Ar index Op Cm c Ar index Op Ar title
 .br
 .Nm
 .Bro Cm l | Cm last Brc Op Ar N
@@ -19,6 +19,9 @@
 .br
 .Nm
 .Ar num Op Ar ...
+.br
+.Nm
+.Ar num Ns Cm - Ns Ar num
 .br
 .Nm
 .Bro Cm r | Cm rename Brc Ar num Ar title
@@ -92,7 +95,7 @@ Options include:
 .Bl -tag -width indent
 .It Bro Cm h | Cm help Brc
 Print help page.
-.It Bro Cm n | Cm new Brc Op Ar title
+.It Bro Cm n | Cm new Brc Op Cm i Ar index Op Cm c Ar index Op Ar title
 Create a new document named with the highest unused numeric index (0-padded to 3 digits)
 followed by a delimiter and a hyphenated version of the
 .Ar title ,
@@ -102,6 +105,29 @@ If the current directory contains the file
 then the new document uses this template's content and
 .Ar extension
 instead.
+.Pp
+If
+.Cm i
+(or
+.Cm index )
+is given, use
+.Ar index
+instead of auto-incrementing.
+All index components are zero-padded to 3 digits.
+Fails if a document with that index already exists.
+.Pp
+If
+.Cm c
+(or
+.Cm copy )
+is given, copy the content verbatim from the document at the specified
+.Ar index .
+The extension is inherited from the source document.
+When both
+.Cm i
+and
+.Cm c
+are given, they may appear in any order.
 .It Bro Cm l | Cm last Brc Op Ar N
 Open the document with the latest numeric index.
 If
@@ -117,6 +143,11 @@ Print the numeric index of the last indexed document in the current directory.
 Open the existing document(s) with the
 .Ar num
 index (indices).
+.It Ar num Ns Cm - Ns Ar num
+Open all documents from the first index to the second, inclusive.
+Both indices must be simple integers (not hierarchical).
+Missing indices within the range are silently skipped.
+Fails if no documents exist in the range.
 .It Bro Cm r | Cm rename Brc Ar num Ar title
 Rename the existing document with the
 .Ar num
@@ -223,6 +254,27 @@ Open a note by index:
 Open several notes at once:
 .Pp
 .Dl nt 1 3 5
+.Ss Opening a range
+Open notes 3 through 7:
+.Pp
+.Dl nt 3-7
+.Pp
+Missing indices within the range are silently skipped.
+.Ss Creating sub-notes
+Create a sub-note under note 4:
+.Pp
+.Dl nt n i 4.1 meeting follow-up
+.Pp
+This creates
+.Pa 004.001-meeting-follow-up.md .
+.Ss Copying from an existing note
+Clone note 3 as a starting point for a new note:
+.Pp
+.Dl nt n c 3 revised draft
+.Pp
+Combine custom index and copy:
+.Pp
+.Dl nt n i 3.1 c 3 sub-variant
 .Ss Renaming and renumbering
 Rename note 5:
 .Pp

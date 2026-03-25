@@ -129,8 +129,8 @@ compare_indices() {
 }
 
 # Increments the last component of a hierarchical index.
-# Zero-pads only the first component to 3 digits.
-# e.g. "004.7" -> "004.8", "003" -> "004", "004.7.9" -> "004.7.10"
+# Zero-pads all components to 3 digits.
+# e.g. "004.007" -> "004.008", "003" -> "004", "004.007.009" -> "004.007.010"
 increment_index() {
 	local idx="$1"
 	if [[ -z "$idx" ]]; then
@@ -140,36 +140,36 @@ increment_index() {
 	local -a parts
 	parts=( "${(@s:.:)idx}" )
 	parts[-1]=$(( 10#${parts[-1]} + 1 ))
-	parts[1]="$(printf '%03d' "$(( 10#${parts[1]} ))")"
+	local i
+	for (( i = 1; i <= ${#parts[@]}; i++ )); do
+		parts[$i]="$(printf '%03d' "$(( 10#${parts[$i]} ))")"
+	done
 	printf '%s' "${(j:.:)parts}"
 }
 
-# Sorts filenames by hierarchical index using a schwartzian transform.
+# Sorts filenames by extracted index lexicographically.
+# With full zero-padding (all components 3 digits), lexicographic == numeric order.
+# Sorts by index string (not full filename) to avoid extension interference.
 # Reads filenames as arguments; prints sorted filenames one per line.
-sort_docs_hierarchically() {
+sort_docs_by_index() {
 	[[ "$#" -eq 0 ]] && return 0
-	local -a pairs parts
-	local f idx key p
+	local -a pairs
+	local f idx
 	for f in "$@"; do
 		idx="$(extract_index "$f")"
 		[[ -z "$idx" ]] && continue
-		# Build a sortable key: each component zero-padded to 5 digits, joined by '.'
-		parts=( "${(@s:.:)idx}" )
-		key=""
-		for p in "${parts[@]}"; do
-			key+="$(printf '%05d' "$(( 10#$p ))")."
-		done
-		pairs+=( "${key}|${f}" )
+		pairs+=( "${idx}"$'\t'"${f}" )
 	done
 	local -a sorted
-	sorted=( "${(@o)pairs}" )   # lexicographic sort; pads make it numeric-equivalent
+	sorted=( "${(@o)pairs}" )
 	local pair
 	for pair in "${sorted[@]}"; do
-		printf '%s\n' "${pair#*|}"
+		printf '%s\n' "${pair#*$'\t'}"
 	done
 }
 
-# Returns the filename of the last indexed document (hierarchically).
+# Returns the filename of the last indexed document (by index order).
+# With full zero-padding, lexicographic order on indices == hierarchical order.
 # Returns 1 if no indexed documents exist.
 last_indexed_doc() {
 	local -a docs
@@ -178,7 +178,7 @@ last_indexed_doc() {
 		return 1
 	fi
 	local sorted_last
-	sorted_last="$(sort_docs_hierarchically "${docs[@]}" | tail -n1)"
+	sorted_last="$(sort_docs_by_index "${docs[@]}" | tail -n1)"
 	printf '%s' "$sorted_last"
 }
 
@@ -215,12 +215,15 @@ get_extension() {
 }
 
 # Returns the matching filename for a given index (simple or hierarchical).
-# Normalizes the first component to 3 digits.
+# Normalizes all components to 3 digits.
 find_doc_by_index() {
 	local idx="$1"
 	local -a parts
 	parts=( "${(@s:.:)idx}" )
-	parts[1]="$(printf '%03d' "$(( 10#${parts[1]} ))")"
+	local i
+	for (( i = 1; i <= ${#parts[@]}; i++ )); do
+		parts[$i]="$(printf '%03d' "$(( 10#${parts[$i]} ))")"
+	done
 	local normalized="${(j:.:)parts}"
 
 	local -a candidates
@@ -347,10 +350,12 @@ cmd_help() {
 	printf 'nt — simple notes maintainer\n\n'
 	printf 'usage: nt <command> [args]\n\n'
 	printf '  nt h                print this help (alias: help)\n'
-	printf '  nt n [TITLE]        create new indexed document (alias: new)\n'
+	printf '  nt n [i INDEX] [c INDEX] [TITLE]\n'
+	printf '                      create new indexed document (alias: new)\n'
 	printf '  nt l [N]            open last (or Nth-to-last) document (alias: last)\n'
 	printf '  nt li               print last index number (alias: last-index)\n'
 	printf '  nt NUM [NUM ...]    open document(s) by index (supports N.M hierarchical)\n'
+	printf '  nt NUM-NUM          open range of documents (inclusive)\n'
 	printf '  nt r NUM TITLE      rename document by index (alias: rename)\n'
 	printf '  nt rl TITLE         rename last document\n'
 	printf '  nt rn N M           renumber consecutive run (alias: renumber)\n'
@@ -372,21 +377,73 @@ cmd_version() {
 }
 
 cmd_new() {
-	local last_idx new_idx
-	last_idx="$(last_index 2>/dev/null)" || last_idx=""
+	# Pre-parse i/index and c/copy sub-options before consume_title
+	local custom_idx="" copy_src=""
+	local -a remaining=()
+	while [[ "$#" -gt 0 ]]; do
+		case "$1" in
+			i|index)
+				shift
+				if [[ "$#" -eq 0 ]]; then
+					nt_err "Missing index after i/index"
+					exit 1
+				fi
+				custom_idx="$1"; shift
+				;;
+			c|copy)
+				shift
+				if [[ "$#" -eq 0 ]]; then
+					nt_err "Missing index after c/copy"
+					exit 1
+				fi
+				copy_src="$1"; shift
+				;;
+			*)
+				remaining+=( "$1" ); shift
+				;;
+		esac
+	done
 
-	if [[ -z "$last_idx" ]]; then
-		new_idx="001"
+	# Validate custom index if specified
+	local new_idx
+	if [[ -n "$custom_idx" ]]; then
+		validate_index "$custom_idx" || exit 2
+		# Normalize all components to 3 digits
+		local -a ci_parts
+		ci_parts=( "${(@s:.:)custom_idx}" )
+		local _ci_i
+		for (( _ci_i = 1; _ci_i <= ${#ci_parts[@]}; _ci_i++ )); do
+			ci_parts[$_ci_i]="$(printf '%03d' "$(( 10#${ci_parts[$_ci_i]} ))")"
+		done
+		new_idx="${(j:.:)ci_parts}"
+		# Check no existing doc at that index
+		if find_doc_by_index "$new_idx" >/dev/null 2>&1; then
+			nt_err "Document with index ${new_idx} already exists."
+			exit 2
+		fi
 	else
-		new_idx="$(increment_index "$last_idx")"
+		local last_idx
+		last_idx="$(last_index 2>/dev/null)" || last_idx=""
+		if [[ -z "$last_idx" ]]; then
+			new_idx="001"
+		else
+			new_idx="$(increment_index "$last_idx")"
+		fi
+	fi
+
+	# Resolve copy source if specified
+	local copy_doc=""
+	if [[ -n "$copy_src" ]]; then
+		validate_index "$copy_src" || exit 2
+		copy_doc="$(find_doc_by_index "$copy_src")" || exit 2
 	fi
 
 	local last_doc
 	last_doc="$(last_indexed_doc 2>/dev/null)" || last_doc=""
 
 	local new_doc new_title_raw new_title
-	if [[ "$#" -gt 0 ]]; then
-		consume_title "$@"
+	if [[ "${#remaining[@]}" -gt 0 ]]; then
+		consume_title "${remaining[@]}"
 		new_title_raw="$_consume_title_raw"
 		new_title="$_consume_title_result"
 		local last_delim
@@ -402,30 +459,39 @@ cmd_new() {
 		new_title_raw=""
 	fi
 
-	local -a templates
-	templates=( ${nt_template_name}.*(N.) )
-	local template_count=${#templates[@]}
-	if [[ $template_count -eq 1 ]]; then
-		local template_file="${templates[1]}"
-		new_doc+=".${template_file##*.}"
-		sed -e "s|%DATE|$(date '+%Y-%m-%d')|g" \
-			-e "s|%TITLE|${new_title_raw}|g" \
-			"$template_file" >> "$new_doc"
-	elif [[ $template_count -gt 1 ]]; then
-		printf "Too many nt template files in this folder.\n"
-		exit 5
+	# Determine content source and extension
+	if [[ -n "$copy_doc" ]]; then
+		# Copy mode: content and extension from source document
+		local copy_ext
+		copy_ext="$(get_extension "$copy_doc" 2>/dev/null)" || copy_ext="md"
+		new_doc+=".${copy_ext}"
+		\cp "$copy_doc" "$new_doc"
 	else
-		local last_ext
-		if [[ -z "$last_doc" ]]; then
-			last_ext="md"
+		local -a templates
+		templates=( ${nt_template_name}.*(N.) )
+		local template_count=${#templates[@]}
+		if [[ $template_count -eq 1 ]]; then
+			local template_file="${templates[1]}"
+			new_doc+=".${template_file##*.}"
+			sed -e "s|%DATE|$(date '+%Y-%m-%d')|g" \
+				-e "s|%TITLE|${new_title_raw}|g" \
+				"$template_file" >> "$new_doc"
+		elif [[ $template_count -gt 1 ]]; then
+			printf "Too many nt template files in this folder.\n"
+			exit 5
 		else
-			last_ext="$(get_extension "$last_doc" 2>/dev/null)" || last_ext="md"
+			local last_ext
+			if [[ -z "$last_doc" ]]; then
+				last_ext="md"
+			else
+				last_ext="$(get_extension "$last_doc" 2>/dev/null)" || last_ext="md"
+			fi
+			new_doc+=".${last_ext}"
+			local new_time
+			new_time="$(date '+%Y.%m.%d-%H:%M')"
+			printf "created=${new_time}\n" >> "${new_doc}"
+			printf '\n\n\n' >> "${new_doc}"
 		fi
-		new_doc+=".${last_ext}"
-		local new_time
-		new_time="$(date '+%Y.%m.%d-%H:%M')"
-		printf "created=${new_time}\n" >> "${new_doc}"
-		printf '\n\n\n' >> "${new_doc}"
 	fi
 	files_to_open+=( "${new_doc}" )
 }
@@ -455,7 +521,7 @@ cmd_last() {
 		local -a all_docs
 		all_docs=( [[:digit:]]##*(N.) )
 		local sorted_output
-		sorted_output="$(sort_docs_hierarchically "${all_docs[@]}")"
+		sorted_output="$(sort_docs_by_index "${all_docs[@]}")"
 		local -a sorted_docs
 		sorted_docs=( "${(f)sorted_output}" )
 		local total=${#sorted_docs[@]}
@@ -564,12 +630,17 @@ cmd_renumber() {
 	validate_index "$rn_start" || exit 2
 	validate_index "$rn_target" || exit 2
 
-	# Normalize first components to 3 digits
+	# Normalize all components to 3 digits
 	local -a start_parts target_parts
 	start_parts=( "${(@s:.:)rn_start}" )
 	target_parts=( "${(@s:.:)rn_target}" )
-	start_parts[1]="$(printf '%03d' "$(( 10#${start_parts[1]} ))")"
-	target_parts[1]="$(printf '%03d' "$(( 10#${target_parts[1]} ))")"
+	local _rn_i
+	for (( _rn_i = 1; _rn_i <= ${#start_parts[@]}; _rn_i++ )); do
+		start_parts[$_rn_i]="$(printf '%03d' "$(( 10#${start_parts[$_rn_i]} ))")"
+	done
+	for (( _rn_i = 1; _rn_i <= ${#target_parts[@]}; _rn_i++ )); do
+		target_parts[$_rn_i]="$(printf '%03d' "$(( 10#${target_parts[$_rn_i]} ))")"
+	done
 	local norm_start="${(j:.:)start_parts}"
 	local norm_target="${(j:.:)target_parts}"
 
@@ -627,8 +698,7 @@ cmd_renumber() {
 			continue
 		fi
 		chk_arr=( "${target_parts[@]}" )
-		chk_arr[-1]="$ti_last"
-		chk_arr[1]="$(printf '%03d' "$(( 10#${chk_arr[1]} ))")"
+		chk_arr[-1]="$(printf '%03d' "$ti_last")"
 		chk_idx="${(j:.:)chk_arr}"
 		chk_doc=
 		if chk_doc="$(find_doc_by_index "$chk_idx" 2>/dev/null)"; then
@@ -653,14 +723,12 @@ cmd_renumber() {
 
 		# Build zero-padded source index
 		si_arr=( "${start_parts[@]}" )
-		si_arr[-1]="$si_last"
-		si_arr[1]="$(printf '%03d' "$(( 10#${si_arr[1]} ))")"
+		si_arr[-1]="$(printf '%03d' "$si_last")"
 		si_idx_norm="${(j:.:)si_arr}"
 
 		# Build zero-padded target index
 		ti_arr=( "${target_parts[@]}" )
-		ti_arr[-1]="$ti_last"
-		ti_arr[1]="$(printf '%03d' "$(( 10#${ti_arr[1]} ))")"
+		ti_arr[-1]="$(printf '%03d' "$ti_last")"
 		ti_idx_norm="${(j:.:)ti_arr}"
 
 		si_doc="$(find_doc_by_index "$si_idx_norm")" || exit 2
@@ -824,6 +892,30 @@ while [ "$#" -gt 0 ]; do
 
 		R|-R)     cmd_readme;   shift ;;
 		t|-t)     cmd_template; shift ;;
+
+		# ── Range (N-M) ──────────────────────────────────────────────
+		# Open all documents from index N to M, inclusive.
+		# Missing indices within the range are silently skipped.
+		[0123456789]*-[0123456789]*)
+			if [[ "$1" =~ $_nt_range_pat ]]; then
+				local _range_start="${1%%-*}" _range_end="${1##*-}"
+				local _range_found=0 _range_j
+				for (( _range_j = 10#$_range_start; _range_j <= 10#$_range_end; _range_j++ )); do
+					local _range_doc
+					if _range_doc="$(find_doc_by_index "$_range_j" 2>/dev/null)"; then
+						files_to_open+=( "$_range_doc" )
+						_range_found=$(( _range_found + 1 ))
+					fi
+				done
+				if [[ $_range_found -eq 0 ]]; then
+					nt_err "No documents found in range ${_range_start}-${_range_end}."
+					exit 2
+				fi
+				shift
+			else
+				nt_err "Unknown option '$1'"; exit 2
+			fi
+			;;
 
 		# ── Numeric index (simple or hierarchical) ───────────────────
 		# Bare form:    3, 007, 1.1, 004.7.10, etc.
