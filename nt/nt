@@ -346,6 +346,7 @@ build_filename() {
 #######################################################################
 
 cmd_help() {
+	printf '\n'
 	printf 'nt — simple notes maintainer\n\n'
 	printf 'usage: nt <command> [args]\n\n'
 	printf '  nt h                print this help (alias: help)\n'
@@ -364,7 +365,7 @@ cmd_help() {
 	printf '\nBare commands (no hyphen) consume all remaining words as the title.\n'
 	printf 'Hyphen-prefixed commands stop at numbers/flags, enabling chaining:\n'
 	printf '  nt -n new note one -n new note two\n'
-	printf '  creates two new notes and opens both of them\n'
+	printf '  creates two new notes and opens both of them\n\n'
 }
 
 cmd_version() {
