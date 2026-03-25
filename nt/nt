@@ -364,7 +364,7 @@ cmd_help() {
 	printf 'chained commands are processed in the sequence they are passed:\n'
 	printf '  nt -n new note one -n new note two\n'
 	printf '  creates two new notes and opens both of them\n\n'
-	printf 'For more detailed usage, type: man nt\n\n'
+	printf 'To get started, type: man nt  (see the EXAMPLES section)\n\n'
 }
 
 cmd_version() {

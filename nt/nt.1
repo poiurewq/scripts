@@ -188,5 +188,87 @@ Document, either new or existing, could not be opened.
 .It >1
 Another error occurred.
 .El
+.Sh EXAMPLES
+The following examples show typical
+.Nm
+workflows, from simple to advanced.
+.Ss Getting started
+Create a first note in any directory:
+.Pp
+.Dl nt n
+.Pp
+This creates
+.Pa 001.md
+(or uses the template extension if one exists) and opens it in your editor.
+Give the note a title:
+.Pp
+.Dl nt n meeting notes
+.Pp
+This creates
+.Pa 002-meeting-notes.md
+and opens it.
+.Ss Navigating notes
+Open the note you just created:
+.Pp
+.Dl nt l
+.Pp
+Open the second-to-last note:
+.Pp
+.Dl nt l 2
+.Pp
+Open a note by index:
+.Pp
+.Dl nt 1
+.Pp
+Open several notes at once:
+.Pp
+.Dl nt 1 3 5
+.Ss Renaming and renumbering
+Rename note 5:
+.Pp
+.Dl nt r 5 project plan
+.Pp
+Rename the last note:
+.Pp
+.Dl nt rl brainstorm
+.Pp
+Shift notes 3\(en5 so they start at 10 instead:
+.Pp
+.Dl nt rn 3 10
+.Ss Using a template
+Create a template file (e.g.
+.Pa nt_template.md )
+in your notes directory.
+All future notes created with
+.Cm nt n
+will start with that template's content.
+The macros
+.Cm %DATE
+and
+.Cm %TITLE
+are expanded automatically.
+.Ss Chaining commands
+Hyphen-prefixed commands can be chained on a single line:
+.Pp
+.Dl nt -n standup notes -l -R
+.Pp
+This creates a new note titled
+.Dq standup notes ,
+opens the last note, and opens the README \(em all in one invocation.
+A more involved chain:
+.Pp
+.Dl nt -n draft -r 2 revised title -5 -l
+.Pp
+This creates a note titled
+.Dq draft ,
+renames note 2, opens note 5, and opens the last note.
+.Ss Checking activity
+See which notes were modified recently:
+.Pp
+.Dl nt a
+.Pp
+Include subdirectories:
+.Pp
+.Dl nt ar
 .Sh AUTHORS
 .An poiurewq
