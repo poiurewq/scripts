@@ -363,9 +363,11 @@ cmd_help() {
 	printf '  nt t                open template file\n'
 	printf '  nt v                print version (alias: version)\n'
 	printf '\nBare commands (no hyphen) consume all remaining words as the title.\n'
-	printf 'Hyphen-prefixed commands stop at numbers/flags, enabling chaining:\n'
+	printf 'Hyphen-prefixed commands stop at numbers/flags, enabling chaining;\n'
+	printf 'chained commands are processed in the sequence they are passed:\n'
 	printf '  nt -n new note one -n new note two\n'
 	printf '  creates two new notes and opens both of them\n\n'
+	printf 'For more detailed usage, type: man nt\n\n'
 }
 
 cmd_version() {

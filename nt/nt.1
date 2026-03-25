@@ -79,7 +79,8 @@ accept an optional hyphen prefix
 .Pq e.g., Fl n , Fl r .
 Without a hyphen, the command treats all remaining words as the title.
 With a hyphen, it stops at the first hyphen-prefixed flag, so you can chain
-multiple commands on one line:
+multiple commands on one line.
+Chained commands are processed in the sequence they are passed:
 .Pp
 .Dl nt -n my note -3 -r 7 new-title -R
 .Pp
