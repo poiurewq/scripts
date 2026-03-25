@@ -24,6 +24,12 @@
 .Ar num Ns Cm - Ns Ar num
 .br
 .Nm
+.Ar num Ns Cm \&..
+.br
+.Nm
+.Ar num Ns Cm \&.
+.br
+.Nm
 .Bro Cm r | Cm rename Brc Ar num Ar title
 .br
 .Nm
@@ -144,10 +150,37 @@ Open the existing document(s) with the
 .Ar num
 index (indices).
 .It Ar num Ns Cm - Ns Ar num
-Open all documents from the first index to the second, inclusive.
-Both indices must be simple integers (not hierarchical).
-Missing indices within the range are silently skipped.
-Fails if no documents exist in the range.
+Open all documents whose index falls between the two endpoints, inclusive.
+Both endpoints may be hierarchical (e.g.,
+.Ql 1.3-1.7
+or
+.Ql 3-5.2 ) .
+Documents at any depth within the range are included.
+Missing indices are silently skipped.
+Fails if no documents exist in the range or if the start is greater than the end.
+.It Ar num Ns Cm \&..
+Open all descendants under
+.Ar num
+(direct and indirect sub-indices), excluding
+.Ar num
+itself.
+For example,
+.Ql 1..
+opens
+.Pa 001.001-a.md , 001.002-b.md , 001.002.001-deep.md ,
+etc.
+.It Ar num Ns Cm \&.
+Open only the immediate children of
+.Ar num
+(one level deeper), excluding
+.Ar num
+itself and any deeper descendants.
+For example,
+.Ql 1.
+opens
+.Pa 001.001-a.md , 001.002-b.md
+but not
+.Pa 001.002.001-deep.md .
 .It Bro Cm r | Cm rename Brc Ar num Ar title
 Rename the existing document with the
 .Ar num
@@ -259,7 +292,23 @@ Open notes 3 through 7:
 .Pp
 .Dl nt 3-7
 .Pp
+Hierarchical ranges are supported:
+.Pp
+.Dl nt 1.3-1.7
+.Pp
+Cross-depth ranges include all sub-indices within the bounds:
+.Pp
+.Dl nt 3-5.2
+.Pp
 Missing indices within the range are silently skipped.
+.Ss Opening a subtree
+Open all descendants under note 1:
+.Pp
+.Dl nt 1..
+.Pp
+Open only the immediate children of note 4:
+.Pp
+.Dl nt 4.
 .Ss Creating sub-notes
 Create a sub-note under note 4:
 .Pp

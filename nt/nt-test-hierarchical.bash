@@ -401,6 +401,245 @@ test_new_copy_overrides_template() {
 }
 
 #####################################################################
+# Tests — Phase 5: hierarchical range opening (§5.7)
+#####################################################################
+
+test_range_hier_same_parent() {
+    nt_test__create_file "001.003-a.md"
+    nt_test__create_file "001.005-b.md"
+    nt_test__create_file "001.007-c.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1.3-1.7 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001.003-a.md" || {
+        printf 'FAIL: range 1.3-1.7 should include 001.003-a.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "001.005-b.md" || {
+        printf 'FAIL: range 1.3-1.7 should include 001.005-b.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "001.007-c.md" || {
+        printf 'FAIL: range 1.3-1.7 should include 001.007-c.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_range_cross_depth() {
+    # 3-5.2 should include flat 003, 004, 005 and sub-indices up to 005.002
+    nt_test__create_file "003-a.md"
+    nt_test__create_file "004-b.md"
+    nt_test__create_file "004.001-sub.md"
+    nt_test__create_file "005-c.md"
+    nt_test__create_file "005.002-sub.md"
+    nt_test__create_file "005.003-beyond.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 3-5.2 2>&1)" || true
+    printf '%s' "$output" | grep -qF "003-a.md" || {
+        printf 'FAIL: cross-depth range should include 003-a.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "004.001-sub.md" || {
+        printf 'FAIL: cross-depth range should include 004.001-sub.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "005.002-sub.md" || {
+        printf 'FAIL: cross-depth range should include 005.002-sub.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    # 005.003 is beyond 005.002, should NOT be included
+    printf '%s' "$output" | grep -qF "005.003-beyond.md" && {
+        printf 'FAIL: cross-depth range should NOT include 005.003-beyond.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_range_includes_sub_indices() {
+    # nt 1-2 should include sub-indices within the range
+    nt_test__create_file "001-a.md"
+    nt_test__create_file "001.001-sub.md"
+    nt_test__create_file "001.002-sub2.md"
+    nt_test__create_file "002-b.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1-2 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001.001-sub.md" || {
+        printf 'FAIL: range 1-2 should include sub-index 001.001\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "002-b.md" || {
+        printf 'FAIL: range 1-2 should include 002-b.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_range_start_greater_than_end_fails() {
+    nt_test__assert_exit 2 "$NT_SCRIPT" 5-3
+}
+
+test_range_hier_empty_fails() {
+    nt_test__assert_exit 2 "$NT_SCRIPT" 1.3-1.7
+}
+
+#####################################################################
+# Tests — Phase 5: subtree open (§5.8)
+#   NUM.. = all descendants, NUM. = immediate children only
+#####################################################################
+
+test_subtree_finds_sub_docs() {
+    nt_test__create_file "001.md"
+    nt_test__create_file "001.001-a.md"
+    nt_test__create_file "001.002-b.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1.. 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001.001-a.md" || {
+        printf 'FAIL: subtree 1.. should include 001.001-a.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "001.002-b.md" || {
+        printf 'FAIL: subtree 1.. should include 001.002-b.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_subtree_excludes_parent() {
+    nt_test__create_file "001-parent.md"
+    nt_test__create_file "001.001-child.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1.. 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001-parent.md" && {
+        printf 'FAIL: subtree 1.. should NOT include parent 001-parent.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_subtree_deep_nesting() {
+    nt_test__create_file "001.002-a.md"
+    nt_test__create_file "001.002.001-deep.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1.. 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001.002.001-deep.md" || {
+        printf 'FAIL: subtree 1.. should include deeply nested 001.002.001-deep.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_subtree_specific_parent() {
+    nt_test__create_file "001.002-a.md"
+    nt_test__create_file "001.002.001-b.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1.2.. 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001.002.001-b.md" || {
+        printf 'FAIL: subtree 1.2.. should include 001.002.001-b.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    # Should NOT include the parent 001.002-a.md
+    printf '%s' "$output" | grep -qF "001.002-a.md" && {
+        printf 'FAIL: subtree 1.2.. should NOT include parent 001.002-a.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_subtree_empty_fails() {
+    nt_test__create_file "001.md"
+    nt_test__assert_exit 2 "$NT_SCRIPT" 1..
+}
+
+test_subtree_no_docs_at_all_fails() {
+    nt_test__assert_exit 2 "$NT_SCRIPT" 5..
+}
+
+test_subtree_chaining_with_readme() {
+    nt_test__create_file "001.001-a.md"
+    nt_test__create_file "README.md" "# Readme"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1.. R 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001.001-a.md" || {
+        printf 'FAIL: chained subtree+R should include 001.001-a.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "README.md" || {
+        printf 'FAIL: chained subtree+R should include README.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_subtree_hyphen_prefix_chaining() {
+    nt_test__create_file "001.001-a.md"
+    nt_test__create_file "README.md" "# Readme"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" -1.. -R 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001.001-a.md" || {
+        printf 'FAIL: chained -1.. -R should include 001.001-a.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "README.md" || {
+        printf 'FAIL: chained -1.. -R should include README.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+# ── Immediate children (NUM.) ──
+
+test_subtree_immediate_children_only() {
+    nt_test__create_file "001.001-a.md"
+    nt_test__create_file "001.002-b.md"
+    nt_test__create_file "001.002.001-deep.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1. 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001.001-a.md" || {
+        printf 'FAIL: 1. should include immediate child 001.001-a.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    printf '%s' "$output" | grep -qF "001.002-b.md" || {
+        printf 'FAIL: 1. should include immediate child 001.002-b.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+    # Deep nested doc should NOT be included
+    printf '%s' "$output" | grep -qF "001.002.001-deep.md" && {
+        printf 'FAIL: 1. should NOT include grandchild 001.002.001-deep.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_subtree_immediate_excludes_parent() {
+    nt_test__create_file "001-parent.md"
+    nt_test__create_file "001.001-child.md"
+    local output
+    output="$(NT_EDITOR="echo" "$NT_SCRIPT" 1. 2>&1)" || true
+    printf '%s' "$output" | grep -qF "001-parent.md" && {
+        printf 'FAIL: 1. should NOT include parent 001-parent.md\n  output: %s\n' "$output"
+        NT_TEST_FAIL=$(( NT_TEST_FAIL + 1 )); return 1
+    }
+    NT_TEST_PASS=$(( NT_TEST_PASS + 1 ))
+}
+
+test_subtree_immediate_empty_fails() {
+    nt_test__create_file "001.md"
+    nt_test__assert_exit 2 "$NT_SCRIPT" 1.
+}
+
+#####################################################################
 # Test registry
 #####################################################################
 
@@ -453,4 +692,20 @@ NT_TESTS_HIERARCHICAL=(
     test_new_combined_reverse_order
     test_new_combined_with_title
     test_new_copy_overrides_template
+    test_range_hier_same_parent
+    test_range_cross_depth
+    test_range_includes_sub_indices
+    test_range_start_greater_than_end_fails
+    test_range_hier_empty_fails
+    test_subtree_finds_sub_docs
+    test_subtree_excludes_parent
+    test_subtree_deep_nesting
+    test_subtree_specific_parent
+    test_subtree_empty_fails
+    test_subtree_no_docs_at_all_fails
+    test_subtree_chaining_with_readme
+    test_subtree_hyphen_prefix_chaining
+    test_subtree_immediate_children_only
+    test_subtree_immediate_excludes_parent
+    test_subtree_immediate_empty_fails
 )

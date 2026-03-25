@@ -19,7 +19,7 @@ NT_VERSION="0.1.10"
 # Regex patterns (stored in variables to prevent zsh backslash removal in =~)
 _nt_idx_pat='^([0-9]+(\.[0-9]+)*)([-_]|\.[^0-9]|$)'  # extract: index + boundary
 _nt_idx_strict='^[0-9]+(\.[0-9]+)*$'        # validate/consume: full-string match
-_nt_range_pat='^[0-9]+-[0-9]+$'             # consume_title: range token
+_nt_range_pat='^[0-9]+(\.[0-9]+)*-[0-9]+(\.[0-9]+)*$'  # range token (hierarchical)
 _nt_digits='^[0-9]+$'                        # bare digits
 
 # Editor resolution order: NT_EDITOR > VISUAL > EDITOR > vim  (§3.4)
@@ -355,7 +355,9 @@ cmd_help() {
 	printf '  nt l [N]            open last (or Nth-to-last) document (alias: last)\n'
 	printf '  nt li               print last index number (alias: last-index)\n'
 	printf '  nt NUM [NUM ...]    open document(s) by index (supports N.M hierarchical)\n'
-	printf '  nt NUM-NUM          open range of documents (inclusive)\n'
+	printf '  nt NUM-NUM          open range of documents (inclusive, hierarchical)\n'
+	printf '  nt NUM..            open all descendants under index\n'
+	printf '  nt NUM.             open immediate children of index\n'
 	printf '  nt r NUM TITLE      rename document by index (alias: rename)\n'
 	printf '  nt rl TITLE         rename last document\n'
 	printf '  nt rn N M           renumber consecutive run (alias: renumber)\n'
@@ -762,6 +764,51 @@ cmd_activity() {
 	printf '\n  Total: %d documents\n\n' "${#nt_files[@]}"
 }
 
+cmd_subtree() {
+	local prefix="$1" mode="$2"   # mode: "all" or "immediate"
+	if ! [[ "$prefix" =~ $_nt_idx_strict ]]; then
+		nt_err "Unknown option '${prefix}'"
+		exit 2
+	fi
+	validate_index "$prefix" || exit 2
+	# Normalize prefix: all components to 3 digits
+	local -a _st_parts
+	_st_parts=( "${(@s:.:)prefix}" )
+	local _st_i
+	for (( _st_i = 1; _st_i <= ${#_st_parts[@]}; _st_i++ )); do
+		_st_parts[$_st_i]="$(printf '%03d' "$(( 10#${_st_parts[$_st_i]} ))")"
+	done
+	local _st_norm="${(j:.:)_st_parts}"
+	local _st_depth=${#_st_parts[@]}
+
+	local -a _st_all_docs _st_matches
+	_st_all_docs=( [[:digit:]]##*(N.) )
+	_st_matches=()
+	local _st_f _st_idx
+	for _st_f in "${_st_all_docs[@]}"; do
+		_st_idx="$(extract_index "$_st_f")"
+		[[ -z "$_st_idx" ]] && continue
+		if [[ "$_st_idx" == ${_st_norm}.* ]]; then
+			if [[ "$mode" == "immediate" ]]; then
+				# Only include if exactly one level deeper
+				local -a _st_child_parts
+				_st_child_parts=( "${(@s:.:)_st_idx}" )
+				[[ ${#_st_child_parts[@]} -ne $(( _st_depth + 1 )) ]] && continue
+			fi
+			_st_matches+=( "$_st_f" )
+		fi
+	done
+	if [[ ${#_st_matches[@]} -eq 0 ]]; then
+		nt_err "No sub-documents found under ${prefix}."
+		exit 2
+	fi
+	local _st_sorted _st_line
+	_st_sorted="$(sort_docs_by_index "${_st_matches[@]}")"
+	while IFS= read -r _st_line; do
+		files_to_open+=( "$_st_line" )
+	done <<< "$_st_sorted"
+}
+
 cmd_readme() {
 	local -a readmes
 	readmes=( (#i)readme.md(N.) )
@@ -894,28 +941,57 @@ while [ "$#" -gt 0 ]; do
 		t|-t)     cmd_template; shift ;;
 
 		# ── Range (N-M) ──────────────────────────────────────────────
-		# Open all documents from index N to M, inclusive.
-		# Missing indices within the range are silently skipped.
+		# Open all documents from index N to M, inclusive (hierarchical).
+		# Uses filter-based algorithm: collect all indexed files, keep those
+		# whose index falls between start and end by compare_indices.
 		[0123456789]*-[0123456789]*)
 			if [[ "$1" =~ $_nt_range_pat ]]; then
 				local _range_start="${1%%-*}" _range_end="${1##*-}"
-				local _range_found=0 _range_j
-				for (( _range_j = 10#$_range_start; _range_j <= 10#$_range_end; _range_j++ )); do
-					local _range_doc
-					if _range_doc="$(find_doc_by_index "$_range_j" 2>/dev/null)"; then
-						files_to_open+=( "$_range_doc" )
-						_range_found=$(( _range_found + 1 ))
+				validate_index "$_range_start" || exit 2
+				validate_index "$_range_end" || exit 2
+				if [[ "$(compare_indices "$_range_start" "$_range_end")" == "1" ]]; then
+					nt_err "Range start is greater than end: ${_range_start}-${_range_end}"
+					exit 2
+				fi
+				local -a _range_all_docs _range_matches
+				_range_all_docs=( [[:digit:]]##*(N.) )
+				_range_matches=()
+				local _range_f _range_idx
+				for _range_f in "${_range_all_docs[@]}"; do
+					_range_idx="$(extract_index "$_range_f")"
+					[[ -z "$_range_idx" ]] && continue
+					if [[ "$(compare_indices "$_range_start" "$_range_idx")" != "1" ]] \
+						&& [[ "$(compare_indices "$_range_idx" "$_range_end")" != "1" ]]; then
+						_range_matches+=( "$_range_f" )
 					fi
 				done
-				if [[ $_range_found -eq 0 ]]; then
+				if [[ ${#_range_matches[@]} -eq 0 ]]; then
 					nt_err "No documents found in range ${_range_start}-${_range_end}."
 					exit 2
 				fi
+				local _range_sorted
+				_range_sorted="$(sort_docs_by_index "${_range_matches[@]}")"
+				local _range_line
+				while IFS= read -r _range_line; do
+					files_to_open+=( "$_range_line" )
+				done <<< "$_range_sorted"
 				shift
 			else
 				nt_err "Unknown option '$1'"; exit 2
 			fi
 			;;
+
+		# ── Subtree: NUM.. (all descendants) and NUM. (immediate children)
+		# NUM.. must be checked before NUM. since *.) would match both.
+		# Both must be checked before the generic numeric index case.
+		[0123456789]*..)
+			cmd_subtree "${1%..}" all; shift ;;
+		-[0123456789]*..)
+			cmd_subtree "${${1#-}%..}" all; shift ;;
+		[0123456789]*.)
+			cmd_subtree "${1%.}" immediate; shift ;;
+		-[0123456789]*.)
+			cmd_subtree "${${1#-}%.}" immediate; shift ;;
 
 		# ── Numeric index (simple or hierarchical) ───────────────────
 		# Bare form:    3, 007, 1.1, 004.7.10, etc.
