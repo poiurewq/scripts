@@ -364,6 +364,7 @@ cmd_help() {
 	printf '  nt a                activity summary, current dir (alias: activity)\n'
 	printf '  nt ar               activity summary, recursive (alias: activity-recursive)\n'
 	printf '  nt R                open README.md\n'
+	printf '  nt C                open CLAUDE.md\n'
 	printf '  nt t                open template file\n'
 	printf '  nt v                print version (alias: version)\n'
 	printf '\nBare commands (no hyphen) consume all remaining words as the title.\n'
@@ -825,6 +826,16 @@ cmd_readme() {
 	files_to_open+=( "${readmes[1]}" )
 }
 
+cmd_claude() {
+	local -a claudes
+	claudes=( (#i)claude.md(N.) )
+	if [[ ${#claudes[@]} -eq 0 ]]; then
+		touch CLAUDE.md
+		claudes=( CLAUDE.md )
+	fi
+	files_to_open+=( "${claudes[1]}" )
+}
+
 cmd_template() {
 	local -a templates
 	templates=( ${nt_template_name}.*(N.) )
@@ -944,6 +955,7 @@ while [ "$#" -gt 0 ]; do
 			cmd_version; break ;;
 
 		R|-R)     cmd_readme;   shift ;;
+		C|-C)     cmd_claude;   shift ;;
 		t|-t)     cmd_template; shift ;;
 
 		# ── Range (N-M) ──────────────────────────────────────────────

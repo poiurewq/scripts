@@ -74,6 +74,28 @@ test_readme_hyphen_form() {
 }
 
 #####################################################################
+# Tests — nt C: open CLAUDE.md
+#####################################################################
+
+test_claude_opens() {
+    nt_test__create_file "CLAUDE.md" "# My CLAUDE.md"
+    nt_test__assert_output_contains "CLAUDE.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" C
+}
+
+test_claude_creates_if_missing() {
+    nt_test__assert_exit 0 env NT_EDITOR="true" "$NT_SCRIPT" C
+    nt_test__assert_file_exists "$NT_TEST_DIR/CLAUDE.md" \
+        "C should create CLAUDE.md if missing"
+}
+
+test_claude_hyphen_form() {
+    nt_test__create_file "CLAUDE.md" "# claude"
+    nt_test__assert_output_contains "CLAUDE.md" \
+        env NT_EDITOR="echo" "$NT_SCRIPT" -C
+}
+
+#####################################################################
 # Tests — nt t: open template
 #####################################################################
 
@@ -206,6 +228,9 @@ NT_TESTS_MISC=(
     test_readme_case_insensitive
     test_readme_creates_if_missing
     test_readme_hyphen_form
+    test_claude_opens
+    test_claude_creates_if_missing
+    test_claude_hyphen_form
     test_template_opens
     test_template_creates_if_missing
     test_template_not_found_exits_zero

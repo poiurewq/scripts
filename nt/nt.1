@@ -211,11 +211,18 @@ Searches the current directory only.
 Show an activity summary of indexed documents grouped by last-modified month.
 Searches all subdirectories as well.
 .It Cm R
-Open the README.md (case-insensitive) document in the current working directory, if there is any.
+Open the README.md (case-insensitive) document in the current working directory.
+Creates README.md if it does not exist.
+.It Cm C
+Open the CLAUDE.md (case-insensitive) document in the current working directory.
+Creates CLAUDE.md if it does not exist.
 .It Cm t
 Open the
 .Pa nt_template
-document in the current working directory, if there is any.
+document in the current working directory.
+Creates
+.Pa nt_template.md
+if it does not exist.
 .El
 .Sh ENVIRONMENT
 .Bl -tag -width indent
