@@ -9,7 +9,7 @@
 .Op Bro Cm h | Cm help Brc
 .br
 .Nm
-.Bro Cm n | Cm new Brc Op Ar title
+.Bro Cm n | Cm new Brc Op Cm i Ar index Op Cm c Ar index Op Ar title
 .br
 .Nm
 .Bro Cm l | Cm last Brc Op Ar N
@@ -19,6 +19,15 @@
 .br
 .Nm
 .Ar num Op Ar ...
+.br
+.Nm
+.Ar num Ns Cm - Ns Ar num
+.br
+.Nm
+.Ar num Ns Cm \&..
+.br
+.Nm
+.Ar num Ns Cm \&.
 .br
 .Nm
 .Bro Cm r | Cm rename Brc Ar num Ar title
@@ -92,7 +101,7 @@ Options include:
 .Bl -tag -width indent
 .It Bro Cm h | Cm help Brc
 Print help page.
-.It Bro Cm n | Cm new Brc Op Ar title
+.It Bro Cm n | Cm new Brc Op Cm i Ar index Op Cm c Ar index Op Ar title
 Create a new document named with the highest unused numeric index (0-padded to 3 digits)
 followed by a delimiter and a hyphenated version of the
 .Ar title ,
@@ -102,6 +111,29 @@ If the current directory contains the file
 then the new document uses this template's content and
 .Ar extension
 instead.
+.Pp
+If
+.Cm i
+(or
+.Cm index )
+is given, use
+.Ar index
+instead of auto-incrementing.
+All index components are zero-padded to 3 digits.
+Fails if a document with that index already exists.
+.Pp
+If
+.Cm c
+(or
+.Cm copy )
+is given, copy the content verbatim from the document at the specified
+.Ar index .
+The extension is inherited from the source document.
+When both
+.Cm i
+and
+.Cm c
+are given, they may appear in any order.
 .It Bro Cm l | Cm last Brc Op Ar N
 Open the document with the latest numeric index.
 If
@@ -117,6 +149,38 @@ Print the numeric index of the last indexed document in the current directory.
 Open the existing document(s) with the
 .Ar num
 index (indices).
+.It Ar num Ns Cm - Ns Ar num
+Open all documents whose index falls between the two endpoints, inclusive.
+Both endpoints may be hierarchical (e.g.,
+.Ql 1.3-1.7
+or
+.Ql 3-5.2 ) .
+Documents at any depth within the range are included.
+Missing indices are silently skipped.
+Fails if no documents exist in the range or if the start is greater than the end.
+.It Ar num Ns Cm \&..
+Open all descendants under
+.Ar num
+(direct and indirect sub-indices), excluding
+.Ar num
+itself.
+For example,
+.Ql 1..
+opens
+.Pa 001.001-a.md , 001.002-b.md , 001.002.001-deep.md ,
+etc.
+.It Ar num Ns Cm \&.
+Open only the immediate children of
+.Ar num
+(one level deeper), excluding
+.Ar num
+itself and any deeper descendants.
+For example,
+.Ql 1.
+opens
+.Pa 001.001-a.md , 001.002-b.md
+but not
+.Pa 001.002.001-deep.md .
 .It Bro Cm r | Cm rename Brc Ar num Ar title
 Rename the existing document with the
 .Ar num
@@ -147,11 +211,18 @@ Searches the current directory only.
 Show an activity summary of indexed documents grouped by last-modified month.
 Searches all subdirectories as well.
 .It Cm R
-Open the README.md (case-insensitive) document in the current working directory, if there is any.
+Open the README.md (case-insensitive) document in the current working directory.
+Creates README.md if it does not exist.
+.It Cm C
+Open the CLAUDE.md (case-insensitive) document in the current working directory.
+Creates CLAUDE.md if it does not exist.
 .It Cm t
 Open the
 .Pa nt_template
-document in the current working directory, if there is any.
+document in the current working directory.
+Creates
+.Pa nt_template.md
+if it does not exist.
 .El
 .Sh ENVIRONMENT
 .Bl -tag -width indent
@@ -223,6 +294,43 @@ Open a note by index:
 Open several notes at once:
 .Pp
 .Dl nt 1 3 5
+.Ss Opening a range
+Open notes 3 through 7:
+.Pp
+.Dl nt 3-7
+.Pp
+Hierarchical ranges are supported:
+.Pp
+.Dl nt 1.3-1.7
+.Pp
+Cross-depth ranges include all sub-indices within the bounds:
+.Pp
+.Dl nt 3-5.2
+.Pp
+Missing indices within the range are silently skipped.
+.Ss Opening a subtree
+Open all descendants under note 1:
+.Pp
+.Dl nt 1..
+.Pp
+Open only the immediate children of note 4:
+.Pp
+.Dl nt 4.
+.Ss Creating sub-notes
+Create a sub-note under note 4:
+.Pp
+.Dl nt n i 4.1 meeting follow-up
+.Pp
+This creates
+.Pa 004.001-meeting-follow-up.md .
+.Ss Copying from an existing note
+Clone note 3 as a starting point for a new note:
+.Pp
+.Dl nt n c 3 revised draft
+.Pp
+Combine custom index and copy:
+.Pp
+.Dl nt n i 3.1 c 3 sub-variant
 .Ss Renaming and renumbering
 Rename note 5:
 .Pp

@@ -181,13 +181,12 @@ test_new_hyphen_long_creates_doc() {
         "--new should create titled doc"
 }
 
-test_new_hyphen_stops_at_number() {
-    # In non-greedy mode, a bare number stops the title
+test_new_hyphen_consumes_bare_number_as_title() {
+    # In non-greedy mode, bare numbers do NOT stop consumption;
+    # only hyphen-prefixed args do. All chained indices must use -N syntax.
     env NT_EDITOR="true" "$NT_SCRIPT" -n my note 5 >/dev/null 2>&1
-    nt_test__assert_file_exists "$NT_TEST_DIR/001-my-note.md" \
-        "-n should stop title at bare number"
-    nt_test__assert_file_not_exists "$NT_TEST_DIR/001-my-note-5.md" \
-        "number should not be part of title in non-greedy mode"
+    nt_test__assert_file_exists "$NT_TEST_DIR/001-my-note-5.md" \
+        "-n should consume bare number as part of title"
 }
 
 test_new_hyphen_stops_at_flag() {
@@ -232,6 +231,6 @@ NT_TESTS_NEW=(
     test_new_bare_greedy_consumes_rename_word
     test_new_hyphen_short_creates_doc
     test_new_hyphen_long_creates_doc
-    test_new_hyphen_stops_at_number
+    test_new_hyphen_consumes_bare_number_as_title
     test_new_hyphen_stops_at_flag
 )
