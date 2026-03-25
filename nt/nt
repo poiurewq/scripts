@@ -117,10 +117,9 @@ compare_indices() {
 	local -a ap bp
 	ap=( "${(@s:.:)a}" )
 	bp=( "${(@s:.:)b}" )
-	local i max_len
+	local i max_len av bv
 	max_len=$(( ${#ap[@]} > ${#bp[@]} ? ${#ap[@]} : ${#bp[@]} ))
 	for (( i = 1; i <= max_len; i++ )); do
-		local av bv
 		av=$(( 10#${ap[$i]:-0} ))
 		bv=$(( 10#${bp[$i]:-0} ))
 		if (( av < bv )); then printf -- '-1'; return 0; fi
@@ -149,15 +148,14 @@ increment_index() {
 # Reads filenames as arguments; prints sorted filenames one per line.
 sort_docs_hierarchically() {
 	[[ "$#" -eq 0 ]] && return 0
-	local -a pairs
-	local f idx
+	local -a pairs parts
+	local f idx key p
 	for f in "$@"; do
 		idx="$(extract_index "$f")"
 		[[ -z "$idx" ]] && continue
 		# Build a sortable key: each component zero-padded to 5 digits, joined by '.'
-		local -a parts
 		parts=( "${(@s:.:)idx}" )
-		local key="" p
+		key=""
 		for p in "${parts[@]}"; do
 			key+="$(printf '%05d' "$(( 10#$p ))")."
 		done
@@ -229,9 +227,8 @@ find_doc_by_index() {
 	candidates=( ${normalized}*(N.) )
 
 	local -a docs
-	local f
+	local f file_idx
 	for f in "${candidates[@]}"; do
-		local file_idx
 		file_idx="$(extract_index "$f")"
 		if [[ "$file_idx" == "$normalized" ]]; then
 			docs+=( "$f" )
@@ -310,10 +307,8 @@ consume_title() {
 	local arg
 	for arg in "$@"; do
 		if [[ $_nt_greedy -eq 0 ]]; then
-			# Non-greedy stop conditions
-			if [[ "$arg" =~ $_nt_idx_strict ]] \
-				|| [[ "$arg" =~ $_nt_range_pat ]] \
-				|| [[ "$arg" == -* ]]; then
+			# Non-greedy stop condition: only hyphen-prefixed args
+			if [[ "$arg" == -* ]]; then
 				break
 			fi
 		fi
@@ -348,10 +343,9 @@ build_filename() {
 #######################################################################
 
 cmd_help() {
+	printf '\n'
+	printf 'nt — simple notes maintainer\n\n'
 	printf 'usage: nt <command> [args]\n\n'
-	printf 'Commands without a hyphen prefix consume all remaining words as the title.\n'
-	printf 'Add a hyphen prefix to stop at the first number or flag, letting you\n'
-	printf 'chain multiple commands on one line: nt -n my note -3 -R\n\n'
 	printf '  nt h                print this help (alias: help)\n'
 	printf '  nt n [TITLE]        create new indexed document (alias: new)\n'
 	printf '  nt l [N]            open last (or Nth-to-last) document (alias: last)\n'
@@ -365,6 +359,12 @@ cmd_help() {
 	printf '  nt R                open README.md\n'
 	printf '  nt t                open template file\n'
 	printf '  nt v                print version (alias: version)\n'
+	printf '\nBare commands (no hyphen) consume all remaining words as the title.\n'
+	printf 'Hyphen-prefixed commands stop at numbers/flags, enabling chaining;\n'
+	printf 'chained commands are processed in the sequence they are passed:\n'
+	printf '  nt -n new note one -n new note two\n'
+	printf '  creates two new notes and opens both of them\n\n'
+	printf 'To get started, type: man nt  (see the EXAMPLES section)\n\n'
 }
 
 cmd_version() {
@@ -590,11 +590,13 @@ cmd_renumber() {
 
 	# Find consecutive run (increment last component, same parent prefix)
 	local -a rn_end_parts=( "${start_parts[@]}" )
+	local next_last next_idx
+	local -a next_parts
 	while true; do
-		local next_last=$(( 10#${rn_end_parts[-1]} + 1 ))
-		local -a next_parts=( "${rn_end_parts[@]}" )
+		next_last=$(( 10#${rn_end_parts[-1]} + 1 ))
+		next_parts=( "${rn_end_parts[@]}" )
 		next_parts[-1]="$next_last"
-		local next_idx="${(j:.:)next_parts}"
+		next_idx="${(j:.:)next_parts}"
 		if find_doc_by_index "$next_idx" >/dev/null 2>&1; then
 			rn_end_parts=( "${next_parts[@]}" )
 		else
@@ -615,19 +617,20 @@ cmd_renumber() {
 	fi
 
 	# Collision check: target slots must be free (unless within source range)
-	local rn_i
+	local rn_i ti_last chk_idx chk_doc
+	local -a chk_arr
 	for rn_i in $(seq 0 $rn_count); do
-		local ti_last=$(( target_last + rn_i ))
+		ti_last=$(( target_last + rn_i ))
 		# Skip slots that will be vacated (same prefix, overlapping range)
 		if [[ "$start_prefix" == "$target_prefix" ]] \
 			&& (( ti_last >= start_last && ti_last <= end_last )); then
 			continue
 		fi
-		local -a chk_arr=( "${target_parts[@]}" )
+		chk_arr=( "${target_parts[@]}" )
 		chk_arr[-1]="$ti_last"
 		chk_arr[1]="$(printf '%03d' "$(( 10#${chk_arr[1]} ))")"
-		local chk_idx="${(j:.:)chk_arr}"
-		local chk_doc
+		chk_idx="${(j:.:)chk_arr}"
+		chk_doc=
 		if chk_doc="$(find_doc_by_index "$chk_idx" 2>/dev/null)"; then
 			nt_err "Target index ${chk_idx} already occupied by ${chk_doc}."
 			exit 2
@@ -642,23 +645,24 @@ cmd_renumber() {
 		rn_seq="$(seq 0 $rn_count)"
 	fi
 
+	local si_last si_idx_norm ti_idx_norm si_doc ti_doc si_file_idx
+	local -a si_arr ti_arr
 	for rn_i in ${=rn_seq}; do
-		local si_last=$(( start_last + rn_i ))
-		local ti_last=$(( target_last + rn_i ))
+		si_last=$(( start_last + rn_i ))
+		ti_last=$(( target_last + rn_i ))
 
 		# Build zero-padded source index
-		local -a si_arr=( "${start_parts[@]}" )
+		si_arr=( "${start_parts[@]}" )
 		si_arr[-1]="$si_last"
 		si_arr[1]="$(printf '%03d' "$(( 10#${si_arr[1]} ))")"
-		local si_idx_norm="${(j:.:)si_arr}"
+		si_idx_norm="${(j:.:)si_arr}"
 
 		# Build zero-padded target index
-		local -a ti_arr=( "${target_parts[@]}" )
+		ti_arr=( "${target_parts[@]}" )
 		ti_arr[-1]="$ti_last"
 		ti_arr[1]="$(printf '%03d' "$(( 10#${ti_arr[1]} ))")"
-		local ti_idx_norm="${(j:.:)ti_arr}"
+		ti_idx_norm="${(j:.:)ti_arr}"
 
-		local si_doc ti_doc si_file_idx
 		si_doc="$(find_doc_by_index "$si_idx_norm")" || exit 2
 		# Get the exact index prefix as it appears in the filename
 		si_file_idx="$(extract_index "$si_doc")"
@@ -694,8 +698,8 @@ cmd_readme() {
 	local -a readmes
 	readmes=( (#i)readme.md(N.) )
 	if [[ ${#readmes[@]} -eq 0 ]]; then
-		nt_err "No README.md found in current working directory."
-		exit 4
+		touch README.md
+		readmes=( README.md )
 	fi
 	files_to_open+=( "${readmes[1]}" )
 }
@@ -710,8 +714,8 @@ cmd_template() {
 		printf "Too many nt template files in this folder.\n"
 		exit 5
 	else
-		printf "No nt template found in this folder.\n"
-		exit 0
+		touch "${nt_template_name}.md"
+		files_to_open+=( "${nt_template_name}.md" )
 	fi
 }
 
@@ -720,7 +724,7 @@ cmd_template() {
 #######################################################################
 
 if [ "$#" -eq 0 ]; then
-	printf 'usage: nt <command> [args] — run "nt h" for full reference\n'
+	cmd_help
 	exit 0
 fi
 
@@ -822,10 +826,19 @@ while [ "$#" -gt 0 ]; do
 		t|-t)     cmd_template; shift ;;
 
 		# ── Numeric index (simple or hierarchical) ───────────────────
-		# Matches: 3, 007, 1.1, 004.7.10, etc.
+		# Bare form:    3, 007, 1.1, 004.7.10, etc.
+		# Hyphen form: -3, -007, -1.1, etc. (for use in chained commands)
 		[0123456789]*)
 			if [[ "$1" =~ $_nt_idx_strict ]]; then
 				cmd_open "$1"; shift
+			else
+				nt_err "Unknown option '$1'"; exit 2
+			fi
+			;;
+
+		-[0123456789]*)
+			if [[ "${1#-}" =~ $_nt_idx_strict ]]; then
+				cmd_open "${1#-}"; shift
 			else
 				nt_err "Unknown option '$1'"; exit 2
 			fi
