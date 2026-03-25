@@ -6,35 +6,40 @@
 .Nd simple notes maintainer
 .Sh SYNOPSIS
 .Nm
-.Op Cm help
+.Op Bro Cm h | Cm help Brc
 .br
-.Op Cm new Op Ar title
+.Nm
+.Bro Cm n | Cm new Brc Op Ar title
 .br
-.Op Cm -n | --new Op Ar title
+.Nm
+.Bro Cm l | Cm last Brc Op Ar N
 .br
-.Op Cm last Op Ar N
+.Nm
+.Bro Cm li | Cm last-index Brc
 .br
-.Op Cm last-index | Cm li
+.Nm
+.Ar num Op Ar ...
 .br
-.Op Cm -l | --last Op Ar N
+.Nm
+.Bro Cm r | Cm rename Brc Ar num Ar title
 .br
-.Op Fl li | Fl -last-index
+.Nm
+.Cm rl Ar title
 .br
-.Op Ar num Op Ar ...
+.Nm
+.Bro Cm rn | Cm renumber Brc Ar n Ar m
 .br
-.Op Cm rename Ar num Ar title
+.Nm
+.Bro Cm a | Cm activity Brc
 .br
-.Op Cm -r | --rename Ar num Ar title
+.Nm
+.Bro Cm ar | Cm activity-recursive Brc
 .br
-.Op Cm rl Ar title
+.Nm
+.Cm R
 .br
-.Op Cm renumber Ar n Ar m
-.br
-.Op Cm activity | Cm activity-recursive
-.br
-.Op Cm R | Cm -R
-.br
-.Op Cm t | Cm -t
+.Nm
+.Cm t
 .Sh DESCRIPTION
 The
 .Nm
@@ -85,11 +90,9 @@ Titles containing hyphens or numbers must be quoted when using the hyphen-prefix
 .Pp
 Options include:
 .Bl -tag -width indent
-.It Cm h
-.Pq alias: Cm help
+.It Bro Cm h | Cm help Brc
 Print help page.
-.It Cm n Op Ar title
-.Pq alias: Cm new
+.It Bro Cm n | Cm new Brc Op Ar title
 Create a new document named with the highest unused numeric index (0-padded to 3 digits)
 followed by a delimiter and a hyphenated version of the
 .Ar title ,
@@ -99,8 +102,7 @@ If the current directory contains the file
 then the new document uses this template's content and
 .Ar extension
 instead.
-.It Cm l Op Ar N
-.Pq alias: Cm last
+.It Bro Cm l | Cm last Brc Op Ar N
 Open the document with the latest numeric index.
 If
 .Ar N
@@ -109,15 +111,13 @@ is a positive integer, open the
 indexed document (1 = last, 2 = second-to-last, etc.).
 When using the hyphen-prefixed form, a leading-hyphen next argument is passed on to the next chained command rather than treated as an argument to
 .Cm l .
-.It Cm li
-.Pq alias: Cm last-index
+.It Bro Cm li | Cm last-index Brc
 Print the numeric index of the last indexed document in the current directory.
 .It Ar num Op Ar ...
 Open the existing document(s) with the
 .Ar num
 index (indices).
-.It Cm r Ar num Ar title
-.Pq alias: Cm rename
+.It Bro Cm r | Cm rename Brc Ar num Ar title
 Rename the existing document with the
 .Ar num
 index to
@@ -127,8 +127,7 @@ without opening the document.
 Rename the last indexed document to
 .Ar title
 without opening the document.
-.It Cm rn Ar n Ar m
-.Pq alias: Cm renumber
+.It Bro Cm rn | Cm renumber Brc Ar n Ar m
 Starting from document index
 .Ar n ,
 renumber the consecutive run of documents so that
@@ -141,12 +140,10 @@ becomes
 and so on, until the end of the consecutive sequence.
 Documents are renamed in the correct order to avoid collisions.
 Fails if any target index is already occupied by a document outside the source range.
-.It Cm a
-.Pq alias: Cm activity
+.It Bro Cm a | Cm activity Brc
 Show an activity summary of indexed documents grouped by last-modified month.
 Searches the current directory only.
-.It Cm ar
-.Pq alias: Cm activity-recursive
+.It Bro Cm ar | Cm activity-recursive Brc
 Show an activity summary of indexed documents grouped by last-modified month.
 Searches all subdirectories as well.
 .It Cm R
