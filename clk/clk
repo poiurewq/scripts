@@ -18,7 +18,8 @@ CLK_FMT='%Y-%m-%dT%H:%M:%S'
 CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM, yyyy-mm-dd)'
 CLK_FMT_RAW=0
 CLK_TAB='	'
-CLK_VERSION_MARKER='#clk-v3'
+CLK_LOG_VERSION_MARKER='#clk-v3'
+CLK_VERSION="0.3.8"
 
 # Detect OS once; all platform differences are isolated in helper functions.
 CLK_OS="$(uname)"
@@ -639,7 +640,7 @@ clk__ensure_log() {
     fi
 
     if [ ! -f "$CLK_LOG" ]; then
-        printf '%s\n' "$CLK_VERSION_MARKER" > "$CLK_LOG" || clk__die 2 "Failed to create log file '$CLK_LOG'."
+        printf '%s\n' "$CLK_LOG_VERSION_MARKER" > "$CLK_LOG" || clk__die 2 "Failed to create log file '$CLK_LOG'."
     fi
 
     # Initialize temp error file
@@ -2126,6 +2127,12 @@ fi
 # No-args: show synopsis
 if [ "$#" -eq 0 ]; then
     printf '\n%s\n\nRun "clk help" and see the EXAMPLES section to get started.\n\n' "$CLK_SYNOPSIS"
+    exit 0
+fi
+
+# Version
+if [ "$1" = 'version' ] || [ "$1" = 'V' ]; then
+    printf 'clk %s\n' "$CLK_VERSION"
     exit 0
 fi
 
