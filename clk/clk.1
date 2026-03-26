@@ -428,6 +428,8 @@ ranges accept optional filter suffixes:
 Filter results to only sessions matching the given tag(s).
 Multiple tags can be specified separated by commas
 .Pq e.g., Ql dev,pm,admin .
+A tag ending with a dot matches the tag itself and all its children
+.Pq e.g., Ql dev. No matches dev , dev.frontend , dev.backend.api .
 When multiple tags are given, their times are combined.
 .It Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
 Group results into a horizontal bar chart by day, week, month, or session

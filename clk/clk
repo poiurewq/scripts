@@ -69,7 +69,7 @@ clk [help]
     from <timestamp> {until | to} <timestamp>
 
 <filter>:
-    [for <tag,tag,...>] [by {day|week|month|session}]
+    [for <tag,tag.,...>] [by {day|week|month|session}]
 
 <unit>       = hour(s) | day(s) | week(s) | month(s) | year(s)
 <timestamp>  = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
@@ -1777,17 +1777,32 @@ clk_do_view() {
 
     local awk_result
     awk_result="$(awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" -v ftag="$filter_tag" '
+    function tag_matches(t,    i, stem) {
+        if (t in ftagset) return 1
+        for (i = 1; i <= nprefixes; i++) {
+            stem = prefixes[i]
+            if (t == stem || substr(t, 1, length(stem) + 1) == stem ".") return 1
+        }
+        return 0
+    }
     BEGIN {
         # Build tag filter lookup from comma-separated list
-        nftags = 0
+        nftags = 0; nprefixes = 0
         if (ftag != "") {
             n = split(ftag, ftarr, ",")
-            for (i = 1; i <= n; i++) ftagset[ftarr[i]] = 1
+            for (i = 1; i <= n; i++) {
+                f = ftarr[i]
+                if (substr(f, length(f)) == ".") {
+                    prefixes[++nprefixes] = substr(f, 1, length(f) - 1)
+                } else {
+                    ftagset[f] = 1
+                }
+            }
             nftags = n
         }
     }
     $1 == "done" && $3 >= s && $3 <= e {
-        if (nftags > 0 && !($4 in ftagset)) next
+        if (nftags > 0 && !tag_matches($4)) next
         tag = $4
         secs = $5 + 0
         total += secs
@@ -1889,16 +1904,31 @@ clk__view_grouped() {
     # For day/week/month, emit end-date (YYYY-MM-DD) and seconds.
     local raw_data
     raw_data="$(awk -F'\t' -v s="$start_ts" -v e="$end_ts" -v ftag="$filter_tag" -v gby="$group_by" '
+    function tag_matches(t,    i, stem) {
+        if (t in ftagset) return 1
+        for (i = 1; i <= nprefixes; i++) {
+            stem = prefixes[i]
+            if (t == stem || substr(t, 1, length(stem) + 1) == stem ".") return 1
+        }
+        return 0
+    }
     BEGIN {
-        nftags = 0
+        nftags = 0; nprefixes = 0
         if (ftag != "") {
             n = split(ftag, ftarr, ",")
-            for (i = 1; i <= n; i++) ftagset[ftarr[i]] = 1
+            for (i = 1; i <= n; i++) {
+                f = ftarr[i]
+                if (substr(f, length(f)) == ".") {
+                    prefixes[++nprefixes] = substr(f, 1, length(f) - 1)
+                } else {
+                    ftagset[f] = 1
+                }
+            }
             nftags = n
         }
     }
     $1 == "done" && $3 >= s && $3 <= e {
-        if (nftags > 0 && !($4 in ftagset)) next
+        if (nftags > 0 && !tag_matches($4)) next
         secs = $5 + 0
         if (gby == "session") {
             # Emit full session details for table rendering
@@ -1961,11 +1991,14 @@ clk__view_grouped() {
         # Sort by start timestamp (already in order from log, but be safe)
         local session_data
         session_data="$(printf '%s' "$raw_data" | sort -t"$(printf '\t')" -k1,1)"
-        # Show tag column if no filter (all tags) or multiple tags in filter
+        # Show tag column if no filter (all tags), multiple tags in filter,
+        # or any tag filter uses prefix matching (trailing dot)
         local show_tag=0
         if [ -z "$filter_tag" ]; then
             show_tag=1
         elif printf '%s' "$filter_tag" | grep -q ','; then
+            show_tag=1
+        elif printf '%s' "$filter_tag" | grep -qE '\.$'; then
             show_tag=1
         fi
         clk__view_render_session_table "$session_data" "$show_tag"
@@ -2230,7 +2263,7 @@ clk__view_render_session_table() {
             if (show_tag) line = line sprintf("  %-*s", max_tag_w, tag[i])
             if (has_desc && desc[i] != "") {
                 d = desc[i]
-                if (length(d) > max_desc_w) d = substr(d, 1, max_desc_w - 3) "..."
+                if (length(d) > max_desc_w) d = substr(d, 1, max_desc_w - 1) "…"
                 line = line "  " d
             }
             printf "%s\n", line
