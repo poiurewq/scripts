@@ -227,6 +227,25 @@ test_status_multiple_sessions() {
     CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
 }
 
+test_status_alignment() {
+    # Tags of different lengths: "short" (5) and "longer-tag" (10)
+    # "started" should be at the same column offset in both rows
+    "$CLK_SCRIPT" in short at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in longer-tag at 2026-01-01T09:30:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" status 2>&1)"
+    # Extract the column position of "started" on each line
+    local col1 col2
+    col1="$(printf '%s' "$output" | grep "short" | grep -bo "started" | head -1 | cut -d: -f1)"
+    col2="$(printf '%s' "$output" | grep "longer-tag" | grep -bo "started" | head -1 | cut -d: -f1)"
+    if [ "$col1" != "$col2" ]; then
+        printf 'FAIL: "started" not aligned: col %s vs col %s\n  actual:\n%s\n' "$col1" "$col2" "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
 test_status_not_shown_after_out() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
@@ -465,6 +484,7 @@ CLK_TESTS_SESSION=(
     test_status_shows_start_time
     test_status_shows_active
     test_status_multiple_sessions
+    test_status_alignment
     test_status_not_shown_after_out
     test_status_alias_s
 
