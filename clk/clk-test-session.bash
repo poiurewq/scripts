@@ -228,16 +228,15 @@ test_status_multiple_sessions() {
 }
 
 test_status_alignment() {
-    # Tags of different lengths: "short" (5) and "longer-tag" (10)
-    # "started" should be at the same column offset in both rows
-    "$CLK_SCRIPT" in short at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" in longer-tag at 2026-01-01T09:30:00 >/dev/null 2>&1
+    # Tags within the 7-char minimum: "dev" (3) and "meeting" (7)
+    # Both should have "started" at the same column offset
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in meeting at 2026-01-01T09:30:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" status 2>&1)"
-    # Extract the column position of "started" on each line
     local col1 col2
-    col1="$(printf '%s' "$output" | grep "short" | grep -bo "started" | head -1 | cut -d: -f1)"
-    col2="$(printf '%s' "$output" | grep "longer-tag" | grep -bo "started" | head -1 | cut -d: -f1)"
+    col1="$(printf '%s' "$output" | grep "dev" | grep -bo "started" | head -1 | cut -d: -f1)"
+    col2="$(printf '%s' "$output" | grep "meeting" | grep -bo "started" | head -1 | cut -d: -f1)"
     if [ "$col1" != "$col2" ]; then
         printf 'FAIL: "started" not aligned: col %s vs col %s\n  actual:\n%s\n' "$col1" "$col2" "$output"
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))

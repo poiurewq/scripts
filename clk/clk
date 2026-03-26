@@ -853,20 +853,9 @@ clk_do_status() {
         return 0
     }
 
-    # First pass: find max tag length so "started" column-aligns across rows
-    CLK_FMT_ACTIVE_TAG_WIDTH=0
+    # Pad tags to a minimum width so "started" stays column-aligned across rows
+    CLK_FMT_ACTIVE_TAG_WIDTH=7
     local lineno
-    while IFS= read -r lineno; do
-        local line_content
-        line_content="$(clk__get_line "$lineno")"
-        clk__read_line "$line_content"
-        local tag_len="${#CLK_F4}"
-        if [ "$tag_len" -gt "$CLK_FMT_ACTIVE_TAG_WIDTH" ]; then
-            CLK_FMT_ACTIVE_TAG_WIDTH="$tag_len"
-        fi
-    done <<< "$lines"
-
-    # Second pass: format and print with aligned tags
     while IFS= read -r lineno; do
         local line_content
         line_content="$(clk__get_line "$lineno")"
