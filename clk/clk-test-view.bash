@@ -1120,7 +1120,7 @@ test_view_offset_missing_unit() {
 }
 
 test_view_offset_bad_unit() {
-    clk_test__assert_exit 1 "$CLK_SCRIPT" view -1 hours
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view -1 fortnights
 }
 
 #####################################################################

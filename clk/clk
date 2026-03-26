@@ -54,18 +54,24 @@ clk [help]
     undo | redo
     status | s
     last | l [-<n> | <n>]
-    edit | e (-<n> | <n>) <field> <value>
+    -<n>
+    edit | e (-<n> | <n>) {tag|start|end|break|pause|on} <value>
     edit | e (-<n> | <n>) delete
     log
-    view | v all
-    view | v <offset> [through <offset>]
-    view | v past [<n>] <hour(s)|day(s)|week(s)|month(s)|year(s)> [before <timestamp> | before minus <minutes>]
-    view | v from <timestamp> until|to <timestamp>
-    view | v <range> [for <tag|tag1|tag2|...>] [by <day|week|month|session>]
+    view | v <range> [<filter>]
     alias
 
-<offset>    = today | yesterday | {-<n> | current | this} <day(s)|week(s)|month(s)>
-<timestamp> = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
+<range>:
+    {all | today | yesterday}
+    {-<n> | current | this} <unit> [through ...]
+    past [<n>] <unit> [before <timestamp> | before minus <minutes>]
+    from <timestamp> {until | to} <timestamp>
+
+<filter>:
+    [for <tag|tag|...>] [by {day|week|month|session}]
+
+<unit>       = hour(s) | day(s) | week(s) | month(s) | year(s)
+<timestamp>  = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
 EOF
 
 #####################################################################
@@ -193,6 +199,12 @@ clk__week_start_epoch() {
 # offset_months=0 → 1st of this month, offset_months=-1 → 1st of last month, etc.
 clk__month_start_epoch() {
     local offset_months="${1:-0}"
+    # BSD date -v treats unsigned values as absolute setters (e.g., -v0m = "set
+    # month to 0", which is invalid).  A +/- prefix makes it relative instead.
+    case "$offset_months" in
+        -*) ;;
+        *)  offset_months="+${offset_months}" ;;
+    esac
     local result
     case "$CLK_OS" in
         Linux)
@@ -202,6 +214,41 @@ clk__month_start_epoch() {
         Darwin)
             result="$(date -j -v1d -v0H -v0M -v0S -v"${offset_months}m" +'%s' 2>"$CLK_TMP_ERR")" \
                 || clk__die 4 "Failed to compute month start" "$(cat "$CLK_TMP_ERR")"
+            ;;
+    esac
+    printf '%s' "$result"
+}
+
+# clk__hour_start_epoch(offset_hours) → epoch
+# Returns the epoch for the top of the current hour + offset_hours.
+# offset_hours=0 → :00 of this hour, offset_hours=-1 → :00 of last hour, etc.
+clk__hour_start_epoch() {
+    local offset_hours="${1:-0}"
+    local now_epoch hour_start
+    now_epoch="$(clk__now_epoch)"
+    hour_start=$(( now_epoch - now_epoch % 3600 ))
+    printf '%s' $(( hour_start + offset_hours * 3600 ))
+}
+
+# clk__year_start_epoch(offset_years) → epoch
+# Returns the epoch for Jan 1 00:00:00 of the current year + offset_years.
+# offset_years=0 → Jan 1 this year, offset_years=-1 → Jan 1 last year, etc.
+clk__year_start_epoch() {
+    local offset_years="${1:-0}"
+    # Ensure offset has explicit sign for Darwin -v flag.
+    case "$offset_years" in
+        -*) ;;
+        *)  offset_years="+${offset_years}" ;;
+    esac
+    local result
+    case "$CLK_OS" in
+        Linux)
+            result="$(date -d "$(date +%Y)-01-01 ${offset_years} year" +'%s' 2>"$CLK_TMP_ERR")" \
+                || clk__die 4 "Failed to compute year start" "$(cat "$CLK_TMP_ERR")"
+            ;;
+        Darwin)
+            result="$(date -j -v1m -v1d -v0H -v0M -v0S -v"${offset_years}y" +'%s' 2>"$CLK_TMP_ERR")" \
+                || clk__die 4 "Failed to compute year start" "$(cat "$CLK_TMP_ERR")"
             ;;
     esac
     printf '%s' "$result"
@@ -2598,8 +2645,8 @@ view|v)
                         view_anchor_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
                         shift $CLK_TIMESTAMP_ARGC
                     fi
-                elif [ "$1" != "for" ]; then
-                    clk__die 1 "Unexpected argument '$1'. Expected 'before', 'for', or end of command."
+                elif [ "$1" != "for" ] && [ "$1" != "by" ]; then
+                    clk__die 1 "Unexpected argument '$1'. Expected 'before', 'for', 'by', or end of command."
                 fi
             fi
 
@@ -2658,11 +2705,25 @@ view|v)
 
             # today/yesterday imply day; others require explicit unit
             if [ -z "$view_offset_unit" ]; then
-                [ $# -ge 1 ] || clk__die 1 "Missing time unit after offset. Expected 'day(s)', 'week(s)', or 'month(s)'."
+                [ $# -ge 1 ] || clk__die 1 "Missing time unit after offset. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'."
                 view_offset_unit="$1"; shift
             fi
 
             case "$view_offset_unit" in
+                hour|hours)
+                    view_start_epoch="$(clk__hour_start_epoch "-$view_offset")"
+                    if [ "$view_offset" -eq 0 ]; then
+                        view_end_epoch="$(clk__now_epoch)"
+                        view_range_desc="This hour"
+                    else
+                        view_end_epoch="$(clk__hour_start_epoch "-$(( view_offset - 1 ))")"
+                        if [ "$view_offset" -eq 1 ]; then
+                            view_range_desc="Last hour"
+                        else
+                            view_range_desc="${view_offset} hours ago"
+                        fi
+                    fi
+                    ;;
                 day|days)
                     view_start_epoch="$(clk__midnight_epoch "-$view_offset")"
                     if [ "$view_offset" -eq 0 ]; then
@@ -2705,7 +2766,21 @@ view|v)
                         fi
                     fi
                     ;;
-                *) clk__die 1 "Unknown time unit '$view_offset_unit'. Expected 'day(s)', 'week(s)', or 'month(s)'." ;;
+                year|years)
+                    view_start_epoch="$(clk__year_start_epoch "-$view_offset")"
+                    if [ "$view_offset" -eq 0 ]; then
+                        view_end_epoch="$(clk__now_epoch)"
+                        view_range_desc="This year"
+                    else
+                        view_end_epoch="$(clk__year_start_epoch "-$(( view_offset - 1 ))")"
+                        if [ "$view_offset" -eq 1 ]; then
+                            view_range_desc="Last year"
+                        else
+                            view_range_desc="${view_offset} years ago"
+                        fi
+                    fi
+                    ;;
+                *) clk__die 1 "Unknown time unit '$view_offset_unit'. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'." ;;
             esac
 
             # Optional: through {-<m> | current | this | today | yesterday} [<unit>]
@@ -2727,12 +2802,25 @@ view|v)
                 shift
 
                 if [ -z "$view_thru_unit" ]; then
-                    [ $# -ge 1 ] || clk__die 1 "Missing time unit after 'through' offset. Expected 'day(s)', 'week(s)', or 'month(s)'."
+                    [ $# -ge 1 ] || clk__die 1 "Missing time unit after 'through' offset. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'."
                     view_thru_unit="$1"; shift
                 fi
 
                 view_thru_label=""
                 case "$view_thru_unit" in
+                    hour|hours)
+                        if [ "$view_thru_offset" -eq 0 ]; then
+                            view_end_epoch="$(clk__now_epoch)"
+                            view_thru_label="this hour"
+                        else
+                            view_end_epoch="$(clk__hour_start_epoch "-$(( view_thru_offset - 1 ))")"
+                            if [ "$view_thru_offset" -eq 1 ]; then
+                                view_thru_label="last hour"
+                            else
+                                view_thru_label="${view_thru_offset} hours ago"
+                            fi
+                        fi
+                        ;;
                     day|days)
                         if [ "$view_thru_offset" -eq 0 ]; then
                             view_end_epoch="$(clk__now_epoch)"
@@ -2772,7 +2860,20 @@ view|v)
                             fi
                         fi
                         ;;
-                    *) clk__die 1 "Unknown time unit '$view_thru_unit' after 'through'. Expected 'day(s)', 'week(s)', or 'month(s)'." ;;
+                    year|years)
+                        if [ "$view_thru_offset" -eq 0 ]; then
+                            view_end_epoch="$(clk__now_epoch)"
+                            view_thru_label="this year"
+                        else
+                            view_end_epoch="$(clk__year_start_epoch "-$(( view_thru_offset - 1 ))")"
+                            if [ "$view_thru_offset" -eq 1 ]; then
+                                view_thru_label="last year"
+                            else
+                                view_thru_label="${view_thru_offset} years ago"
+                            fi
+                        fi
+                        ;;
+                    *) clk__die 1 "Unknown time unit '$view_thru_unit' after 'through'. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'." ;;
                 esac
 
                 if [ "$view_end_epoch" -le "$view_start_epoch" ]; then
