@@ -56,10 +56,10 @@ clk [help]
     status | s
     last | l [-<n> | <n>]
     -<n>
-    today | yesterday
     edit | e (-<n> | <n>) {tag|start|end|break|pause|on} <value>
     edit | e (-<n> | <n>) delete
     log
+    today | yesterday
     view | v <range> [<filter>]
     alias
 
