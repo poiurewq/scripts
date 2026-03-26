@@ -50,7 +50,7 @@ clk [help]
     reactivate | ra -<n>
     pause | p [<tag>] [minus <minutes> | at <timestamp>]
     resume | r [<tag>] [minus <minutes> | at <timestamp>]
-    unpause [<tag>]
+    unpause | up [<tag>]
     undo | redo
     status | s
     last | l [-<n> | <n>]
@@ -2646,7 +2646,7 @@ resume|r)
     clk_do_resume "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
     ;;
 
-unpause)
+unpause|up)
     clk_subcmd="unpause"
     shift
 

@@ -42,7 +42,7 @@
 .Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
 .Nm
-.Cm unpause Op Ar tag
+.Bro Cm unpause | Cm up Brc Op Ar tag
 .br
 .Nm
 .Cm undo
@@ -255,7 +255,7 @@ The pause duration is added to the session's accumulated break time.
 sets the resume point to that many minutes ago.
 .Cm at Ar timestamp
 sets the resume point to an explicit time.
-.It Cm unpause Op Ar tag
+.It Bro Cm unpause | Cm up Brc Op Ar tag
 Cancel a pause without adding break time.
 Useful when a pause was started by mistake.
 Does not affect the undo stack.
