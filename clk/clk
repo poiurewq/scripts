@@ -54,18 +54,24 @@ clk [help]
     undo | redo
     status | s
     last | l [-<n> | <n>]
-    edit | e (-<n> | <n>) <field> <value>
+    -<n>
+    edit | e (-<n> | <n>) {tag|start|end|break|pause|on} <value>
     edit | e (-<n> | <n>) delete
     log
-    view | v all
-    view | v <offset> [through <offset>]
-    view | v past [<n>] <hour(s)|day(s)|week(s)|month(s)|year(s)> [before <timestamp> | before minus <minutes>]
-    view | v from <timestamp> until|to <timestamp>
-    view | v <range> [for <tag|tag1|tag2|...>] [by <day|week|month|session>]
+    view | v <range> [<filter>]
     alias
 
-<offset>    = today | yesterday | {-<n> | current | this} <day(s)|week(s)|month(s)>
-<timestamp> = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
+<range>:
+    {all | today | yesterday}
+    {-<n> | current | this} <unit> [through ...]
+    past [<n>] <unit> [before <timestamp> | before minus <minutes>]
+    from <timestamp> {until | to} <timestamp>
+
+<filter>:
+    [for <tag|tag|...>] [by {day|week|month|session}]
+
+<unit>       = day(s) | week(s) | month(s) ; also hour(s) | year(s) for past
+<timestamp>  = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
 EOF
 
 #####################################################################
@@ -193,6 +199,12 @@ clk__week_start_epoch() {
 # offset_months=0 → 1st of this month, offset_months=-1 → 1st of last month, etc.
 clk__month_start_epoch() {
     local offset_months="${1:-0}"
+    # BSD date -v treats unsigned values as absolute setters (e.g., -v0m = "set
+    # month to 0", which is invalid).  A +/- prefix makes it relative instead.
+    case "$offset_months" in
+        -*) ;;
+        *)  offset_months="+${offset_months}" ;;
+    esac
     local result
     case "$CLK_OS" in
         Linux)
@@ -2598,8 +2610,8 @@ view|v)
                         view_anchor_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
                         shift $CLK_TIMESTAMP_ARGC
                     fi
-                elif [ "$1" != "for" ]; then
-                    clk__die 1 "Unexpected argument '$1'. Expected 'before', 'for', or end of command."
+                elif [ "$1" != "for" ] && [ "$1" != "by" ]; then
+                    clk__die 1 "Unexpected argument '$1'. Expected 'before', 'for', 'by', or end of command."
                 fi
             fi
 

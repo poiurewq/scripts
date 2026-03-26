@@ -69,13 +69,7 @@
 .Cm log
 .br
 .Nm
-.Bro Cm view | Cm v Brc Bro Cm all | Cm today | Cm yesterday Brc Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
-.br
-.Nm
-.Bro Cm view | Cm v Brc Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) | Cm year(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
-.br
-.Nm
-.Bro Cm view | Cm v Brc Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
+.Bro Cm view | Cm v Brc Ar range Op Ar filter
 .br
 .Nm
 .Cm alias
@@ -319,14 +313,44 @@ or
 .Xr vi 1 .
 .El
 .Ss Analysis
+The
+.Cm view
+command summarizes sessions over a time range with optional filtering.
+.Pp
+.D1 Nm Bro Cm view | Cm v Brc Ar range Op Ar filter
+.Pp
+.Ar range
+is one of:
+.Bl -tag -width indent -compact
+.It Bro Cm all | Cm today | Cm yesterday Brc
+.It Bro Fl Ar n | Cm current | Cm this Brc Ar unit Op Cm through No ...
+.It Cm past Op Ar n Ar unit Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+.It Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp
+.El
+.Pp
+.Ar filter
+is:
+.Bl -tag -width indent -compact
+.It Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
+.El
+.Pp
+.Ar unit
+is one of
+.Bro Cm day(s) | Cm week(s) | Cm month(s) Brc
+for calendar ranges, or additionally
+.Bro Cm hour(s) | Cm year(s) Brc
+for
+.Cm past
+ranges.
+.Ss Range details
 .Bl -tag -width indent
-.It Cm view Cm all
+.It Cm all
 Summarize all sessions in the log.
-.It Cm view Cm today
+.It Cm today
 Summarize sessions from midnight today until now.
-.It Cm view Cm yesterday
+.It Cm yesterday
 Summarize sessions from midnight yesterday until midnight today.
-.It Cm view Bro Fl Ar n | Cm current | Cm this | Cm today | Cm yesterday Brc Op Ar unit Op Cm through No ...
+.It Bro Fl Ar n | Cm current | Cm this Brc Ar unit Op Cm through No ...
 View sessions for a calendar period relative to the current one.
 .Cm current
 and
@@ -369,7 +393,7 @@ are accepted after
 .Cm through .
 Start and end units may differ
 .Pq e.g., Ql -2 months through -1 week .
-.It Cm view Cm past Op Ar n Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) | Cm year(s) Brc Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+.It Cm past Op Ar n Ar unit Op Cm before No ...
 Summarize sessions over the past
 .Ar n
 hours, days, weeks, months, or years
@@ -385,17 +409,17 @@ modifier anchors the lookback window to a point other than now:
 anchors to the given timestamp, and
 .Cm before Cm minus Ar minutes
 anchors to that many minutes ago.
-.It Cm view Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp
+.It Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp
 Summarize sessions in an explicit time range.
 .Cm to
 is accepted as an alias for
 .Cm until .
 .El
-.Pp
+.Ss Filter details
 All
 .Cm view
-forms accept optional suffixes:
-.Bl -tag -width indent -compact
+ranges accept optional filter suffixes:
+.Bl -tag -width indent
 .It Cm for Ar tag Ns | Ns Ar tag Ns | Ns ...
 Filter results to only sessions matching the given tag(s).
 Multiple tags can be specified separated by pipes
