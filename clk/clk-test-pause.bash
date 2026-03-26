@@ -452,6 +452,116 @@ test_pause_resume_then_out() {
 }
 
 #####################################################################
+# Tests — clk resume-focus (integration)
+#####################################################################
+
+test_resume_focus_basic() {
+    # Three sessions: dev (paused), pm (active), admin (active)
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in admin at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause dev at 2026-01-01T10:30:00 >/dev/null 2>&1
+
+    # resume-focus dev: should resume dev and pause pm + admin
+    "$CLK_SCRIPT" resume-focus dev at 2026-01-01T11:00:00 >/dev/null 2>&1
+
+    # dev (line 3): should be active, not paused, break accumulated
+    #   paused from 10:30 to 11:00 = 1800s break
+    clk_test__assert_log_line 3 '^active	2026-01-01T09:00:00		dev		1800		$'
+    # pm (line 2): should be paused at epoch for 11:00
+    clk_test__assert_log_line 2 '^active	2026-01-01T09:30:00		pm		0	[0-9]'
+    # admin (line 1): should be paused at epoch for 11:00
+    clk_test__assert_log_line 1 '^active	2026-01-01T10:00:00		admin		0	[0-9]'
+}
+
+test_resume_focus_already_running() {
+    # Target is already running (not paused) — should just pause others
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+
+    "$CLK_SCRIPT" resume-focus dev at 2026-01-01T10:00:00 >/dev/null 2>&1
+
+    # dev: still active, no pause state, no break
+    clk_test__assert_log_line 2 '^active	2026-01-01T09:00:00		dev		0		$'
+    # pm: paused
+    clk_test__assert_log_line 1 '^active	2026-01-01T09:30:00		pm		0	[0-9]'
+}
+
+test_resume_focus_already_running_output() {
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+
+    clk_test__assert_output_contains "was not paused" "$CLK_SCRIPT" resume-focus dev at 2026-01-01T10:00:00
+}
+
+test_resume_focus_single_undo() {
+    # Entire operation should be one undo step
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause dev at 2026-01-01T10:00:00 >/dev/null 2>&1
+
+    "$CLK_SCRIPT" resume-focus dev at 2026-01-01T10:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+
+    # After undo: dev should be paused again, pm should be unpaused
+    clk_test__assert_log_line 2 '^active	2026-01-01T09:00:00		dev		0	[0-9]'
+    clk_test__assert_log_line 1 '^active	2026-01-01T09:30:00		pm		0		$'
+}
+
+test_resume_focus_missing_tag() {
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" resume-focus
+}
+
+test_resume_focus_no_active_session() {
+    clk_test__assert_exit 5 "$CLK_SCRIPT" resume-focus dev
+}
+
+test_resume_focus_skips_already_paused() {
+    # pm is already paused — should not be double-paused
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause dev at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause pm at 2026-01-01T10:00:00 >/dev/null 2>&1
+
+    # Save pm's paused_at before resume-focus
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local pm_paused_before
+    pm_paused_before="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f7)"
+
+    # Both paused. resume-focus dev should resume dev, leave pm alone.
+    "$CLK_SCRIPT" resume-focus dev at 2026-01-01T10:30:00 >/dev/null 2>&1
+
+    # dev: resumed, break = 1800s (paused 10:00-10:30)
+    clk_test__assert_log_line 2 '^active	2026-01-01T09:00:00		dev		1800		$'
+    # pm: still paused at its original epoch (unchanged)
+    local pm_paused_after
+    pm_paused_after="$(tail -1 "$log_file" | cut -d"$(printf '\t')" -f7)"
+    clk_test__assert_equals "$pm_paused_before" "$pm_paused_after" "pm paused_at should not change"
+}
+
+test_resume_focus_confirmation_output() {
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause dev at 2026-01-01T10:00:00 >/dev/null 2>&1
+
+    clk_test__assert_output_contains "Focused on" "$CLK_SCRIPT" resume-focus dev at 2026-01-01T10:30:00
+}
+
+test_resume_focus_alias_R() {
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause dev at 2026-01-01T10:00:00 >/dev/null 2>&1
+
+    "$CLK_SCRIPT" R dev at 2026-01-01T10:30:00 >/dev/null 2>&1
+
+    # dev should be resumed
+    clk_test__assert_log_line 2 '^active	2026-01-01T09:00:00		dev		1800		$'
+    # pm should be paused
+    clk_test__assert_log_line 1 '^active	2026-01-01T09:30:00		pm		0	[0-9]'
+}
+
+#####################################################################
 # Test list
 #####################################################################
 
@@ -509,4 +619,15 @@ CLK_TESTS_PAUSE=(
 
     # pause/resume cycle
     test_pause_resume_then_out
+
+    # clk resume-focus (integration)
+    test_resume_focus_basic
+    test_resume_focus_already_running
+    test_resume_focus_already_running_output
+    test_resume_focus_single_undo
+    test_resume_focus_missing_tag
+    test_resume_focus_no_active_session
+    test_resume_focus_skips_already_paused
+    test_resume_focus_confirmation_output
+    test_resume_focus_alias_R
 )

@@ -50,6 +50,7 @@ clk [help]
     reactivate | ra -<n>
     pause | p [<tag>] [minus <minutes> | at <timestamp>]
     resume | r [<tag>] [minus <minutes> | at <timestamp>]
+    resume-focus | R <tag> [minus <minutes> | at <timestamp>]
     unpause | up [<tag>]
     undo | redo
     status | s
@@ -1169,6 +1170,130 @@ clk_do_unpause() {
     local paused_ts
     paused_ts="$(clk__from_epoch "$paused_at")"
     printf '\nPause cancelled for session in\n  %s\n  (was paused since %s)\n  No break time was added.\n\n' "$active_tag" "$(clk__fmt_ts_display "$paused_ts")"
+}
+
+# --- clk_do_resume_focus ---
+# clk resume-focus <tag> [minus <minutes> | at <timestamp>]
+#
+# Resume the specified tag and pause all other active (non-paused) sessions.
+# A single undo snapshot covers the entire compound operation.
+clk_do_resume_focus() {
+    local tag="$1" minus_val="$2" at_ts="$3"
+
+    # Tag is required
+    if [ -z "$tag" ]; then
+        clk__die 1 "Missing <tag>. Usage: 'clk resume-focus <tag>'."
+    fi
+
+    clk__require_active_tag "$tag"
+    local focus_line="$CLK_ACTIVE_LINE"
+
+    # Read the focus record
+    local line_content
+    line_content="$(clk__get_line "$focus_line")"
+    clk__read_line "$line_content"
+
+    local focus_start_ts="$CLK_F2"
+    local focus_break_secs="${CLK_F6:-0}"
+    local focus_paused_at="$CLK_F7"
+    local focus_description="$CLK_F8"
+
+    # Calculate the action epoch (used for both resume and pause timestamps)
+    local action_epoch
+    if [ -n "$at_ts" ]; then
+        action_epoch="$(clk__to_epoch "$at_ts")"
+    elif [ -n "$minus_val" ]; then
+        local now_epoch
+        now_epoch="$(clk__now_epoch)"
+        action_epoch=$(( now_epoch - minus_val * 60 ))
+    else
+        action_epoch="$(clk__now_epoch)"
+    fi
+
+    # Find all other active sessions that are not paused
+    local all_lines
+    all_lines="$(clk__find_active)" || \
+        clk__die 5 "No active sessions."
+
+    local others_to_pause=""
+    local lineno other_content
+    while IFS= read -r lineno; do
+        [ "$lineno" != "$focus_line" ] || continue
+        other_content="$(clk__get_line "$lineno")"
+        clk__read_line "$other_content"
+        # Only pause sessions that are not already paused
+        if [ -z "$CLK_F7" ]; then
+            if [ -n "$others_to_pause" ]; then
+                others_to_pause="${others_to_pause}
+${lineno}"
+            else
+                others_to_pause="$lineno"
+            fi
+        fi
+    done <<< "$all_lines"
+
+    clk__save_undo
+
+    # 1. Resume the focus session if it is paused
+    local resumed=0
+    local new_focus_break_secs="$focus_break_secs"
+    if [ -n "$focus_paused_at" ]; then
+        local this_pause_secs=$(( action_epoch - focus_paused_at ))
+        if [ "$this_pause_secs" -lt 0 ]; then
+            local resume_ts paused_ts
+            resume_ts="$(clk__from_epoch "$action_epoch")"
+            paused_ts="$(clk__from_epoch "$focus_paused_at")"
+            clk__die 1 "Resume time $(clk__fmt_ts_display "$resume_ts") cannot be earlier than pause time $(clk__fmt_ts_display "$paused_ts")."
+        fi
+        new_focus_break_secs=$(( focus_break_secs + this_pause_secs ))
+        local new_record="active${CLK_TAB}${focus_start_ts}${CLK_TAB}${CLK_TAB}${tag}${CLK_TAB}${CLK_TAB}${new_focus_break_secs}${CLK_TAB}${CLK_TAB}${focus_description}"
+        clk__replace_line "$focus_line" "$new_record"
+        resumed=1
+    fi
+
+    # 2. Pause all other non-paused active sessions
+    local paused_count=0
+    local paused_tags=""
+    if [ -n "$others_to_pause" ]; then
+        while IFS= read -r lineno; do
+            other_content="$(clk__get_line "$lineno")"
+            clk__read_line "$other_content"
+            local other_start_ts="$CLK_F2"
+            local other_tag="$CLK_F4"
+            local other_break_secs="${CLK_F6:-0}"
+            local other_description="$CLK_F8"
+            local new_record="active${CLK_TAB}${other_start_ts}${CLK_TAB}${CLK_TAB}${other_tag}${CLK_TAB}${CLK_TAB}${other_break_secs}${CLK_TAB}${action_epoch}${CLK_TAB}${other_description}"
+            clk__replace_line "$lineno" "$new_record"
+            paused_count=$(( paused_count + 1 ))
+            if [ -n "$paused_tags" ]; then
+                paused_tags="${paused_tags}, ${other_tag}"
+            else
+                paused_tags="$other_tag"
+            fi
+        done <<< "$others_to_pause"
+    fi
+
+    # Display results
+    local action_ts
+    action_ts="$(clk__from_epoch "$action_epoch")"
+
+    local start_epoch elapsed_secs elapsed_str
+    start_epoch="$(clk__to_epoch "$focus_start_ts")"
+    elapsed_secs=$(( action_epoch - start_epoch - new_focus_break_secs ))
+    if [ "$elapsed_secs" -lt 0 ]; then elapsed_secs=0; fi
+    elapsed_str="$(clk__fmt_duration "$elapsed_secs")"
+
+    printf '\nFocused on\n  %s\n' "$tag"
+    if [ "$resumed" -eq 1 ]; then
+        printf '  resumed at %s\n' "$(clk__fmt_ts_display "$action_ts")"
+    else
+        printf '  (was not paused)\n'
+    fi
+    printf '  Active work so far: %s\n' "$elapsed_str"
+    if [ "$paused_count" -gt 0 ]; then
+        printf '  Paused %d other session(s): %s\n' "$paused_count" "$paused_tags"
+    fi
+    printf '\n'
 }
 
 # --- clk_do_switch ---
@@ -2694,6 +2819,37 @@ resume|r)
     done
 
     clk_do_resume "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
+    ;;
+
+resume-focus|R)
+    clk_subcmd="resume-focus"
+    shift
+
+    # Tag is required
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing <tag>. Usage: 'clk resume-focus <tag>'."
+    fi
+    clk_tag="$1"; shift
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
+                clk__validate_positive_int "$2" "<minutes> after 'minus'"
+                clk_minus_minutes="$2"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__consume_timestamp "$2" "${3:-}"
+                clk_at_timestamp="$CLK_VALIDATED_TS"; shift $(( 1 + CLK_TIMESTAMP_ARGC ))
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk resume-focus'."
+                ;;
+        esac
+    done
+
+    clk_do_resume_focus "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
     ;;
 
 unpause|up)
