@@ -772,8 +772,8 @@ test_view_by_session() {
     "$CLK_SCRIPT" out dev at '2026-03-18T15:30:00' >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for dev by session 2>&1)"
-    # Should show both session timestamps
-    if ! printf '%s' "$output" | grep -q "2026-03-18T09:00:00" || ! printf '%s' "$output" | grep -q "2026-03-18T14:00:00"; then
+    # Should show both session start timestamps (no seconds, space-separated)
+    if ! printf '%s' "$output" | grep -q "2026-03-18 09:00" || ! printf '%s' "$output" | grep -q "2026-03-18 14:00"; then
         printf 'FAIL: expected both session timestamps in by session output\n'
         printf '  output: %s\n' "$output"
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
@@ -785,7 +785,7 @@ test_view_by_session() {
 test_view_by_session_shows_minutes() {
     "$CLK_SCRIPT" in dev at '2026-03-18T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-18T10:00:00' >/dev/null 2>&1
-    clk_test__assert_output_contains "60m" \
+    clk_test__assert_output_contains "1h 00m" \
         "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for dev by session
 }
 
@@ -804,8 +804,8 @@ test_view_by_session_without_for() {
     # Without for: both sessions appear
     local output
     output="$("$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' by session 2>&1)"
-    if ! printf '%s' "$output" | grep -q "60m"; then
-        printf 'FAIL: expected session minutes in by session without for\n'
+    if ! printf '%s' "$output" | grep -q "1h 00m"; then
+        printf 'FAIL: expected session duration in by session without for\n'
         printf '  output: %s\n' "$output"
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
         return 1
