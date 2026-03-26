@@ -588,6 +588,15 @@ Filter by tag and see a bar chart grouped by day:
 .Pp
 Combine multiple tags:
 .Dl $ clk view past 2 weeks for dev,pm by week
+.Pp
+Match a tag and all its children with a trailing dot:
+.Dl $ clk view -0 month for dev. by session
+.Pp
+This matches
+.Ql dev ,
+.Ql dev.frontend ,
+.Ql dev.backend.api ,
+and so on.
 .Ss Inspecting and editing records
 Show the last 5 records:
 .Dl $ clk last 5
