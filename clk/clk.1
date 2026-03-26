@@ -42,6 +42,9 @@
 .Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
 .Nm
+.Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+.br
+.Nm
 .Bro Cm unpause | Cm up Brc Op Ar tag
 .br
 .Nm
@@ -60,9 +63,6 @@
 .Fl Ar n
 .br
 .Nm
-.Bro Cm today | Cm yesterday Brc
-.br
-.Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
 .br
 .Nm
@@ -70,6 +70,9 @@
 .br
 .Nm
 .Cm log
+.br
+.Nm
+.Bro Cm today | Cm yesterday Brc
 .br
 .Nm
 .Bro Cm view | Cm v Brc Ar range Op Ar filter
@@ -255,6 +258,16 @@ The pause duration is added to the session's accumulated break time.
 sets the resume point to that many minutes ago.
 .Cm at Ar timestamp
 sets the resume point to an explicit time.
+.It Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+Resume the specified session and pause all other active (non-paused) sessions.
+If the target session is already running (not paused), it is left as-is and only the
+other sessions are paused.
+The tag is required.
+.Cm minus Ar minutes
+and
+.Cm at Ar timestamp
+set the timestamp used for both the resume and the pauses.
+The entire operation is a single undo step.
 .It Bro Cm unpause | Cm up Brc Op Ar tag
 Cancel a pause without adding break time.
 Useful when a pause was started by mistake.
