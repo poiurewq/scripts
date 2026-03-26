@@ -2,9 +2,10 @@
 # clk-test — automated tests for clk
 #
 # Usage:
-#   ./clk-test                # run all tests
-#   ./clk-test test_name      # run a specific test
-#   ./clk-test group_name     # run a test group (unit, session, pause, mutation, view, edit, misc)
+#   ./clk-test                          # run all tests
+#   ./clk-test test_name                # run a specific test
+#   ./clk-test group_name               # run a test group (unit, session, pause, mutation, view, edit, misc)
+#   ./clk-test test_a test_b group_name # mix test names and groups
 #
 # Test files:
 #   clk-test-unit.bash      — unit tests for internal helpers
@@ -177,34 +178,36 @@ ALL_TESTS=(
 
 printf 'clk test suite\n'
 
-# Support running a specific test, or a test group
+# Support running specific tests and/or groups (multiple args allowed)
 if [ "${1:-}" != "" ]; then
-    # Check if argument is a group name
-    case "$1" in
-        unit)     SELECTED_TESTS=("${CLK_TESTS_UNIT[@]}") ;;
-        session)  SELECTED_TESTS=("${CLK_TESTS_SESSION[@]}") ;;
-        pause)    SELECTED_TESTS=("${CLK_TESTS_PAUSE[@]}") ;;
-        mutation) SELECTED_TESTS=("${CLK_TESTS_MUTATION[@]}") ;;
-        view)     SELECTED_TESTS=("${CLK_TESTS_VIEW[@]}") ;;
-        edit)     SELECTED_TESTS=("${CLK_TESTS_EDIT[@]}") ;;
-        misc)     SELECTED_TESTS=("${CLK_TESTS_MISC[@]}") ;;
-        *)
-            # Try matching a specific test function name
-            found=0
-            for t in "${ALL_TESTS[@]}"; do
-                if [ "$t" = "$1" ]; then
-                    found=1
-                    SELECTED_TESTS=("$1")
-                    break
+    SELECTED_TESTS=()
+    for arg in "$@"; do
+        case "$arg" in
+            unit)     SELECTED_TESTS+=("${CLK_TESTS_UNIT[@]}") ;;
+            session)  SELECTED_TESTS+=("${CLK_TESTS_SESSION[@]}") ;;
+            pause)    SELECTED_TESTS+=("${CLK_TESTS_PAUSE[@]}") ;;
+            mutation) SELECTED_TESTS+=("${CLK_TESTS_MUTATION[@]}") ;;
+            view)     SELECTED_TESTS+=("${CLK_TESTS_VIEW[@]}") ;;
+            edit)     SELECTED_TESTS+=("${CLK_TESTS_EDIT[@]}") ;;
+            misc)     SELECTED_TESTS+=("${CLK_TESTS_MISC[@]}") ;;
+            *)
+                # Try matching a specific test function name
+                found=0
+                for t in "${ALL_TESTS[@]}"; do
+                    if [ "$t" = "$arg" ]; then
+                        found=1
+                        SELECTED_TESTS+=("$arg")
+                        break
+                    fi
+                done
+                if [ "$found" -eq 0 ]; then
+                    printf 'Unknown test or group: %s\n' "$arg" >&2
+                    printf 'Groups: unit, session, pause, mutation, view, edit, misc\n' >&2
+                    exit 1
                 fi
-            done
-            if [ "$found" -eq 0 ]; then
-                printf 'Unknown test or group: %s\n' "$1" >&2
-                printf 'Groups: unit, session, pause, mutation, view, edit, misc\n' >&2
-                exit 1
-            fi
-            ;;
-    esac
+                ;;
+        esac
+    done
     for t in "${SELECTED_TESTS[@]}"; do
         clk_test__run "$t"
     done
