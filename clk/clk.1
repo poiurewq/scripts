@@ -60,6 +60,9 @@
 .Fl Ar n
 .br
 .Nm
+.Bro Cm today | Cm yesterday Brc
+.br
+.Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
 .br
 .Nm
@@ -305,6 +308,12 @@ The shorthand
 .Pq e.g., Nm Fl 3
 is equivalent to
 .Nm Cm last Fl Ar n .
+.It Cm today
+Shorthand for
+.Nm Cm view Cm today .
+.It Cm yesterday
+Shorthand for
+.Nm Cm view Cm yesterday .
 .It Cm log
 Open the log file in
 .Ev VISUAL ,

@@ -55,6 +55,7 @@ clk [help]
     status | s
     last | l [-<n> | <n>]
     -<n>
+    today | yesterday
     edit | e (-<n> | <n>) {tag|start|end|break|pause|on} <value>
     edit | e (-<n> | <n>) delete
     log
@@ -3012,6 +3013,22 @@ alias)
     clk_last_n="$1"
     clk__validate_positive_int "${clk_last_n#-}" "<n> in 'clk -<n>'"
     clk_do_last "$clk_last_n"
+    ;;
+
+today|yesterday)
+    # Syntactic sugar: clk today → clk view today, clk yesterday → clk view yesterday
+    clk_subcmd="view"
+    case "$1" in
+        today)     view_offset=0; view_range_desc="Today" ;;
+        yesterday) view_offset=1; view_range_desc="Yesterday" ;;
+    esac
+    view_start_epoch="$(clk__midnight_epoch "-$view_offset")"
+    if [ "$view_offset" -eq 0 ]; then
+        view_end_epoch="$(clk__now_epoch)"
+    else
+        view_end_epoch="$(clk__midnight_epoch "-$(( view_offset - 1 ))")"
+    fi
+    clk_do_view "$view_start_epoch" "$view_end_epoch" "$view_range_desc" "" ""
     ;;
 
 *)

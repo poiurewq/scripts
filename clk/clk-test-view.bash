@@ -1267,6 +1267,34 @@ test_view_yesterday_alias_offset() {
         "$CLK_SCRIPT" view yesterday
 }
 
+test_sugar_today() {
+    clk_test__assert_exit 0 "$CLK_SCRIPT" today &&
+    clk_test__assert_output_contains "Today" "$CLK_SCRIPT" today
+}
+
+test_sugar_today_shows_data() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset 0 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset 0 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Today" "$CLK_SCRIPT" today
+}
+
+test_sugar_yesterday() {
+    clk_test__assert_exit 0 "$CLK_SCRIPT" yesterday &&
+    clk_test__assert_output_contains "Yesterday" "$CLK_SCRIPT" yesterday
+}
+
+test_sugar_yesterday_shows_data() {
+    local ts_in ts_out
+    ts_in="$(_view_ts_at_day_offset -1 09:00:00)"
+    ts_out="$(_view_ts_at_day_offset -1 10:00:00)"
+    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
+    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
+    clk_test__assert_output_contains "Yesterday" "$CLK_SCRIPT" yesterday
+}
+
 test_view_this_week() {
     # 'this' is alias for 'current'
     local ts_in ts_out
@@ -1507,6 +1535,12 @@ CLK_TESTS_VIEW=(
     test_view_today_alias_standalone
     test_view_today_alias_offset
     test_view_yesterday_alias_offset
+
+    # clk today / clk yesterday (syntactic sugar for clk view)
+    test_sugar_today
+    test_sugar_today_shows_data
+    test_sugar_yesterday
+    test_sugar_yesterday_shows_data
     test_view_this_week
     test_view_this_month
     test_view_yesterday_through_today
