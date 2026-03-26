@@ -45,6 +45,62 @@ test_pause_ambiguous_tag() {
     clk_test__assert_exit 1 "$CLK_SCRIPT" pause
 }
 
+# When multiple sessions active but only one is not paused, auto-pause it
+test_pause_auto_select_unpaused() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause work >/dev/null 2>&1
+    # Now: work=paused, play=running. 'clk pause' should auto-select play.
+    clk_test__assert_exit 0 "$CLK_SCRIPT" pause
+    # Verify play is now paused (field 7 set)
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local play_paused
+    play_paused="$(awk -F'\t' '$1=="active" && $4=="play" {print $7}' "$log_file")"
+    if [ -z "$play_paused" ]; then
+        printf 'FAIL: play session should have PAUSED_AT set\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+# When multiple sessions active and all paused, error with helpful message
+test_pause_all_paused() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause work >/dev/null 2>&1
+    "$CLK_SCRIPT" pause play >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" pause
+    clk_test__assert_output_contains "already paused" "$CLK_SCRIPT" pause
+}
+
+# When multiple non-paused sessions, only show non-paused ones in error
+test_pause_ambiguous_shows_only_unpaused() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in rest at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause work >/dev/null 2>&1
+    # play and rest are unpaused — should list them but not work
+    local output
+    output="$("$CLK_SCRIPT" pause 2>&1)" || true
+    if ! printf '%s' "$output" | grep -qF "play"; then
+        printf 'FAIL: should list unpaused session play\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$output" | grep -qF "rest"; then
+        printf 'FAIL: should list unpaused session rest\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if printf '%s' "$output" | grep -qF "work"; then
+        printf 'FAIL: should not list paused session work\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
 test_pause_minus() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" pause minus 10 >/dev/null 2>&1
@@ -407,6 +463,9 @@ CLK_TESTS_PAUSE=(
     test_pause_implicit_tag
     test_pause_explicit_tag
     test_pause_ambiguous_tag
+    test_pause_auto_select_unpaused
+    test_pause_all_paused
+    test_pause_ambiguous_shows_only_unpaused
     test_pause_minus
     test_pause_at
     test_pause_at_with_tag

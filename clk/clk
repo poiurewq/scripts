@@ -961,7 +961,55 @@ clk_do_last() {
 clk_do_pause() {
     local tag="$1" minus_val="$2" at_ts="$3"
 
-    clk__require_active_tag "$tag"
+    if [ -n "$tag" ]; then
+        # Tag explicitly provided — use the standard resolver
+        clk__require_active_tag "$tag"
+    else
+        # No tag: filter to only non-paused active sessions
+        local all_lines
+        all_lines="$(clk__find_active)" || \
+            clk__die 5 "No active sessions. Clock in first with 'clk in <tag>'."
+
+        local unpaused_lines=""
+        local lineno line_content
+        while IFS= read -r lineno; do
+            line_content="$(clk__get_line "$lineno")"
+            clk__read_line "$line_content"
+            if [ -z "$CLK_F7" ]; then
+                if [ -n "$unpaused_lines" ]; then
+                    unpaused_lines="${unpaused_lines}
+${lineno}"
+                else
+                    unpaused_lines="$lineno"
+                fi
+            fi
+        done <<< "$all_lines"
+
+        if [ -z "$unpaused_lines" ]; then
+            clk__die 5 "All active sessions are already paused. Use 'clk resume' first."
+        fi
+
+        local unpaused_count
+        unpaused_count="$(printf '%s\n' "$unpaused_lines" | wc -l | tr -d ' ')"
+
+        if [ "$unpaused_count" -eq 1 ]; then
+            CLK_ACTIVE_LINE="$unpaused_lines"
+            line_content="$(clk__get_line "$unpaused_lines")"
+            clk__read_line "$line_content"
+            CLK_ACTIVE_TAG="$CLK_F4"
+        else
+            # Multiple non-paused sessions — list only those
+            local msg="Multiple active (non-paused) sessions. Specify a tag:"
+            while IFS= read -r lineno; do
+                line_content="$(clk__get_line "$lineno")"
+                clk__read_line "$line_content"
+                msg="${msg}
+  ${CLK_F4}  (started at $(clk__fmt_ts_display "$CLK_F2"))"
+            done <<< "$unpaused_lines"
+            clk__die 1 "$msg"
+        fi
+    fi
+
     local active_line="$CLK_ACTIVE_LINE"
     local active_tag="$CLK_ACTIVE_TAG"
 
