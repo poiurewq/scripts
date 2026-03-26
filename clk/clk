@@ -1166,7 +1166,9 @@ clk_do_unpause() {
     local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${break_secs}${CLK_TAB}${CLK_TAB}${description}"
     clk__replace_line "$active_line" "$new_record"
 
-    printf '\nPause cancelled for session in\n  %s\n  No break time was added.\n\n' "$active_tag"
+    local paused_ts
+    paused_ts="$(clk__from_epoch "$paused_at")"
+    printf '\nPause cancelled for session in\n  %s\n  (was paused since %s)\n  No break time was added.\n\n' "$active_tag" "$(clk__fmt_ts_display "$paused_ts")"
 }
 
 # --- clk_do_switch ---
