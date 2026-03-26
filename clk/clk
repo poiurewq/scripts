@@ -1062,8 +1062,16 @@ clk_do_resume() {
     this_pause_str="$(clk__fmt_duration "$this_pause_secs")"
     total_break_str="$(clk__fmt_duration "$new_break_secs")"
 
-    printf '\nSession in\n  %s\n  resumed at %s\n  This pause: %s\n  Total break so far: %s\n\n' \
-        "$active_tag" "$(clk__fmt_ts_display "$resume_ts")" "$this_pause_str" "$total_break_str"
+    # Calculate active work so far
+    local start_epoch elapsed_secs
+    start_epoch="$(clk__to_epoch "$start_ts")"
+    elapsed_secs=$(( resume_epoch - start_epoch - new_break_secs ))
+    if [ "$elapsed_secs" -lt 0 ]; then elapsed_secs=0; fi
+    local elapsed_str
+    elapsed_str="$(clk__fmt_duration "$elapsed_secs")"
+
+    printf '\nSession in\n  %s\n  resumed at %s\n  This pause: %s\n  Total break so far: %s\n  Active work so far: %s\n\n' \
+        "$active_tag" "$(clk__fmt_ts_display "$resume_ts")" "$this_pause_str" "$total_break_str" "$elapsed_str"
 }
 
 # --- clk_do_unpause ---
