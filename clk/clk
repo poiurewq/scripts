@@ -69,7 +69,7 @@ clk [help]
     from <timestamp> {until | to} <timestamp>
 
 <filter>:
-    [for <tag|tag|...>] [by {day|week|month|session}]
+    [for <tag,tag,...>] [by {day|week|month|session}]
 
 <unit>       = hour(s) | day(s) | week(s) | month(s) | year(s)
 <timestamp>  = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
@@ -566,16 +566,16 @@ clk__insert_before_active() {
 }
 
 # clk__tag_matches(tag, filter) → 0 if tag matches filter, 1 otherwise
-# filter can be a single tag or pipe-separated list (e.g., "dev|pm|admin").
+# filter can be a single tag or comma-separated list (e.g., "dev,pm,admin").
 clk__tag_matches() {
     local tag="$1" filter="$2"
-    # Fast path: no pipe means single-tag comparison
-    if ! printf '%s' "$filter" | grep -qF '|'; then
+    # Fast path: no comma means single-tag comparison
+    if ! printf '%s' "$filter" | grep -qF ','; then
         [ "$tag" = "$filter" ]
         return $?
     fi
-    # Multi-tag: check if tag is in the pipe-separated list
-    printf '%s' "$filter" | tr '|' '\n' | grep -qxF "$tag"
+    # Multi-tag: check if tag is in the comma-separated list
+    printf '%s' "$filter" | tr ',' '\n' | grep -qxF "$tag"
 }
 
 # clk__find_active([tag]) → line_number(s)
@@ -1778,10 +1778,10 @@ clk_do_view() {
     local awk_result
     awk_result="$(awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" -v ftag="$filter_tag" '
     BEGIN {
-        # Build tag filter lookup from pipe-separated list
+        # Build tag filter lookup from comma-separated list
         nftags = 0
         if (ftag != "") {
-            n = split(ftag, ftarr, "|")
+            n = split(ftag, ftarr, ",")
             for (i = 1; i <= n; i++) ftagset[ftarr[i]] = 1
             nftags = n
         }
@@ -1839,7 +1839,7 @@ clk_do_view() {
     # Print output
     printf '%s\n' "$range_desc"
     if [ -n "$filter_tag" ]; then
-        printf 'Filtered by tag: %s\n' "$(printf '%s' "$filter_tag" | sed 's/|/, /g')"
+        printf 'Filtered by tag: %s\n' "$(printf '%s' "$filter_tag" | sed 's/,/, /g')"
     fi
     printf '\n'
 
@@ -1892,7 +1892,7 @@ clk__view_grouped() {
     BEGIN {
         nftags = 0
         if (ftag != "") {
-            n = split(ftag, ftarr, "|")
+            n = split(ftag, ftarr, ",")
             for (i = 1; i <= n; i++) ftagset[ftarr[i]] = 1
             nftags = n
         }
@@ -1944,7 +1944,7 @@ clk__view_grouped() {
     # Print header
     printf '%s\n' "$range_desc"
     if [ -n "$filter_tag" ]; then
-        printf 'Tag: %s  (by %s)\n\n' "$(printf '%s' "$filter_tag" | sed 's/|/, /g')" "$group_by"
+        printf 'Tag: %s  (by %s)\n\n' "$(printf '%s' "$filter_tag" | sed 's/,/, /g')" "$group_by"
     else
         printf 'All tags  (by %s)\n\n' "$group_by"
     fi
@@ -1965,7 +1965,7 @@ clk__view_grouped() {
         local show_tag=0
         if [ -z "$filter_tag" ]; then
             show_tag=1
-        elif printf '%s' "$filter_tag" | grep -q '|'; then
+        elif printf '%s' "$filter_tag" | grep -q ','; then
             show_tag=1
         fi
         clk__view_render_session_table "$session_data" "$show_tag"
