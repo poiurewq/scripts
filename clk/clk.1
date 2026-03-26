@@ -42,7 +42,7 @@
 .Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
 .br
 .Nm
-.Cm unpause Op Ar tag
+.Bro Cm unpause | Cm up Brc Op Ar tag
 .br
 .Nm
 .Cm undo
@@ -255,7 +255,7 @@ The pause duration is added to the session's accumulated break time.
 sets the resume point to that many minutes ago.
 .Cm at Ar timestamp
 sets the resume point to an explicit time.
-.It Cm unpause Op Ar tag
+.It Bro Cm unpause | Cm up Brc Op Ar tag
 Cancel a pause without adding break time.
 Useful when a pause was started by mistake.
 Does not affect the undo stack.
@@ -340,7 +340,7 @@ is one of:
 .Ar filter
 is:
 .Bl -tag -width indent -compact
-.It Op Cm for Ar tag Ns | Ns Ar tag Ns | Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
+.It Op Cm for Ar tag Ns , Ns Ar tag Ns , Ns ... Op Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
 .El
 .Pp
 .Ar unit
@@ -424,10 +424,12 @@ All
 .Cm view
 ranges accept optional filter suffixes:
 .Bl -tag -width indent
-.It Cm for Ar tag Ns | Ns Ar tag Ns | Ns ...
+.It Cm for Ar tag Ns , Ns Ar tag Ns , Ns ...
 Filter results to only sessions matching the given tag(s).
-Multiple tags can be specified separated by pipes
-.Pq e.g., Ql dev|pm|admin .
+Multiple tags can be specified separated by commas
+.Pq e.g., Ql dev,pm,admin .
+A tag ending with a dot matches the tag itself and all its children
+.Pq e.g., Ql dev. No matches dev , dev.frontend , dev.backend.api .
 When multiple tags are given, their times are combined.
 .It Cm by Bro Cm day | Cm week | Cm month | Cm session Brc
 Group results into a horizontal bar chart by day, week, month, or session
@@ -585,7 +587,16 @@ Filter by tag and see a bar chart grouped by day:
 .Dl $ clk view -0 month for dev by day
 .Pp
 Combine multiple tags:
-.Dl $ clk view past 2 weeks for dev|pm by week
+.Dl $ clk view past 2 weeks for dev,pm by week
+.Pp
+Match a tag and all its children with a trailing dot:
+.Dl $ clk view -0 month for dev. by session
+.Pp
+This matches
+.Ql dev ,
+.Ql dev.frontend ,
+.Ql dev.backend.api ,
+and so on.
 .Ss Inspecting and editing records
 Show the last 5 records:
 .Dl $ clk last 5

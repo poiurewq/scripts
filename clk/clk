@@ -50,7 +50,7 @@ clk [help]
     reactivate | ra -<n>
     pause | p [<tag>] [minus <minutes> | at <timestamp>]
     resume | r [<tag>] [minus <minutes> | at <timestamp>]
-    unpause [<tag>]
+    unpause | up [<tag>]
     undo | redo
     status | s
     last | l [-<n> | <n>]
@@ -69,7 +69,7 @@ clk [help]
     from <timestamp> {until | to} <timestamp>
 
 <filter>:
-    [for <tag|tag|...>] [by {day|week|month|session}]
+    [for <tag,tag.,...>] [by {day|week|month|session}]
 
 <unit>       = hour(s) | day(s) | week(s) | month(s) | year(s)
 <timestamp>  = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
@@ -368,7 +368,13 @@ clk__fmt_record() {
     elif [ "$status" = "active" ]; then
         local disp_start
         disp_start="$(clk__fmt_ts_display "$start_time")"
-        out="${tag}  started at ${disp_start}  (active"
+        local tag_display
+        if [ "${CLK_FMT_ACTIVE_TAG_WIDTH:-0}" -gt "${#tag}" ]; then
+            tag_display="$(printf "%-${CLK_FMT_ACTIVE_TAG_WIDTH}s" "$tag")"
+        else
+            tag_display="$tag"
+        fi
+        out="${tag_display}  started at ${disp_start}  (active"
         # Calculate elapsed if possible
         local now_epoch start_epoch elapsed_secs elapsed_str
         now_epoch="$(clk__now_epoch)"
@@ -566,16 +572,16 @@ clk__insert_before_active() {
 }
 
 # clk__tag_matches(tag, filter) → 0 if tag matches filter, 1 otherwise
-# filter can be a single tag or pipe-separated list (e.g., "dev|pm|admin").
+# filter can be a single tag or comma-separated list (e.g., "dev,pm,admin").
 clk__tag_matches() {
     local tag="$1" filter="$2"
-    # Fast path: no pipe means single-tag comparison
-    if ! printf '%s' "$filter" | grep -qF '|'; then
+    # Fast path: no comma means single-tag comparison
+    if ! printf '%s' "$filter" | grep -qF ','; then
         [ "$tag" = "$filter" ]
         return $?
     fi
-    # Multi-tag: check if tag is in the pipe-separated list
-    printf '%s' "$filter" | tr '|' '\n' | grep -qxF "$tag"
+    # Multi-tag: check if tag is in the comma-separated list
+    printf '%s' "$filter" | tr ',' '\n' | grep -qxF "$tag"
 }
 
 # clk__find_active([tag]) → line_number(s)
@@ -847,6 +853,8 @@ clk_do_status() {
         return 0
     }
 
+    # Pad tags to a minimum width so "started" stays column-aligned across rows
+    CLK_FMT_ACTIVE_TAG_WIDTH=7
     local lineno
     while IFS= read -r lineno; do
         local line_content
@@ -855,6 +863,8 @@ clk_do_status() {
         formatted="$(clk__fmt_record "$line_content")"
         printf '  %s\n' "$formatted"
     done <<< "$lines"
+
+    CLK_FMT_ACTIVE_TAG_WIDTH=0
 }
 
 # --- clk_do_last ---
@@ -1777,17 +1787,32 @@ clk_do_view() {
 
     local awk_result
     awk_result="$(awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" -v ftag="$filter_tag" '
+    function tag_matches(t,    i, stem) {
+        if (t in ftagset) return 1
+        for (i = 1; i <= nprefixes; i++) {
+            stem = prefixes[i]
+            if (t == stem || substr(t, 1, length(stem) + 1) == stem ".") return 1
+        }
+        return 0
+    }
     BEGIN {
-        # Build tag filter lookup from pipe-separated list
-        nftags = 0
+        # Build tag filter lookup from comma-separated list
+        nftags = 0; nprefixes = 0
         if (ftag != "") {
-            n = split(ftag, ftarr, "|")
-            for (i = 1; i <= n; i++) ftagset[ftarr[i]] = 1
+            n = split(ftag, ftarr, ",")
+            for (i = 1; i <= n; i++) {
+                f = ftarr[i]
+                if (substr(f, length(f)) == ".") {
+                    prefixes[++nprefixes] = substr(f, 1, length(f) - 1)
+                } else {
+                    ftagset[f] = 1
+                }
+            }
             nftags = n
         }
     }
     $1 == "done" && $3 >= s && $3 <= e {
-        if (nftags > 0 && !($4 in ftagset)) next
+        if (nftags > 0 && !tag_matches($4)) next
         tag = $4
         secs = $5 + 0
         total += secs
@@ -1839,7 +1864,7 @@ clk_do_view() {
     # Print output
     printf '%s\n' "$range_desc"
     if [ -n "$filter_tag" ]; then
-        printf 'Filtered by tag: %s\n' "$(printf '%s' "$filter_tag" | sed 's/|/, /g')"
+        printf 'Filtered by tag: %s\n' "$(printf '%s' "$filter_tag" | sed 's/,/, /g')"
     fi
     printf '\n'
 
@@ -1889,16 +1914,31 @@ clk__view_grouped() {
     # For day/week/month, emit end-date (YYYY-MM-DD) and seconds.
     local raw_data
     raw_data="$(awk -F'\t' -v s="$start_ts" -v e="$end_ts" -v ftag="$filter_tag" -v gby="$group_by" '
+    function tag_matches(t,    i, stem) {
+        if (t in ftagset) return 1
+        for (i = 1; i <= nprefixes; i++) {
+            stem = prefixes[i]
+            if (t == stem || substr(t, 1, length(stem) + 1) == stem ".") return 1
+        }
+        return 0
+    }
     BEGIN {
-        nftags = 0
+        nftags = 0; nprefixes = 0
         if (ftag != "") {
-            n = split(ftag, ftarr, "|")
-            for (i = 1; i <= n; i++) ftagset[ftarr[i]] = 1
+            n = split(ftag, ftarr, ",")
+            for (i = 1; i <= n; i++) {
+                f = ftarr[i]
+                if (substr(f, length(f)) == ".") {
+                    prefixes[++nprefixes] = substr(f, 1, length(f) - 1)
+                } else {
+                    ftagset[f] = 1
+                }
+            }
             nftags = n
         }
     }
     $1 == "done" && $3 >= s && $3 <= e {
-        if (nftags > 0 && !($4 in ftagset)) next
+        if (nftags > 0 && !tag_matches($4)) next
         secs = $5 + 0
         if (gby == "session") {
             # Emit full session details for table rendering
@@ -1944,7 +1984,7 @@ clk__view_grouped() {
     # Print header
     printf '%s\n' "$range_desc"
     if [ -n "$filter_tag" ]; then
-        printf 'Tag: %s  (by %s)\n\n' "$(printf '%s' "$filter_tag" | sed 's/|/, /g')" "$group_by"
+        printf 'Tag: %s  (by %s)\n\n' "$(printf '%s' "$filter_tag" | sed 's/,/, /g')" "$group_by"
     else
         printf 'All tags  (by %s)\n\n' "$group_by"
     fi
@@ -1961,11 +2001,14 @@ clk__view_grouped() {
         # Sort by start timestamp (already in order from log, but be safe)
         local session_data
         session_data="$(printf '%s' "$raw_data" | sort -t"$(printf '\t')" -k1,1)"
-        # Show tag column if no filter (all tags) or multiple tags in filter
+        # Show tag column if no filter (all tags), multiple tags in filter,
+        # or any tag filter uses prefix matching (trailing dot)
         local show_tag=0
         if [ -z "$filter_tag" ]; then
             show_tag=1
-        elif printf '%s' "$filter_tag" | grep -q '|'; then
+        elif printf '%s' "$filter_tag" | grep -q ','; then
+            show_tag=1
+        elif printf '%s' "$filter_tag" | grep -qE '\.$'; then
             show_tag=1
         fi
         clk__view_render_session_table "$session_data" "$show_tag"
@@ -2230,7 +2273,7 @@ clk__view_render_session_table() {
             if (show_tag) line = line sprintf("  %-*s", max_tag_w, tag[i])
             if (has_desc && desc[i] != "") {
                 d = desc[i]
-                if (length(d) > max_desc_w) d = substr(d, 1, max_desc_w - 3) "..."
+                if (length(d) > max_desc_w) d = substr(d, 1, max_desc_w - 1) "…"
                 line = line "  " d
             }
             printf "%s\n", line
@@ -2603,7 +2646,7 @@ resume|r)
     clk_do_resume "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
     ;;
 
-unpause)
+unpause|up)
     clk_subcmd="unpause"
     shift
 

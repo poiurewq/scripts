@@ -655,9 +655,9 @@ test_view_multi_tag_filter() {
     "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in admin at '2026-03-20T13:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out admin at '2026-03-20T14:00:00' >/dev/null 2>&1
-    # Filter for dev|pm → should show both, not admin
+    # Filter for dev,pm → should show both, not admin
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev|pm' 2>&1)"
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev,pm' 2>&1)"
     if ! printf '%s' "$output" | grep -qw "dev" || ! printf '%s' "$output" | grep -qw "pm"; then
         printf 'FAIL: expected both "dev" and "pm" in multi-tag output\n'
         printf '  output: %s\n' "$output"
@@ -675,9 +675,9 @@ test_view_multi_tag_excludes_other() {
     "$CLK_SCRIPT" in admin at '2026-03-20T13:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out admin at '2026-03-20T14:00:00' >/dev/null 2>&1
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev|pm' 2>&1)"
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev,pm' 2>&1)"
     if printf '%s' "$output" | grep -qw "admin"; then
-        printf 'FAIL: "admin" should not appear when filtering for "dev|pm"\n'
+        printf 'FAIL: "admin" should not appear when filtering for "dev,pm"\n'
         printf '  output: %s\n' "$output"
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
         return 1
@@ -694,14 +694,14 @@ test_view_multi_tag_correct_total() {
     "$CLK_SCRIPT" out admin at '2026-03-20T14:00:00' >/dev/null 2>&1
     # dev (60m) + pm (60m) = 120m total, not 180m
     clk_test__assert_output_contains "2.00h" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev|pm'
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev,pm'
 }
 
 test_view_multi_tag_shows_filter_label() {
     "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     clk_test__assert_output_contains "Filtered by tag: dev, pm" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev|pm'
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev,pm'
 }
 
 test_view_multi_tag_by_day() {
@@ -711,7 +711,7 @@ test_view_multi_tag_by_day() {
     "$CLK_SCRIPT" out pm at '2026-03-18T12:00:00' >/dev/null 2>&1
     # 60m + 60m = 120m on the same day
     clk_test__assert_output_contains "120m" \
-        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for 'dev|pm' by day
+        "$CLK_SCRIPT" view past 3 days before '2026-03-20T00:00:00' for 'dev,pm' by day
 }
 
 #####################################################################
