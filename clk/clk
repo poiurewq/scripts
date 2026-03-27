@@ -1947,11 +1947,14 @@ clk_do_view() {
 
     # (awk_tag_cond removed — multi-tag matching handled inside awk)
 
+    printf '\n'
+
     if [ -n "$group_by" ]; then
         # --- Grouped bar chart mode ---
         # Bucket sessions by day or week and display as a bar chart
         clk__view_grouped "$start_ts" "$end_ts" "$start_epoch" "$end_epoch" \
             "$range_desc" "$filter_tag" "$group_by" "$active_in_range"
+        printf '\n'
         return
     fi
 
@@ -2073,6 +2076,8 @@ clk_do_view() {
     if [ "$active_in_range" -gt 0 ]; then
         printf '\nNote: %d active session(s) not included in totals.\n' "$active_in_range"
     fi
+
+    printf '\n'
 }
 
 # --- clk__view_grouped ---
@@ -2313,6 +2318,23 @@ clk__view_render_session_table() {
     fi
 
     printf '%s' "$data" | awk -F'\t' -v show_tag="$show_tag" -v term_w="$term_cols" '
+    function trunc(s,    byte_len, i, col, c3, cut_byte) {
+        if (term_w <= 0) return s
+        byte_len = length(s)
+        if (byte_len <= term_w) return s  # if bytes fit, display cols definitely fit
+        # Walk the string tracking display columns vs byte positions.
+        # Recognize the 3-byte UTF-8 characters used in our output (─ █ …)
+        # so we never split a multi-byte sequence.
+        col = 0; i = 1; cut_byte = 0
+        while (i <= byte_len) {
+            if (col == term_w - 1) cut_byte = i - 1
+            c3 = substr(s, i, 3)
+            if (c3 == "─" || c3 == "█" || c3 == "…") i += 3; else i++
+            col++
+        }
+        if (col <= term_w) return s
+        return substr(s, 1, cut_byte) "…"
+    }
     function fmt_hm(secs,    h, m) {
         h = int(secs / 3600)
         m = int((secs % 3600) / 60)
@@ -2424,7 +2446,7 @@ clk__view_render_session_table() {
             for (i = 1; i <= 12; i++) sep = sep "─"
         }
 
-        printf "%s\n%s\n", hdr, sep
+        printf "%s\n%s\n", trunc(hdr), trunc(sep)
 
         # Compute max description width from terminal width
         # Fixed cols: bar(12) + 2 + Start(16) + 2 + End(end_col_w) + 2 + Duration(8) + 2 + Break(6)
@@ -2451,7 +2473,7 @@ clk__view_render_session_table() {
                 if (length(d) > max_desc_w) d = substr(d, 1, max_desc_w - 1) "…"
                 line = line "  " d
             }
-            printf "%s\n", line
+            printf "%s\n", trunc(line)
         }
 
         # Summary statistics
