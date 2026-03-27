@@ -1947,11 +1947,14 @@ clk_do_view() {
 
     # (awk_tag_cond removed — multi-tag matching handled inside awk)
 
+    printf '\n'
+
     if [ -n "$group_by" ]; then
         # --- Grouped bar chart mode ---
         # Bucket sessions by day or week and display as a bar chart
         clk__view_grouped "$start_ts" "$end_ts" "$start_epoch" "$end_epoch" \
             "$range_desc" "$filter_tag" "$group_by" "$active_in_range"
+        printf '\n'
         return
     fi
 
@@ -2073,6 +2076,8 @@ clk_do_view() {
     if [ "$active_in_range" -gt 0 ]; then
         printf '\nNote: %d active session(s) not included in totals.\n' "$active_in_range"
     fi
+
+    printf '\n'
 }
 
 # --- clk__view_grouped ---
