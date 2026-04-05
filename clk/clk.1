@@ -9,25 +9,25 @@
 .Op Cm help
 .br
 .Nm
-.Cm in Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.Cm in Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
-.Cm out Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.Cm out Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
-.Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
-.Bro Cm add | Cm a Brc Ar tag Cm for Ar minutes Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.Bro Cm add | Cm a Brc Ar tag Cm for Ar duration Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
-.Bro Cm add | Cm a Brc Ar minutes Op Cm to Ar tag
+.Bro Cm add | Cm a Brc Ar duration Op Cm to Ar tag
 .br
 .Nm
-.Bro Cm add-break | Cm ab Brc Ar minutes Op Cm to Ar tag
+.Bro Cm add-break | Cm ab Brc Ar duration Op Cm to Ar tag
 .br
 .Nm
-.Cm extend Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp | Cm by Ar minutes
+.Cm extend Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp | Cm by Ar duration
 .br
 .Nm
 .Bro Cm remove | Cm pop Brc Op Fl Ar n
@@ -36,13 +36,13 @@
 .Bro Cm reactivate | Cm ra Brc Fl Ar n
 .br
 .Nm
-.Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+.Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
 .br
 .Nm
-.Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+.Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
 .br
 .Nm
-.Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+.Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
 .br
 .Nm
 .Bro Cm unpause | Cm up Brc Op Ar tag
@@ -117,6 +117,19 @@ alone is treated as midnight
 .Pq Ql T00:00:00 .
 Multiple sessions may be active simultaneously.
 .Pp
+Wherever a
+.Ar duration
+is expected, the accepted forms are: a plain integer
+.Pq interpreted as minutes, e.g. Ql 90 ,
+.Ql Xh
+.Pq e.g. Ql 2h ,
+.Ql Ym
+.Pq e.g. Ql 45m ,
+or
+.Ql XhYm
+.Pq e.g. Ql 1h30m .
+The suffix letters are case-insensitive.
+.Pp
 User-facing output displays timestamps in a simplified form:
 seconds and the
 .Ql T
@@ -136,7 +149,7 @@ that you can inject via
 for faster invocation.
 .Ss Clock in/out
 .Bl -tag -width indent
-.It Cm in Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.It Cm in Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 Clock in to a work session labeled with
 .Ar tag .
 Tags are single tokens
@@ -148,8 +161,8 @@ as a hierarchical separator
 Tags must not be purely numeric.
 .Pp
 Optionally specify when the session started via
-.Cm minus Ar minutes
-.Pq that many minutes ago
+.Cm minus Ar duration
+.Pq that much time ago
 or
 .Cm at Ar timestamp
 .Pq an exact ISO 8601 timestamp .
@@ -161,7 +174,7 @@ keyword consumes all remaining arguments.
 .Pp
 If a session for the same tag is already active, the command fails.
 Sessions with different tags may be active concurrently.
-.It Cm out Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.It Cm out Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 Clock out of the active session for
 .Ar tag .
 If exactly one session is active,
@@ -177,7 +190,7 @@ it overrides any description set at clock-in.
 If the session is currently paused, the pause is finalized
 .Pq pause duration added to break time
 before computing the session length.
-.It Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.It Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 End one session and start another atomically.
 The switch timestamp is both the end time of the old session and the
 start time of the new one.
@@ -190,28 +203,28 @@ applies to the session being closed.
 .El
 .Ss Adding and modifying sessions
 .Bl -tag -width indent
-.It Cm add Ar tag Cm for Ar minutes Op Cm minus Ar minutes | Cm at Ar timestamp Op Cm on Ar description
+.It Cm add Ar tag Cm for Ar duration Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 Add a completed session of
-.Ar minutes
+.Ar duration
 length directly to the log, ending at the current time
 .Pq or at the time specified by Cm minus No or Cm at .
 The start time is back-calculated from the end time and duration.
-.It Cm add Ar minutes Op Cm to Ar tag
+.It Cm add Ar duration Op Cm to Ar tag
 Add
-.Ar minutes
+.Ar duration
 of time to an active session by moving its start time backwards.
 If
 .Cm to Ar tag
 is omitted and exactly one session is active, it is inferred.
-.It Bro Cm add-break | Cm ab Brc Ar minutes Op Cm to Ar tag
+.It Bro Cm add-break | Cm ab Brc Ar duration Op Cm to Ar tag
 Add
-.Ar minutes
+.Ar duration
 of break time to an active session.
 The session must not be currently paused.
 If
 .Cm to Ar tag
 is omitted, the tag is inferred when unambiguous.
-.It Cm extend Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp | Cm by Ar minutes
+.It Cm extend Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp | Cm by Ar duration
 Extend the last completed session to the current time, or to the time
 specified by
 .Cm minus
@@ -228,8 +241,8 @@ When using
 or
 .Cm at ,
 the new end time must be at or after the original end time.
-.Cm by Ar minutes
-shifts the end timestamp forward by exactly that many minutes.
+.Cm by Ar duration
+shifts the end timestamp forward by exactly that much time.
 .It Bro Cm remove | Cm pop Brc Op Fl Ar n
 Without an index, removes the last record from the log
 .Pq whether active or completed
@@ -252,27 +265,27 @@ Fails if the same tag already has an active session.
 .El
 .Ss Pause and resume
 .Bl -tag -width indent
-.It Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+.It Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
 Pause an active session.
 The session must not already be paused.
-.Cm minus Ar minutes
-sets the pause start to that many minutes ago.
+.Cm minus Ar duration
+sets the pause start to that much time ago.
 If
 .Ar tag
 is omitted and exactly one session is active, it is inferred.
-.It Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+.It Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
 Resume a paused session.
 The pause duration is added to the session's accumulated break time.
-.Cm minus Ar minutes
-sets the resume point to that many minutes ago.
+.Cm minus Ar duration
+sets the resume point to that much time ago.
 .Cm at Ar timestamp
 sets the resume point to an explicit time.
-.It Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar minutes | Cm at Ar timestamp
+.It Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
 Resume the specified session and pause all other active (non-paused) sessions.
 If the target session is already running (not paused), it is left as-is and only the
 other sessions are paused.
 The tag is required.
-.Cm minus Ar minutes
+.Cm minus Ar duration
 and
 .Cm at Ar timestamp
 set the timestamp used for both the resume and the pauses.
@@ -374,7 +387,7 @@ is one of:
 .Bl -tag -width indent -compact
 .It Bro Cm all | Cm today | Cm yesterday Brc
 .It Bro Fl Ar n | Cm this Brc Ar unit Op Cm through No ...
-.It Cm past Op Ar n Ar unit Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
+.It Cm past Op Ar n Ar unit Op Cm before Ar timestamp | Cm before Cm minus Ar duration
 .It Cm from Ar timestamp Cm to Ar timestamp
 .El
 .Pp
@@ -450,8 +463,8 @@ The
 modifier anchors the lookback window to a point other than now:
 .Cm before Ar timestamp
 anchors to the given timestamp, and
-.Cm before Cm minus Ar minutes
-anchors to that many minutes ago.
+.Cm before Cm minus Ar duration
+anchors to that much time ago.
 .It Cm from Ar timestamp Cm to Ar timestamp
 Summarize sessions in an explicit time range.
 .El

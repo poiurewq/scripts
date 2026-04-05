@@ -119,12 +119,12 @@ test_resolve_time_at() {
 }
 
 test_resolve_time_minus() {
-    # resolve_time with minus should return now - N minutes
+    # resolve_time with minus_secs should return now - N seconds
     # Use epoch comparison with 2-second tolerance to avoid race conditions
     local result now_epoch expected_epoch result_epoch
     now_epoch="$(clk__now_epoch)"
-    expected_epoch=$(( now_epoch - 30 * 60 ))
-    result="$(clk__resolve_time "" "30")"
+    expected_epoch=$(( now_epoch - 1800 ))
+    result="$(clk__resolve_time "" "1800")"
     result_epoch="$(clk__to_epoch "$result")"
     local diff=$(( result_epoch - expected_epoch ))
     if [ "$diff" -lt 0 ]; then diff=$(( -diff )); fi
