@@ -2041,6 +2041,7 @@ clk_do_view() {
 
     # Print output
     printf '%s\n' "$range_desc"
+    printf '%s – %s\n' "$(clk__fmt_ts_display "$start_ts")" "$(clk__fmt_ts_display "$end_ts")"
     if [ -n "$filter_tag" ]; then
         printf 'Filtered by tag: %s\n' "$(printf '%s' "$filter_tag" | sed 's/,/, /g')"
     fi
@@ -2163,6 +2164,7 @@ clk__view_grouped() {
 
     # Print header
     printf '%s\n' "$range_desc"
+    printf '%s – %s\n' "$(clk__fmt_ts_display "$start_ts")" "$(clk__fmt_ts_display "$end_ts")"
     if [ -n "$filter_tag" ]; then
         printf 'Tag: %s  (by %s)\n\n' "$(printf '%s' "$filter_tag" | sed 's/,/, /g')" "$group_by"
     else
