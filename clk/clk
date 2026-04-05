@@ -19,7 +19,7 @@ CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, yyyy-mm-ddTHH:MM, yyyy-mm
 CLK_FMT_RAW=0
 CLK_TAB='	'
 CLK_LOG_VERSION_MARKER='#clk-v3'
-CLK_VERSION="0.3.15"
+CLK_VERSION="0.4.0"
 
 # Detect OS once; all platform differences are isolated in helper functions.
 CLK_OS="$(uname)"
