@@ -1867,8 +1867,12 @@ ${i}${CLK_TAB}${lineno}${CLK_TAB}${line_content}"
     while [ "$i" -le "$done_count" ]; do
         lineno="$(printf '%s\n' "$done_lines" | tail -n "$i" | head -n 1)"
         line_content="$(clk__get_line "$lineno")"
-        CLK_TUI_ROWS="${CLK_TUI_ROWS}
+        if [ -n "$CLK_TUI_ROWS" ]; then
+            CLK_TUI_ROWS="${CLK_TUI_ROWS}
 -${i}${CLK_TAB}${lineno}${CLK_TAB}${line_content}"
+        else
+            CLK_TUI_ROWS="-${i}${CLK_TAB}${lineno}${CLK_TAB}${line_content}"
+        fi
         CLK_TUI_ROW_COUNT=$(( CLK_TUI_ROW_COUNT + 1 ))
         i=$(( i + 1 ))
     done
