@@ -7,10 +7,12 @@
 .Sh SYNOPSIS
 .Nm
 .Op Cm help
-.Pp
-Core workflow:
+.Ss Core workflow
 .Nm
 .Cm in Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
+.br
+.Nm
+.Bro Cm in-focus | Cm I Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
 .Cm out Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
@@ -29,8 +31,7 @@ Core workflow:
 .br
 .Nm
 .Bro Cm unpause | Cm up Brc Op Ar tag
-.Pp
-Record management:
+.Ss Record management
 .Nm
 .Bro Cm add | Cm a Brc Ar tag Cm for Ar duration Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
@@ -44,12 +45,11 @@ Record management:
 .Cm extend Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp | Cm by Ar duration
 .br
 .Nm
-.Bro Cm remove | Cm pop Brc Op Fl Ar n | Ar n
+.Cm pop Op Fl Ar n | Ar n
 .br
 .Nm
 .Bro Cm reactivate | Cm ra Brc Fl Ar n
-.Pp
-Editing:
+.Ss Editing
 .Nm
 .Bro Cm edit | Cm e Brc
 .br
@@ -64,8 +64,7 @@ Editing:
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm delete
-.Pp
-Viewing:
+.Ss Viewing
 .Nm
 .Bro Cm status | Cm s Brc
 .br
@@ -83,8 +82,7 @@ Viewing:
 .br
 .Nm
 .Ar range Op Ar filter
-.Pp
-Utilities:
+.Ss Utilities
 .Nm
 .Cm undo
 .br
@@ -179,6 +177,15 @@ keyword consumes all remaining arguments.
 .Pp
 If a session for the same tag is already active, the command fails.
 Sessions with different tags may be active concurrently.
+.It Bro Cm in-focus | Cm I Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
+Clock in to a new session while pausing all other active (non-paused)
+sessions at the same timestamp.
+Lets you juggle multiple tags without losing focus: after this command,
+the new session is the only one running.
+Options behave exactly as for
+.Cm in .
+Already-paused sessions are left untouched.
+The entire operation is a single undo step.
 .It Cm out Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 Clock out of the active session for
 .Ar tag .
@@ -277,7 +284,7 @@ or
 the new end time must be at or after the original end time.
 .Cm by Ar duration
 shifts the end timestamp forward by exactly that much time.
-.It Bro Cm remove | Cm pop Brc Op Fl Ar n | Ar n
+.It Cm pop Op Fl Ar n | Ar n
 Without an index, removes the last record from the log
 .Pq whether active or completed
 and displays the removed record.
@@ -392,7 +399,7 @@ matching the convention used by
 .Nm Ar n ,
 .Cm edit Ar n ,
 and
-.Cm remove Ar n .
+.Cm pop Ar n .
 If no sessions are active, prints
 .Dq \&No active sessions .
 .It Bro Cm last | Cm l Brc Op Ar n
@@ -666,11 +673,19 @@ When more than one session is active, the tag is required for
 .Cm pause ,
 and
 .Cm resume .
+.Pp
+Start a new focused session, pausing all others at the same time:
+.Dl $ clk in-focus dev
+.Pp
+Later, switch focus back to a previously-paused session:
+.Dl $ clk resume-focus pm
+.Pp
+The
 .Cm status
-displays each active session with its positive index
+command displays each active session with its positive index
 .Pq Ql +1 , Ql +2 , No ... ;
 you can drop one by index with
-.Ql clk remove <n> .
+.Ql clk pop <n> .
 .Ss Adding past sessions
 Log a 45-minute meeting that just ended:
 .Dl $ clk add pm for 45

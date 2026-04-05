@@ -562,6 +562,101 @@ test_resume_focus_alias_R() {
 }
 
 #####################################################################
+# Tests — clk in-focus (integration)
+#####################################################################
+
+test_in_focus_basic() {
+    # Two active sessions, then start a new focused one
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+
+    "$CLK_SCRIPT" in-focus admin at 2026-01-01T10:00:00 >/dev/null 2>&1
+
+    # dev: paused at epoch for 10:00
+    clk_test__assert_log_line 3 '^active	2026-01-01T09:00:00		dev		0	[0-9]'
+    # pm: paused at epoch for 10:00
+    clk_test__assert_log_line 2 '^active	2026-01-01T09:30:00		pm		0	[0-9]'
+    # admin: new, running, no pause
+    clk_test__assert_log_line 1 '^active	2026-01-01T10:00:00		admin		0		$'
+}
+
+test_in_focus_no_other_sessions() {
+    "$CLK_SCRIPT" in-focus dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+
+    # Just one active, no pause state
+    clk_test__assert_log_line 1 '^active	2026-01-01T09:00:00		dev		0		$'
+}
+
+test_in_focus_skips_already_paused() {
+    # pm is already paused — leave its paused_at alone
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:15:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" pause pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+
+    local log_file="$CLK_TEST_DIR/clk/clk.tsv"
+    local pm_paused_before
+    pm_paused_before="$(grep "	pm	" "$log_file" | cut -d"$(printf '\t')" -f7)"
+
+    "$CLK_SCRIPT" in-focus admin at 2026-01-01T10:00:00 >/dev/null 2>&1
+
+    # dev: newly paused
+    clk_test__assert_log_line 3 '^active	2026-01-01T09:00:00		dev		0	[0-9]'
+    # pm: paused_at unchanged
+    local pm_paused_after
+    pm_paused_after="$(grep "	pm	" "$log_file" | cut -d"$(printf '\t')" -f7)"
+    clk_test__assert_equals "$pm_paused_before" "$pm_paused_after" "pm paused_at should not change"
+    # admin: new running session
+    clk_test__assert_log_line 1 '^active	2026-01-01T10:00:00		admin		0		$'
+}
+
+test_in_focus_duplicate_tag() {
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" in-focus dev at 2026-01-01T10:00:00
+}
+
+test_in_focus_missing_tag() {
+    clk_test__assert_exit 1 "$CLK_SCRIPT" in-focus
+}
+
+test_in_focus_single_undo() {
+    # One in-focus command = one undo step
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in pm at 2026-01-01T09:30:00 >/dev/null 2>&1
+
+    "$CLK_SCRIPT" in-focus admin at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" undo >/dev/null 2>&1
+
+    # After undo: dev and pm both un-paused, admin gone
+    clk_test__assert_log_line 2 '^active	2026-01-01T09:00:00		dev		0		$'
+    clk_test__assert_log_line 1 '^active	2026-01-01T09:30:00		pm		0		$'
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "2" "$count" "admin should be gone after undo"
+}
+
+test_in_focus_alias_I() {
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+
+    "$CLK_SCRIPT" I admin at 2026-01-01T10:00:00 >/dev/null 2>&1
+
+    # dev paused, admin new
+    clk_test__assert_log_line 2 '^active	2026-01-01T09:00:00		dev		0	[0-9]'
+    clk_test__assert_log_line 1 '^active	2026-01-01T10:00:00		admin		0		$'
+}
+
+test_in_focus_with_description() {
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in-focus admin at 2026-01-01T10:00:00 on urgent review >/dev/null 2>&1
+
+    clk_test__assert_log_line 1 '^active	2026-01-01T10:00:00		admin		0		urgent review$'
+}
+
+test_in_focus_confirmation_output() {
+    "$CLK_SCRIPT" in dev at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_output_contains "Started focused session" "$CLK_SCRIPT" in-focus admin at 2026-01-01T10:00:00
+}
+
+#####################################################################
 # Test list
 #####################################################################
 
@@ -630,4 +725,15 @@ CLK_TESTS_PAUSE=(
     test_resume_focus_skips_already_paused
     test_resume_focus_confirmation_output
     test_resume_focus_alias_R
+
+    # clk in-focus (integration)
+    test_in_focus_basic
+    test_in_focus_no_other_sessions
+    test_in_focus_skips_already_paused
+    test_in_focus_duplicate_tag
+    test_in_focus_missing_tag
+    test_in_focus_single_undo
+    test_in_focus_alias_I
+    test_in_focus_with_description
+    test_in_focus_confirmation_output
 )
