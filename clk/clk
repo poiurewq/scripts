@@ -43,6 +43,7 @@ clk [help]
 
 Core workflow:
     in <tag> [minus <duration> | at <timestamp>] [on <description>]
+    in-focus | I <tag> [minus <duration> | at <timestamp>] [on <description>]
     out [<tag>] [minus <duration> | at <timestamp>] [on <description>]
     switch <new-tag> [from <old-tag>] [minus <duration> | at <timestamp>] [on <description>]
     pause | p [<tag>] [minus <duration> | at <timestamp>]
@@ -55,7 +56,7 @@ Record management:
     add | a <duration> [to <tag>]
     add-break | ab <duration> [to <tag>]
     extend [<tag>] [minus <duration> | at <timestamp> | by <duration>]
-    remove | pop [-<n> | <n>]
+    pop [-<n> | <n>]
     reactivate | ra -<n>
 
 Editing:
@@ -920,7 +921,7 @@ clk_do_status() {
         local formatted
         formatted="$(clk__fmt_record "$line_content")"
         # Show the positive index (+N) so users can target a session by
-        # index with `clk <n>`, `clk edit <n> ...`, or `clk remove <n>`.
+        # index with `clk <n>`, `clk edit <n> ...`, or `clk pop <n>`.
         # Active lines come out of clk__find_active in log order (oldest
         # first), which matches the +1..+N convention.
         printf '  +%d  %s\n' "$idx" "$formatted"
@@ -1385,6 +1386,86 @@ ${lineno}"
     printf '\n'
 }
 
+# --- clk_do_in_focus ---
+# clk in-focus <tag> [minus <duration> | at <timestamp>] [on <description>]
+#
+# Start a new session while pausing all other active (non-paused) sessions
+# at the same timestamp. Lets users juggle multiple tags without losing
+# focus: after this command, only the new session is running.
+# A single undo snapshot covers the entire compound operation.
+clk_do_in_focus() {
+    local tag="$1" at_ts="$2" minus_val="$3" description="$4"
+
+    clk__validate_tag "$tag"
+
+    # Validate that no active session for this tag already exists
+    if clk__find_active "$tag" >/dev/null 2>&1; then
+        clk__die 5 "Tag '$tag' already has an active session. Clock out first with 'clk out $tag'."
+    fi
+
+    local start_ts
+    start_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
+    local start_epoch
+    start_epoch="$(clk__to_epoch "$start_ts")"
+
+    # Collect all existing active sessions that are not already paused
+    local others_to_pause=""
+    local all_lines
+    if all_lines="$(clk__find_active 2>/dev/null)"; then
+        local lineno other_content
+        while IFS= read -r lineno; do
+            other_content="$(clk__get_line "$lineno")"
+            clk__read_line "$other_content"
+            if [ -z "$CLK_F7" ]; then
+                if [ -n "$others_to_pause" ]; then
+                    others_to_pause="${others_to_pause}
+${lineno}"
+                else
+                    others_to_pause="$lineno"
+                fi
+            fi
+        done <<< "$all_lines"
+    fi
+
+    clk__save_undo
+
+    # 1. Pause each non-paused active session at start_epoch
+    local paused_count=0
+    local paused_tags=""
+    if [ -n "$others_to_pause" ]; then
+        local lineno other_content
+        while IFS= read -r lineno; do
+            other_content="$(clk__get_line "$lineno")"
+            clk__read_line "$other_content"
+            local other_start_ts="$CLK_F2"
+            local other_tag="$CLK_F4"
+            local other_break_secs="${CLK_F6:-0}"
+            local other_description="$CLK_F8"
+            local new_record="active${CLK_TAB}${other_start_ts}${CLK_TAB}${CLK_TAB}${other_tag}${CLK_TAB}${CLK_TAB}${other_break_secs}${CLK_TAB}${start_epoch}${CLK_TAB}${other_description}"
+            clk__replace_line "$lineno" "$new_record"
+            paused_count=$(( paused_count + 1 ))
+            if [ -n "$paused_tags" ]; then
+                paused_tags="${paused_tags}, ${other_tag}"
+            else
+                paused_tags="$other_tag"
+            fi
+        done <<< "$others_to_pause"
+    fi
+
+    # 2. Append the new active session
+    local record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${tag}${CLK_TAB}${CLK_TAB}0${CLK_TAB}${CLK_TAB}${description}"
+    clk__append_line "$record"
+
+    printf '\nStarted focused session in\n  %s\n  at %s\n' "$tag" "$(clk__fmt_ts_display "$start_ts")"
+    if [ -n "$description" ]; then
+        printf '  on %s\n' "$description"
+    fi
+    if [ "$paused_count" -gt 0 ]; then
+        printf '  Paused %d other session(s): %s\n' "$paused_count" "$paused_tags"
+    fi
+    printf '\n'
+}
+
 # --- clk_do_switch ---
 # clk switch <new-tag> [from <old-tag>] [minus <duration> | at <timestamp>] [on <description>]
 #
@@ -1599,7 +1680,7 @@ clk_do_extend() {
 }
 
 # --- clk_do_remove ---
-# clk remove | pop [-<n> | <n>]
+# clk pop [-<n> | <n>]
 # Without an index: removes the last record (whether active or completed).
 # With -<n>: removes the nth-to-last done session.
 # With <n>:  removes the nth-oldest active session (same convention as `clk <n>`).
@@ -3794,6 +3875,41 @@ in)
     clk_do_in "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
     ;;
 
+in-focus|I)
+    clk_subcmd="in-focus"
+    shift
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing <tag>. Usage: 'clk in-focus <tag>'."
+    fi
+    clk_tag="$1"; shift
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            minus)
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                clk__parse_duration "$2"
+                clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
+                ;;
+            at)
+                [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
+                clk__consume_timestamp "$2" "${3:-}"
+                clk_at_timestamp="$CLK_VALIDATED_TS"; shift $(( 1 + CLK_TIMESTAMP_ARGC ))
+                ;;
+            on)
+                [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
+                shift
+                clk_description="$*"
+                break
+                ;;
+            *)
+                clk__die 1 "Unknown option '$1' after 'clk in-focus ${clk_tag}'."
+                ;;
+        esac
+    done
+
+    clk_do_in_focus "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
+    ;;
+
 out)
     clk_subcmd="out"
     shift
@@ -4106,17 +4222,17 @@ extend)
     clk_do_extend "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_by_secs"
     ;;
 
-remove|pop)
-    clk_subcmd="remove"
+pop)
+    clk_subcmd="pop"
     shift
     clk_remove_n=""
     if [ $# -gt 0 ]; then
         if ! printf '%s' "$1" | grep -Eq '^-?[1-9][0-9]*$'; then
-            clk__die 1 "Expected -<n> (done) or <n> (active) index, or no argument. Usage: 'clk remove [-<n> | <n>]'"
+            clk__die 1 "Expected -<n> (done) or <n> (active) index, or no argument. Usage: 'clk pop [-<n> | <n>]'"
         fi
         clk_remove_n="$1"; shift
     fi
-    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk remove [-<n> | <n>]'"
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk pop [-<n> | <n>]'"
     clk_do_remove "$clk_remove_n"
     ;;
 

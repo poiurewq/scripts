@@ -254,7 +254,7 @@ test_status_not_shown_after_out() {
 
 test_status_shows_positive_index() {
     # Each active session is labeled with +N so users can target it via
-    # `clk <n>`, `clk edit <n>`, or `clk remove <n>`.
+    # `clk <n>`, `clk edit <n>`, or `clk pop <n>`.
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
     local output

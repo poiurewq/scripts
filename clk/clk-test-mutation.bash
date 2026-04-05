@@ -393,7 +393,7 @@ test_extend_by_with_tag() {
 test_remove_basic() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" remove >/dev/null 2>&1
+    "$CLK_SCRIPT" pop >/dev/null 2>&1
     local count
     count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
     clk_test__assert_equals "0" "$count" "remove deletes last record"
@@ -401,25 +401,25 @@ test_remove_basic() {
 
 test_remove_active_record() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" remove >/dev/null 2>&1
+    "$CLK_SCRIPT" pop >/dev/null 2>&1
     local count
     count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
     clk_test__assert_equals "0" "$count" "remove deletes active record"
 }
 
 test_remove_empty_log() {
-    clk_test__assert_exit 5 "$CLK_SCRIPT" remove
+    clk_test__assert_exit 5 "$CLK_SCRIPT" pop
 }
 
 test_remove_empty_log_message() {
-    clk_test__assert_output_contains "No records to remove" "$CLK_SCRIPT" remove
+    clk_test__assert_output_contains "No records to remove" "$CLK_SCRIPT" pop
 }
 
 test_remove_shows_removed_record() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     local output
-    output="$("$CLK_SCRIPT" remove 2>&1)"
+    output="$("$CLK_SCRIPT" pop 2>&1)"
     clk_test__assert_output_contains "Removed record" printf '%s' "$output" &&
     clk_test__assert_output_contains "work" printf '%s' "$output"
 }
@@ -427,7 +427,7 @@ test_remove_shows_removed_record() {
 test_remove_creates_undo() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
-    "$CLK_SCRIPT" remove >/dev/null 2>&1
+    "$CLK_SCRIPT" pop >/dev/null 2>&1
     if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
         printf 'FAIL: remove should create .undo\n'
         CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
@@ -446,7 +446,7 @@ test_remove_preserves_other_records() {
     "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" remove >/dev/null 2>&1
+    "$CLK_SCRIPT" pop >/dev/null 2>&1
     # Only 'a' should remain
     local count
     count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
@@ -463,7 +463,7 @@ test_remove_by_index_basic() {
     "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in b at 2026-01-01T10:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" remove -1 >/dev/null 2>&1
+    "$CLK_SCRIPT" pop -1 >/dev/null 2>&1
     local count
     count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
     clk_test__assert_equals "1" "$count" "remove -1 removes last done session" &&
@@ -477,7 +477,7 @@ test_remove_by_index_n2() {
     "$CLK_SCRIPT" out b at 2026-01-01T11:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in c at 2026-01-01T11:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out c at 2026-01-01T12:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" remove -2 >/dev/null 2>&1
+    "$CLK_SCRIPT" pop -2 >/dev/null 2>&1
     # -2 removes 'b'; a and c remain
     local count
     count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
@@ -490,19 +490,19 @@ test_remove_by_index_n2() {
 test_remove_by_index_out_of_range() {
     "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
-    clk_test__assert_exit 1 "$CLK_SCRIPT" remove -5
+    clk_test__assert_exit 1 "$CLK_SCRIPT" pop -5
 }
 
 test_remove_by_index_no_done_records() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    clk_test__assert_exit 5 "$CLK_SCRIPT" remove -1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" pop -1
 }
 
 test_remove_positive_index_basic() {
     # `clk remove 1` removes the oldest active session (index +1)
     "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in b at 2026-01-01T09:30:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" remove 1 >/dev/null 2>&1
+    "$CLK_SCRIPT" pop 1 >/dev/null 2>&1
     local count
     count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
     clk_test__assert_equals "1" "$count" "remove 1 removes one active session"
@@ -516,7 +516,7 @@ test_remove_positive_index_n2() {
     "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in b at 2026-01-01T09:30:00 >/dev/null 2>&1
     "$CLK_SCRIPT" in c at 2026-01-01T10:00:00 >/dev/null 2>&1
-    "$CLK_SCRIPT" remove 2 >/dev/null 2>&1
+    "$CLK_SCRIPT" pop 2 >/dev/null 2>&1
     local tags
     tags="$(awk -F'\t' '/^[^#]/ && NF>0 {print $4}' "$CLK_TEST_DIR/clk/clk.tsv" | tr '\n' ' ' | sed 's/ *$//')"
     clk_test__assert_equals "a c" "$tags" "remove 2 removes 'b' (second-oldest active)"
@@ -524,13 +524,13 @@ test_remove_positive_index_n2() {
 
 test_remove_positive_index_out_of_range() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
-    clk_test__assert_exit 1 "$CLK_SCRIPT" remove 5
+    clk_test__assert_exit 1 "$CLK_SCRIPT" pop 5
 }
 
 test_remove_positive_index_no_active() {
     "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
-    clk_test__assert_exit 5 "$CLK_SCRIPT" remove 1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" pop 1
 }
 
 #####################################################################
