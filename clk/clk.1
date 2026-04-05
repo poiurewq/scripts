@@ -7,8 +7,7 @@
 .Sh SYNOPSIS
 .Nm
 .Op Cm help
-.Pp
-Core workflow:
+.Ss Core workflow
 .Nm
 .Cm in Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
@@ -32,8 +31,7 @@ Core workflow:
 .br
 .Nm
 .Bro Cm unpause | Cm up Brc Op Ar tag
-.Pp
-Record management:
+.Ss Record management
 .Nm
 .Bro Cm add | Cm a Brc Ar tag Cm for Ar duration Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
@@ -51,8 +49,7 @@ Record management:
 .br
 .Nm
 .Bro Cm reactivate | Cm ra Brc Fl Ar n
-.Pp
-Editing:
+.Ss Editing
 .Nm
 .Bro Cm edit | Cm e Brc
 .br
@@ -67,8 +64,7 @@ Editing:
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm delete
-.Pp
-Viewing:
+.Ss Viewing
 .Nm
 .Bro Cm status | Cm s Brc
 .br
@@ -86,8 +82,7 @@ Viewing:
 .br
 .Nm
 .Ar range Op Ar filter
-.Pp
-Utilities:
+.Ss Utilities
 .Nm
 .Cm undo
 .br
@@ -684,8 +679,10 @@ Start a new focused session, pausing all others at the same time:
 .Pp
 Later, switch focus back to a previously-paused session:
 .Dl $ clk resume-focus pm
+.Pp
+The
 .Cm status
-displays each active session with its positive index
+command displays each active session with its positive index
 .Pq Ql +1 , Ql +2 , No ... ;
 you can drop one by index with
 .Ql clk pop <n> .
