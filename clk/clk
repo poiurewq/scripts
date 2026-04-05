@@ -54,8 +54,8 @@ clk [help]
     unpause | up [<tag>]
     undo | redo
     status | s
-    last | l [-<n> | <n>]
-    -<n>
+    last | l [<n>]
+    -<n> | <n>
     edit | e (-<n> | <n>) {tag|start|end|break|pause|on} <value>
     edit | e (-<n> | <n>) delete
     log
@@ -868,93 +868,118 @@ clk_do_status() {
     CLK_FMT_ACTIVE_TAG_WIDTH=0
 }
 
-# --- clk_do_last ---
-# clk last [-<n>] | clk last [<n>]
-#
-# Negative index: show the Nth-to-last completed session (-1 = most recent done,
-#   -2 = second-to-last done, etc.). Default when no argument is given.
-# Positive index: show the Nth-oldest active session (1 = oldest active,
-#   2 = second-oldest active, etc.).
-#
 # --- RATIONALE: signed index convention ---
 # Negative integers count back from the most recent done session; positive
 # integers count forward from the oldest active session. The sign tells you
 # which pool you are indexing into: negative = done, positive = active.
-# edit mirrors this exact convention so last and edit stay aligned.
+# edit mirrors this exact convention so last, edit, and the bare-number
+# shortcuts (`clk -n`, `clk n`) stay aligned.
+
+# --- clk__show_done_at(abs_n) ---
+# Print the abs_n-th most recent completed session (i.e., index -abs_n).
+# abs_n is a positive integer. Prints "No completed records" and returns 0
+# when the log has none. Exits 1 if abs_n exceeds the count.
+clk__show_done_at() {
+    local abs_n="$1"
+    local done_lines
+    done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+
+    if [ -z "$done_lines" ]; then
+        printf 'No completed records in log.\n'
+        return 0
+    fi
+
+    local total_done
+    total_done="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
+
+    if [ "$abs_n" -gt "$total_done" ]; then
+        clk__die 1 "Index -${abs_n} out of range. Only ${total_done} completed record(s) in log."
+    fi
+
+    # tail -n abs_n gives the last abs_n lines; head -n 1 picks the oldest of those
+    local lineno
+    lineno="$(printf '%s\n' "$done_lines" | tail -n "${abs_n}" | head -n 1)"
+
+    local line_content
+    line_content="$(clk__get_line "$lineno")"
+    CLK_FMT_RAW=1
+    local formatted
+    formatted="$(clk__fmt_record "$line_content")"
+    CLK_FMT_RAW=0
+
+    local this_tag="${formatted%%  *}"
+    local this_rest="${formatted#*  }"
+    printf -- "-%d  %s  %s\n" "$abs_n" "$this_tag" "$this_rest"
+}
+
+# --- clk__show_active_at(abs_n) ---
+# Print the abs_n-th oldest active session (i.e., index +abs_n).
+# abs_n is a positive integer. Prints "No active sessions" and returns 0
+# when none exist. Exits 1 if abs_n exceeds the count.
+clk__show_active_at() {
+    local abs_n="$1"
+    local active_lines
+    active_lines="$(awk -F'\t' '$1=="active" {print NR}' "$CLK_LOG")"
+
+    if [ -z "$active_lines" ]; then
+        printf 'No active sessions.\n'
+        return 0
+    fi
+
+    local total_active
+    total_active="$(printf '%s\n' "$active_lines" | wc -l | tr -d ' ')"
+
+    if [ "$abs_n" -gt "$total_active" ]; then
+        clk__die 1 "Index ${abs_n} out of range. Only ${total_active} active session(s)."
+    fi
+
+    # head -n abs_n gives the first abs_n lines; tail -n 1 picks the newest of those
+    local lineno
+    lineno="$(printf '%s\n' "$active_lines" | head -n "${abs_n}" | tail -n 1)"
+
+    local line_content
+    line_content="$(clk__get_line "$lineno")"
+    CLK_FMT_RAW=1
+    local formatted
+    formatted="$(clk__fmt_record "$line_content")"
+    CLK_FMT_RAW=0
+
+    local this_tag="${formatted%%  *}"
+    local this_rest="${formatted#*  }"
+    printf "+%d  %s  %s\n" "$abs_n" "$this_tag" "$this_rest"
+}
+
+# --- clk_do_last(n) ---
+# clk last [<n>]
+#
+# Show all completed sessions from -n up to -1, one per line. n must be a
+# positive integer (default 1). If n exceeds the number of done records,
+# only the available ones are shown (no error).
 clk_do_last() {
-    local signed_n="${1:--1}"
+    local n="${1:-1}"
 
-    local is_negative=0 abs_n
-    if printf '%s' "$signed_n" | grep -Eq '^-[0-9]+$'; then
-        is_negative=1
-        abs_n="${signed_n#-}"
-    else
-        abs_n="$signed_n"
+    local done_lines
+    done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+
+    if [ -z "$done_lines" ]; then
+        printf 'No completed records in log.\n'
+        return 0
     fi
 
-    if [ "$is_negative" = "1" ]; then
-        # Show the abs_n-th most recent done session
-        local done_lines
-        done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+    local total_done
+    total_done="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
 
-        if [ -z "$done_lines" ]; then
-            printf 'No completed records in log.\n'
-            return 0
-        fi
-
-        local total_done
-        total_done="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
-
-        if [ "$abs_n" -gt "$total_done" ]; then
-            clk__die 1 "Index -${abs_n} out of range. Only ${total_done} completed record(s) in log."
-        fi
-
-        # tail -n abs_n gives the last abs_n lines; head -n 1 picks the oldest of those
-        local lineno
-        lineno="$(printf '%s\n' "$done_lines" | tail -n "${abs_n}" | head -n 1)"
-
-        local line_content
-        line_content="$(clk__get_line "$lineno")"
-        CLK_FMT_RAW=1
-        local formatted
-        formatted="$(clk__fmt_record "$line_content")"
-        CLK_FMT_RAW=0
-
-        local this_tag="${formatted%%  *}"
-        local this_rest="${formatted#*  }"
-        printf -- "-%d  %s  %s\n" "$abs_n" "$this_tag" "$this_rest"
-    else
-        # Show the abs_n-th oldest active session
-        local active_lines
-        active_lines="$(awk -F'\t' '$1=="active" {print NR}' "$CLK_LOG")"
-
-        if [ -z "$active_lines" ]; then
-            printf 'No active sessions.\n'
-            return 0
-        fi
-
-        local total_active
-        total_active="$(printf '%s\n' "$active_lines" | wc -l | tr -d ' ')"
-
-        if [ "$abs_n" -gt "$total_active" ]; then
-            clk__die 1 "Index ${abs_n} out of range. Only ${total_active} active session(s)."
-        fi
-
-        # head -n abs_n gives the first abs_n lines; tail -n 1 picks the newest of those
-        local lineno
-        lineno="$(printf '%s\n' "$active_lines" | head -n "${abs_n}" | tail -n 1)"
-
-        local line_content
-        line_content="$(clk__get_line "$lineno")"
-        CLK_FMT_RAW=1
-        local formatted
-        formatted="$(clk__fmt_record "$line_content")"
-        CLK_FMT_RAW=0
-
-        local this_tag="${formatted%%  *}"
-        local this_rest="${formatted#*  }"
-        printf "+%d  %s  %s\n" "$abs_n" "$this_tag" "$this_rest"
+    # Cap n at the number of done records — asking for more than exists
+    # is a reasonable request ("show me the last 100") and should not error.
+    if [ "$n" -gt "$total_done" ]; then
+        n="$total_done"
     fi
+
+    local i="$n"
+    while [ "$i" -ge 1 ]; do
+        clk__show_done_at "$i"
+        i=$(( i - 1 ))
+    done
 }
 
 # --- clk_do_pause ---
@@ -3120,13 +3145,14 @@ last|l)
     clk_subcmd="last"
     shift
     if [ $# -gt 0 ]; then
-        if printf '%s' "$1" | grep -Eq '^-[1-9][0-9]*$' || printf '%s' "$1" | grep -Eq '^[1-9][0-9]*$'; then
-            clk_last_n="$1"
+        if printf '%s' "$1" | grep -Eq '^[1-9][0-9]*$'; then
+            clk_last_n="$1"; shift
         else
-            clk__die 1 "Expected a nonzero integer (e.g., -1 or 2) for 'clk last', got '$1'."
+            clk__die 1 "Expected a positive integer (e.g., 3) for 'clk last', got '$1'."
         fi
     fi
-    clk_do_last "${clk_last_n:--1}"
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk last [<n>]'"
+    clk_do_last "${clk_last_n:-1}"
     ;;
 
 pause|p)
@@ -3514,8 +3540,8 @@ alias)
     ;;
 
 -[0-9]*)
-    # Ambiguous: `clk -<n>` is `last -<n>`, but `clk -<n> <unit> ...` is `view -<n> <unit>`.
-    # Peek at the next token to disambiguate.
+    # Ambiguous: `clk -<n>` shows a single done record, but `clk -<n> <unit> ...`
+    # is a view range. Peek at the next token to disambiguate.
     if [ $# -ge 2 ]; then
         case "$2" in
             hour|hours|day|days|week|weeks|month|months|year|years)
@@ -3524,11 +3550,24 @@ alias)
                 ;;
         esac
     fi
-    # Syntactic sugar: clk -<n> → clk last -<n>
+    # Show a single done session: clk -<n> prints only the Nth-to-last done.
     clk_subcmd="last"
     clk_last_n="$1"
     clk__validate_positive_int "${clk_last_n#-}" "<n> in 'clk -<n>'"
-    clk_do_last "$clk_last_n"
+    [ $# -eq 1 ] || clk__die 1 "Too many arguments. Usage: 'clk -<n>'"
+    clk__show_done_at "${clk_last_n#-}"
+    ;;
+
+[1-9]*)
+    # Show a single active session: clk <n> prints only the Nth-oldest active.
+    # (Tags must not be purely numeric, per 'clk in', so this is unambiguous.)
+    if ! printf '%s' "$1" | grep -Eq '^[1-9][0-9]*$'; then
+        clk__die 1 "Unknown command '$1'. Run 'clk' with no arguments for usage."
+    fi
+    clk_subcmd="last"
+    clk_pos_n="$1"
+    [ $# -eq 1 ] || clk__die 1 "Too many arguments. Usage: 'clk <n>'"
+    clk__show_active_at "$clk_pos_n"
     ;;
 
 all|past|from|this|today|yesterday)

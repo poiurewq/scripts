@@ -57,10 +57,10 @@
 .Bro Cm status | Cm s Brc
 .br
 .Nm
-.Bro Cm last | Cm l Brc Op Bro Fl Ar n | Ar n Brc
+.Bro Cm last | Cm l Brc Op Ar n
 .br
 .Nm
-.Fl Ar n
+.Bro Fl Ar n | Ar n Brc
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
@@ -291,7 +291,23 @@ Show all active sessions with their tag, start time, elapsed active time,
 break time, pause state, and description.
 If no sessions are active, prints
 .Dq \&No active sessions .
-.It Bro Cm last | Cm l Brc Op Bro Fl Ar n | Ar n Brc
+.It Bro Cm last | Cm l Brc Op Ar n
+Show the last
+.Ar n
+completed sessions, one per line, with their
+.Fl 1 , Fl 2 , No ...
+.Fl Ar n
+index prefixes.
+.Ar n
+must be a positive integer; the default is 1.
+If
+.Ar n
+exceeds the number of completed sessions, all available are shown
+.Pq no error .
+.Cm last
+only looks at the done pool; active sessions are never shown.
+Full ISO\ 8601 timestamps are shown for inspection.
+.It Bro Fl Ar n | Ar n Brc
 Show a single session by index.
 A negative index
 .Fl Ar n
@@ -307,26 +323,18 @@ counts forward from the oldest active session:
 is the oldest active session,
 .Ar 2
 is second-oldest, and so on.
-With no argument,
-.Fl 1
-is the default.
 The index prefix in the output
 .Pq e.g.\& Fl 3 No or No +2
 matches the convention used by
 .Cm edit .
-Full ISO\ 8601 timestamps are shown for inspection.
 .Pp
-The shorthand
-.Nm Fl Ar n
-.Pq e.g., Nm Fl 3
-is equivalent to
-.Nm Cm last Fl Ar n .
-If followed by a time unit, however,
+If a negative index is followed by a time unit, however,
 .Nm Fl Ar n Ar unit
 is interpreted as a
 .Cm view
 range
-.Pq e.g., Ql clk -1 month = Ql clk view -1 month .
+.Pq e.g., Ql clk -1 month = Ql clk view -1 month
+rather than a single-record lookup.
 .It Cm log
 Open the log file in
 .Ev VISUAL ,
@@ -491,8 +499,9 @@ are collected as the description.
 Delete the record entirely.
 .El
 .Pp
-The index uses the same signed convention as
-.Cm last :
+The index uses the same signed convention as the
+.Nm Bro Fl Ar n | Ar n Brc
+single-record shortcut:
 a negative index
 .Fl Ar n
 counts back from the most recent completed session
@@ -618,11 +627,17 @@ This matches
 .Ql dev.backend.api ,
 and so on.
 .Ss Inspecting and editing records
-Show the last 5 records:
+Show the last 5 completed records (indices
+.Fl 5
+through
+.Fl 1 ) :
 .Dl $ clk last 5
 .Pp
-Or equivalently:
-.Dl $ clk -5
+Show just the second-to-last completed record:
+.Dl $ clk -2
+.Pp
+Show just the oldest active session:
+.Dl $ clk 1
 .Pp
 Change the tag on the most recent record:
 .Dl $ clk edit -1 tag admin
