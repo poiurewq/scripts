@@ -59,15 +59,15 @@ clk [help]
     edit | e (-<n> | <n>) {tag|start|end|break|pause|on} <value>
     edit | e (-<n> | <n>) delete
     log
-    today | yesterday
     view | v <range> [<filter>]
+    <range> [<filter>]
     alias
 
 <range>:
-    {all | today | yesterday}
-    {-<n> | current | this} <unit> [through ...]
+    all | today | yesterday
+    {-<n> | this} <unit> [through ...]
     past [<n>] <unit> [before <timestamp> | before minus <minutes>]
-    from <timestamp> {until | to} <timestamp>
+    from <timestamp> to <timestamp>
 
 <filter>:
     [for <tag,tag.,...>] [by {day|week|month|session}]
@@ -2637,6 +2637,350 @@ clk__view_render_bars() {
 }
 
 #####################################################################
+# View dispatch — shared parser for both `clk view ...` and the
+# bare-keyword forms (`clk today`, `clk -1 month`, `clk from ... to ...`).
+#####################################################################
+
+# clk__run_view <args...>
+# Parses a view range expression from its positional args and invokes
+# clk_do_view. Accepts the same grammar as the former `clk view <range>`
+# subcommand, minus the `view` keyword itself. Called both from the
+# `view|v)` dispatch branch and from bare top-level range keywords.
+clk__run_view() {
+    if [ $# -eq 0 ]; then
+        clk__die 1 "Missing arguments. Usage: 'clk today', 'clk past <n> <unit>', or 'clk from <ts> to <ts>'."
+    fi
+
+    local view_start_epoch=""
+    local view_end_epoch=""
+    local view_range_desc=""
+    local view_n view_unit view_unit_display view_anchor_epoch before_minus_val now_ep duration_secs
+    local view_offset view_offset_unit view_thru_offset view_thru_unit view_thru_label
+    local view_filter_tag view_group_by from_ts until_ts
+
+    case "$1" in
+        all)
+            shift
+            view_start_epoch=0
+            view_end_epoch="$(clk__now_epoch)"
+            view_range_desc="All time"
+            ;;
+        past)
+            shift
+            view_n=1
+            view_unit=""
+
+            if [ $# -eq 0 ]; then
+                clk__die 1 "Missing time unit after 'past'. Usage: 'clk past [<n>] <hour(s)|day(s)|week(s)|month(s)|year(s)>'."
+            fi
+
+            if printf '%s' "$1" | grep -Eq '^[0-9]+$'; then
+                view_n="$1"; shift
+            fi
+
+            if [ $# -eq 0 ]; then
+                clk__die 1 "Missing time unit. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'."
+            fi
+
+            case "$1" in
+                hour|hours)   view_unit="hours"; shift ;;
+                day|days)     view_unit="days"; shift ;;
+                week|weeks)   view_unit="weeks"; shift ;;
+                month|months) view_unit="months"; shift ;;
+                year|years)   view_unit="years"; shift ;;
+                *) clk__die 1 "Unknown time unit '$1'. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'." ;;
+            esac
+
+            view_anchor_epoch="$(clk__now_epoch)"
+
+            if [ $# -gt 0 ]; then
+                if [ "$1" = "before" ]; then
+                    shift
+                    if [ $# -eq 0 ]; then
+                        clk__die 1 "Missing value after 'before'. Expected a timestamp or 'minus <minutes>'."
+                    fi
+                    if [ "$1" = "minus" ]; then
+                        shift
+                        [ $# -ge 1 ] || clk__die 1 "Missing <minutes> after 'before minus'."
+                        clk__validate_positive_int "$1" "<minutes> after 'before minus'"
+                        before_minus_val="$1"; shift
+                        now_ep="$(clk__now_epoch)"
+                        view_anchor_epoch=$(( now_ep - before_minus_val * 60 ))
+                    else
+                        clk__consume_timestamp "$1" "${2:-}"
+                        view_anchor_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
+                        shift $CLK_TIMESTAMP_ARGC
+                    fi
+                elif [ "$1" != "for" ] && [ "$1" != "by" ]; then
+                    clk__die 1 "Unexpected argument '$1'. Expected 'before', 'for', 'by', or end of command."
+                fi
+            fi
+
+            duration_secs=0
+            case "$view_unit" in
+                hours)  duration_secs=$(( view_n * 3600 )) ;;
+                days)   duration_secs=$(( view_n * 86400 )) ;;
+                weeks)  duration_secs=$(( view_n * 604800 )) ;;
+                months) duration_secs=$(( view_n * 2592000 )) ;;
+                years)  duration_secs=$(( view_n * 31536000 )) ;;
+            esac
+
+            view_end_epoch="$view_anchor_epoch"
+            view_start_epoch=$(( view_anchor_epoch - duration_secs ))
+            view_unit_display="$view_unit"
+            if [ "$view_n" -eq 1 ]; then
+                view_unit_display="${view_unit%s}"
+            fi
+            view_range_desc="Past ${view_n} ${view_unit_display}"
+            ;;
+        from)
+            shift
+            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'from'."
+            clk__consume_timestamp "$1" "${2:-}"
+            view_start_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
+            shift $CLK_TIMESTAMP_ARGC
+
+            if [ $# -eq 0 ] || [ "$1" != "to" ]; then
+                clk__die 1 "Expected 'to <timestamp>' after 'from <timestamp>'."
+            fi
+            shift  # consume 'to'
+            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'to'."
+            clk__consume_timestamp "$1" "${2:-}"
+            view_end_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
+            shift $CLK_TIMESTAMP_ARGC
+
+            from_ts="$(clk__from_epoch "$view_start_epoch")"
+            until_ts="$(clk__from_epoch "$view_end_epoch")"
+            view_range_desc="$(clk__fmt_ts_display "$from_ts") → $(clk__fmt_ts_display "$until_ts")"
+            ;;
+        -[0-9]*|this|today|yesterday)
+            view_offset_unit=""
+            case "$1" in
+                today)     view_offset=0; view_offset_unit="day" ;;
+                yesterday) view_offset=1; view_offset_unit="day" ;;
+                this)      view_offset=0 ;;
+                *)
+                    view_offset="${1#-}"
+                    if ! printf '%s' "$view_offset" | grep -Eq '^[0-9]+$'; then
+                        clk__die 1 "Invalid offset '$1'. Expected '-<n>' (e.g., '-0', '-3')."
+                    fi
+                    ;;
+            esac
+            shift
+
+            if [ -z "$view_offset_unit" ]; then
+                [ $# -ge 1 ] || clk__die 1 "Missing time unit after offset. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'."
+                view_offset_unit="$1"; shift
+            fi
+
+            case "$view_offset_unit" in
+                hour|hours)
+                    view_start_epoch="$(clk__hour_start_epoch "-$view_offset")"
+                    if [ "$view_offset" -eq 0 ]; then
+                        view_end_epoch="$(clk__now_epoch)"
+                        view_range_desc="This hour"
+                    else
+                        view_end_epoch="$(clk__hour_start_epoch "-$(( view_offset - 1 ))")"
+                        if [ "$view_offset" -eq 1 ]; then
+                            view_range_desc="Last hour"
+                        else
+                            view_range_desc="${view_offset} hours ago"
+                        fi
+                    fi
+                    ;;
+                day|days)
+                    view_start_epoch="$(clk__midnight_epoch "-$view_offset")"
+                    if [ "$view_offset" -eq 0 ]; then
+                        view_end_epoch="$(clk__now_epoch)"
+                        view_range_desc="Today"
+                    else
+                        view_end_epoch="$(clk__midnight_epoch "-$(( view_offset - 1 ))")"
+                        if [ "$view_offset" -eq 1 ]; then
+                            view_range_desc="Yesterday"
+                        else
+                            view_range_desc="${view_offset} days ago"
+                        fi
+                    fi
+                    ;;
+                week|weeks)
+                    view_start_epoch="$(clk__week_start_epoch "-$view_offset")"
+                    if [ "$view_offset" -eq 0 ]; then
+                        view_end_epoch="$(clk__now_epoch)"
+                        view_range_desc="This week"
+                    else
+                        view_end_epoch="$(clk__week_start_epoch "-$(( view_offset - 1 ))")"
+                        if [ "$view_offset" -eq 1 ]; then
+                            view_range_desc="Last week"
+                        else
+                            view_range_desc="${view_offset} weeks ago"
+                        fi
+                    fi
+                    ;;
+                month|months)
+                    view_start_epoch="$(clk__month_start_epoch "-$view_offset")"
+                    if [ "$view_offset" -eq 0 ]; then
+                        view_end_epoch="$(clk__now_epoch)"
+                        view_range_desc="This month"
+                    else
+                        view_end_epoch="$(clk__month_start_epoch "-$(( view_offset - 1 ))")"
+                        if [ "$view_offset" -eq 1 ]; then
+                            view_range_desc="Last month"
+                        else
+                            view_range_desc="${view_offset} months ago"
+                        fi
+                    fi
+                    ;;
+                year|years)
+                    view_start_epoch="$(clk__year_start_epoch "-$view_offset")"
+                    if [ "$view_offset" -eq 0 ]; then
+                        view_end_epoch="$(clk__now_epoch)"
+                        view_range_desc="This year"
+                    else
+                        view_end_epoch="$(clk__year_start_epoch "-$(( view_offset - 1 ))")"
+                        if [ "$view_offset" -eq 1 ]; then
+                            view_range_desc="Last year"
+                        else
+                            view_range_desc="${view_offset} years ago"
+                        fi
+                    fi
+                    ;;
+                *) clk__die 1 "Unknown time unit '$view_offset_unit'. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'." ;;
+            esac
+
+            # Optional: through {-<m> | this | today | yesterday} [<unit>]
+            if [ $# -gt 0 ] && [ "$1" = "through" ]; then
+                shift
+                [ $# -ge 1 ] || clk__die 1 "Missing offset after 'through'. Expected '-<n>', 'this', 'today', or 'yesterday'."
+                view_thru_unit=""
+                case "$1" in
+                    today)     view_thru_offset=0; view_thru_unit="day" ;;
+                    yesterday) view_thru_offset=1; view_thru_unit="day" ;;
+                    this)      view_thru_offset=0 ;;
+                    *)
+                        view_thru_offset="${1#-}"
+                        if ! printf '%s' "$view_thru_offset" | grep -Eq '^[0-9]+$'; then
+                            clk__die 1 "Invalid offset '$1' after 'through'. Expected '-<n>', 'this', 'today', or 'yesterday'."
+                        fi
+                        ;;
+                esac
+                shift
+
+                if [ -z "$view_thru_unit" ]; then
+                    [ $# -ge 1 ] || clk__die 1 "Missing time unit after 'through' offset. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'."
+                    view_thru_unit="$1"; shift
+                fi
+
+                view_thru_label=""
+                case "$view_thru_unit" in
+                    hour|hours)
+                        if [ "$view_thru_offset" -eq 0 ]; then
+                            view_end_epoch="$(clk__now_epoch)"
+                            view_thru_label="this hour"
+                        else
+                            view_end_epoch="$(clk__hour_start_epoch "-$(( view_thru_offset - 1 ))")"
+                            if [ "$view_thru_offset" -eq 1 ]; then
+                                view_thru_label="last hour"
+                            else
+                                view_thru_label="${view_thru_offset} hours ago"
+                            fi
+                        fi
+                        ;;
+                    day|days)
+                        if [ "$view_thru_offset" -eq 0 ]; then
+                            view_end_epoch="$(clk__now_epoch)"
+                            view_thru_label="today"
+                        else
+                            view_end_epoch="$(clk__midnight_epoch "-$(( view_thru_offset - 1 ))")"
+                            if [ "$view_thru_offset" -eq 1 ]; then
+                                view_thru_label="yesterday"
+                            else
+                                view_thru_label="${view_thru_offset} days ago"
+                            fi
+                        fi
+                        ;;
+                    week|weeks)
+                        if [ "$view_thru_offset" -eq 0 ]; then
+                            view_end_epoch="$(clk__now_epoch)"
+                            view_thru_label="this week"
+                        else
+                            view_end_epoch="$(clk__week_start_epoch "-$(( view_thru_offset - 1 ))")"
+                            if [ "$view_thru_offset" -eq 1 ]; then
+                                view_thru_label="last week"
+                            else
+                                view_thru_label="${view_thru_offset} weeks ago"
+                            fi
+                        fi
+                        ;;
+                    month|months)
+                        if [ "$view_thru_offset" -eq 0 ]; then
+                            view_end_epoch="$(clk__now_epoch)"
+                            view_thru_label="this month"
+                        else
+                            view_end_epoch="$(clk__month_start_epoch "-$(( view_thru_offset - 1 ))")"
+                            if [ "$view_thru_offset" -eq 1 ]; then
+                                view_thru_label="last month"
+                            else
+                                view_thru_label="${view_thru_offset} months ago"
+                            fi
+                        fi
+                        ;;
+                    year|years)
+                        if [ "$view_thru_offset" -eq 0 ]; then
+                            view_end_epoch="$(clk__now_epoch)"
+                            view_thru_label="this year"
+                        else
+                            view_end_epoch="$(clk__year_start_epoch "-$(( view_thru_offset - 1 ))")"
+                            if [ "$view_thru_offset" -eq 1 ]; then
+                                view_thru_label="last year"
+                            else
+                                view_thru_label="${view_thru_offset} years ago"
+                            fi
+                        fi
+                        ;;
+                    *) clk__die 1 "Unknown time unit '$view_thru_unit' after 'through'. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'." ;;
+                esac
+
+                if [ "$view_end_epoch" -le "$view_start_epoch" ]; then
+                    clk__die 1 "'through' end must be after start. The 'through' period must be more recent than the starting period."
+                fi
+
+                view_range_desc="${view_range_desc} through ${view_thru_label}"
+            fi
+            ;;
+        *)
+            clk__die 1 "Unknown view range '$1'. Expected 'all', 'today', 'yesterday', 'past', 'from', '-<n>', or 'this'."
+            ;;
+    esac
+
+    # Optional: for <tag> — filter by tag
+    view_filter_tag=""
+    if [ $# -gt 0 ] && [ "$1" = "for" ]; then
+        shift
+        [ $# -ge 1 ] || clk__die 1 "Missing <tag> after 'for'."
+        view_filter_tag="$1"; shift
+    fi
+
+    # Optional: by <day|week|month|session> — group by time bucket
+    view_group_by=""
+    if [ $# -gt 0 ] && [ "$1" = "by" ]; then
+        shift
+        [ $# -ge 1 ] || clk__die 1 "Missing <day|week|month|session> after 'by'."
+        case "$1" in
+            day)     view_group_by="day"; shift ;;
+            week)    view_group_by="week"; shift ;;
+            month)   view_group_by="month"; shift ;;
+            session) view_group_by="session"; shift ;;
+            *) clk__die 1 "Unknown grouping '$1'. Expected 'day', 'week', 'month', or 'session'." ;;
+        esac
+    fi
+
+    [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after range."
+
+    clk_subcmd="view"
+    clk_do_view "$view_start_epoch" "$view_end_epoch" "$view_range_desc" "$view_filter_tag" "$view_group_by"
+}
+
+#####################################################################
 # Main — guarded so the script can be sourced for testing
 #####################################################################
 
@@ -3081,345 +3425,10 @@ redo)
     ;;
 
 view|v)
-    clk_subcmd="view"
     shift
-    if [ $# -eq 0 ]; then
-        clk__die 1 "Missing arguments. Usage: 'clk view today', 'clk view past <n> <unit>', or 'clk view from <ts> until <ts>'."
-    fi
-
-    view_start_epoch=""
-    view_end_epoch=""
-    view_range_desc=""
-
-    case "$1" in
-        all)
-            shift
-            view_start_epoch=0
-            view_end_epoch="$(clk__now_epoch)"
-            view_range_desc="All time"
-            ;;
-        past)
-            shift
-            # past [<n>] <unit> [before <timestamp> | before minus <minutes>]
-            view_n=1
-            view_unit=""
-
-            if [ $# -eq 0 ]; then
-                clk__die 1 "Missing time unit after 'past'. Usage: 'clk view past [<n>] <hour(s)|day(s)|week(s)|month(s)|year(s)>'."
-            fi
-
-            # If first arg is a number, it's the count
-            if printf '%s' "$1" | grep -Eq '^[0-9]+$'; then
-                view_n="$1"; shift
-            fi
-
-            if [ $# -eq 0 ]; then
-                clk__die 1 "Missing time unit. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'."
-            fi
-
-            # --- RATIONALE: Plurality leniency in view ---
-            # hour/hours, day/days, week/weeks are all accepted. Natural language is
-            # lenient; the CLI should be too when intent is unambiguous.
-            case "$1" in
-                hour|hours)   view_unit="hours"; shift ;;
-                day|days)     view_unit="days"; shift ;;
-                week|weeks)   view_unit="weeks"; shift ;;
-                month|months) view_unit="months"; shift ;;
-                year|years)   view_unit="years"; shift ;;
-                *) clk__die 1 "Unknown time unit '$1'. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'." ;;
-            esac
-
-            # Default anchor is now
-            view_anchor_epoch="$(clk__now_epoch)"
-
-            # Optional: before <timestamp> | before minus <minutes>
-            if [ $# -gt 0 ]; then
-                if [ "$1" = "before" ]; then
-                    shift
-                    if [ $# -eq 0 ]; then
-                        clk__die 1 "Missing value after 'before'. Expected a timestamp or 'minus <minutes>'."
-                    fi
-                    if [ "$1" = "minus" ]; then
-                        shift
-                        [ $# -ge 1 ] || clk__die 1 "Missing <minutes> after 'before minus'."
-                        clk__validate_positive_int "$1" "<minutes> after 'before minus'"
-                        before_minus_val="$1"; shift
-                        now_ep="$(clk__now_epoch)"
-                        view_anchor_epoch=$(( now_ep - before_minus_val * 60 ))
-                    else
-                        clk__consume_timestamp "$1" "${2:-}"
-                        view_anchor_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
-                        shift $CLK_TIMESTAMP_ARGC
-                    fi
-                elif [ "$1" != "for" ] && [ "$1" != "by" ]; then
-                    clk__die 1 "Unexpected argument '$1'. Expected 'before', 'for', 'by', or end of command."
-                fi
-            fi
-
-            duration_secs=0
-            case "$view_unit" in
-                hours)  duration_secs=$(( view_n * 3600 )) ;;
-                days)   duration_secs=$(( view_n * 86400 )) ;;
-                weeks)  duration_secs=$(( view_n * 604800 )) ;;
-                months) duration_secs=$(( view_n * 2592000 )) ;;
-                years)  duration_secs=$(( view_n * 31536000 )) ;;
-            esac
-
-            view_end_epoch="$view_anchor_epoch"
-            view_start_epoch=$(( view_anchor_epoch - duration_secs ))
-            # Singularize unit when count is 1
-            view_unit_display="$view_unit"
-            if [ "$view_n" -eq 1 ]; then
-                view_unit_display="${view_unit%s}"
-            fi
-            view_range_desc="Past ${view_n} ${view_unit_display}"
-            ;;
-        from)
-            shift
-            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'from'."
-            clk__consume_timestamp "$1" "${2:-}"
-            view_start_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
-            shift $CLK_TIMESTAMP_ARGC
-
-            if [ $# -eq 0 ] || { [ "$1" != "until" ] && [ "$1" != "to" ]; }; then
-                clk__die 1 "Expected 'until|to <timestamp>' after 'from <timestamp>'."
-            fi
-            shift  # consume 'until' or 'to'
-            [ $# -ge 1 ] || clk__die 1 "Missing <timestamp> after 'until/to'."
-            clk__consume_timestamp "$1" "${2:-}"
-            view_end_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
-            shift $CLK_TIMESTAMP_ARGC
-
-            from_ts="$(clk__from_epoch "$view_start_epoch")"
-            until_ts="$(clk__from_epoch "$view_end_epoch")"
-            view_range_desc="$(clk__fmt_ts_display "$from_ts") → $(clk__fmt_ts_display "$until_ts")"
-            ;;
-        -[0-9]*|current|this|today|yesterday)
-            view_offset_unit=""
-            case "$1" in
-                today)     view_offset=0; view_offset_unit="day" ;;
-                yesterday) view_offset=1; view_offset_unit="day" ;;
-                current|this) view_offset=0 ;;
-                *)
-                    view_offset="${1#-}"
-                    if ! printf '%s' "$view_offset" | grep -Eq '^[0-9]+$'; then
-                        clk__die 1 "Invalid offset '$1'. Expected '-<n>' (e.g., '-0', '-3')."
-                    fi
-                    ;;
-            esac
-            shift
-
-            # today/yesterday imply day; others require explicit unit
-            if [ -z "$view_offset_unit" ]; then
-                [ $# -ge 1 ] || clk__die 1 "Missing time unit after offset. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'."
-                view_offset_unit="$1"; shift
-            fi
-
-            case "$view_offset_unit" in
-                hour|hours)
-                    view_start_epoch="$(clk__hour_start_epoch "-$view_offset")"
-                    if [ "$view_offset" -eq 0 ]; then
-                        view_end_epoch="$(clk__now_epoch)"
-                        view_range_desc="This hour"
-                    else
-                        view_end_epoch="$(clk__hour_start_epoch "-$(( view_offset - 1 ))")"
-                        if [ "$view_offset" -eq 1 ]; then
-                            view_range_desc="Last hour"
-                        else
-                            view_range_desc="${view_offset} hours ago"
-                        fi
-                    fi
-                    ;;
-                day|days)
-                    view_start_epoch="$(clk__midnight_epoch "-$view_offset")"
-                    if [ "$view_offset" -eq 0 ]; then
-                        view_end_epoch="$(clk__now_epoch)"
-                        view_range_desc="Today"
-                    else
-                        view_end_epoch="$(clk__midnight_epoch "-$(( view_offset - 1 ))")"
-                        if [ "$view_offset" -eq 1 ]; then
-                            view_range_desc="Yesterday"
-                        else
-                            view_range_desc="${view_offset} days ago"
-                        fi
-                    fi
-                    ;;
-                week|weeks)
-                    view_start_epoch="$(clk__week_start_epoch "-$view_offset")"
-                    if [ "$view_offset" -eq 0 ]; then
-                        view_end_epoch="$(clk__now_epoch)"
-                        view_range_desc="This week"
-                    else
-                        view_end_epoch="$(clk__week_start_epoch "-$(( view_offset - 1 ))")"
-                        if [ "$view_offset" -eq 1 ]; then
-                            view_range_desc="Last week"
-                        else
-                            view_range_desc="${view_offset} weeks ago"
-                        fi
-                    fi
-                    ;;
-                month|months)
-                    view_start_epoch="$(clk__month_start_epoch "-$view_offset")"
-                    if [ "$view_offset" -eq 0 ]; then
-                        view_end_epoch="$(clk__now_epoch)"
-                        view_range_desc="This month"
-                    else
-                        view_end_epoch="$(clk__month_start_epoch "-$(( view_offset - 1 ))")"
-                        if [ "$view_offset" -eq 1 ]; then
-                            view_range_desc="Last month"
-                        else
-                            view_range_desc="${view_offset} months ago"
-                        fi
-                    fi
-                    ;;
-                year|years)
-                    view_start_epoch="$(clk__year_start_epoch "-$view_offset")"
-                    if [ "$view_offset" -eq 0 ]; then
-                        view_end_epoch="$(clk__now_epoch)"
-                        view_range_desc="This year"
-                    else
-                        view_end_epoch="$(clk__year_start_epoch "-$(( view_offset - 1 ))")"
-                        if [ "$view_offset" -eq 1 ]; then
-                            view_range_desc="Last year"
-                        else
-                            view_range_desc="${view_offset} years ago"
-                        fi
-                    fi
-                    ;;
-                *) clk__die 1 "Unknown time unit '$view_offset_unit'. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'." ;;
-            esac
-
-            # Optional: through {-<m> | current | this | today | yesterday} [<unit>]
-            if [ $# -gt 0 ] && [ "$1" = "through" ]; then
-                shift
-                [ $# -ge 1 ] || clk__die 1 "Missing offset after 'through'. Expected '-<n>', 'current', 'today', or 'yesterday'."
-                view_thru_unit=""
-                case "$1" in
-                    today)          view_thru_offset=0; view_thru_unit="day" ;;
-                    yesterday)      view_thru_offset=1; view_thru_unit="day" ;;
-                    current|this)   view_thru_offset=0 ;;
-                    *)
-                        view_thru_offset="${1#-}"
-                        if ! printf '%s' "$view_thru_offset" | grep -Eq '^[0-9]+$'; then
-                            clk__die 1 "Invalid offset '$1' after 'through'. Expected '-<n>', 'current', 'today', or 'yesterday'."
-                        fi
-                        ;;
-                esac
-                shift
-
-                if [ -z "$view_thru_unit" ]; then
-                    [ $# -ge 1 ] || clk__die 1 "Missing time unit after 'through' offset. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'."
-                    view_thru_unit="$1"; shift
-                fi
-
-                view_thru_label=""
-                case "$view_thru_unit" in
-                    hour|hours)
-                        if [ "$view_thru_offset" -eq 0 ]; then
-                            view_end_epoch="$(clk__now_epoch)"
-                            view_thru_label="this hour"
-                        else
-                            view_end_epoch="$(clk__hour_start_epoch "-$(( view_thru_offset - 1 ))")"
-                            if [ "$view_thru_offset" -eq 1 ]; then
-                                view_thru_label="last hour"
-                            else
-                                view_thru_label="${view_thru_offset} hours ago"
-                            fi
-                        fi
-                        ;;
-                    day|days)
-                        if [ "$view_thru_offset" -eq 0 ]; then
-                            view_end_epoch="$(clk__now_epoch)"
-                            view_thru_label="today"
-                        else
-                            view_end_epoch="$(clk__midnight_epoch "-$(( view_thru_offset - 1 ))")"
-                            if [ "$view_thru_offset" -eq 1 ]; then
-                                view_thru_label="yesterday"
-                            else
-                                view_thru_label="${view_thru_offset} days ago"
-                            fi
-                        fi
-                        ;;
-                    week|weeks)
-                        if [ "$view_thru_offset" -eq 0 ]; then
-                            view_end_epoch="$(clk__now_epoch)"
-                            view_thru_label="this week"
-                        else
-                            view_end_epoch="$(clk__week_start_epoch "-$(( view_thru_offset - 1 ))")"
-                            if [ "$view_thru_offset" -eq 1 ]; then
-                                view_thru_label="last week"
-                            else
-                                view_thru_label="${view_thru_offset} weeks ago"
-                            fi
-                        fi
-                        ;;
-                    month|months)
-                        if [ "$view_thru_offset" -eq 0 ]; then
-                            view_end_epoch="$(clk__now_epoch)"
-                            view_thru_label="this month"
-                        else
-                            view_end_epoch="$(clk__month_start_epoch "-$(( view_thru_offset - 1 ))")"
-                            if [ "$view_thru_offset" -eq 1 ]; then
-                                view_thru_label="last month"
-                            else
-                                view_thru_label="${view_thru_offset} months ago"
-                            fi
-                        fi
-                        ;;
-                    year|years)
-                        if [ "$view_thru_offset" -eq 0 ]; then
-                            view_end_epoch="$(clk__now_epoch)"
-                            view_thru_label="this year"
-                        else
-                            view_end_epoch="$(clk__year_start_epoch "-$(( view_thru_offset - 1 ))")"
-                            if [ "$view_thru_offset" -eq 1 ]; then
-                                view_thru_label="last year"
-                            else
-                                view_thru_label="${view_thru_offset} years ago"
-                            fi
-                        fi
-                        ;;
-                    *) clk__die 1 "Unknown time unit '$view_thru_unit' after 'through'. Expected 'hour(s)', 'day(s)', 'week(s)', 'month(s)', or 'year(s)'." ;;
-                esac
-
-                if [ "$view_end_epoch" -le "$view_start_epoch" ]; then
-                    clk__die 1 "'through' end must be after start. The 'through' period must be more recent than the starting period."
-                fi
-
-                view_range_desc="${view_range_desc} through ${view_thru_label}"
-            fi
-            ;;
-        *)
-            clk__die 1 "Unknown view mode '$1'. Expected 'all', 'today', 'yesterday', 'past', 'from', '-<n>', 'current', or 'this'."
-            ;;
-    esac
-
-    # Optional: for <tag> — filter by tag
-    view_filter_tag=""
-    if [ $# -gt 0 ] && [ "$1" = "for" ]; then
-        shift
-        [ $# -ge 1 ] || clk__die 1 "Missing <tag> after 'for'."
-        view_filter_tag="$1"; shift
-    fi
-
-    # Optional: by <day|week|month|session> — group by time bucket
-    view_group_by=""
-    if [ $# -gt 0 ] && [ "$1" = "by" ]; then
-        shift
-        [ $# -ge 1 ] || clk__die 1 "Missing <day|week|month|session> after 'by'."
-        case "$1" in
-            day)     view_group_by="day"; shift ;;
-            week)    view_group_by="week"; shift ;;
-            month)   view_group_by="month"; shift ;;
-            session) view_group_by="session"; shift ;;
-            *) clk__die 1 "Unknown grouping '$1'. Expected 'day', 'week', 'month', or 'session'." ;;
-        esac
-    fi
-
-    [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk view'."
-
-    clk_do_view "$view_start_epoch" "$view_end_epoch" "$view_range_desc" "$view_filter_tag" "$view_group_by"
+    clk__run_view "$@"
     ;;
+
 
 edit|e)
     clk_subcmd="edit"
@@ -3505,6 +3514,16 @@ alias)
     ;;
 
 -[0-9]*)
+    # Ambiguous: `clk -<n>` is `last -<n>`, but `clk -<n> <unit> ...` is `view -<n> <unit>`.
+    # Peek at the next token to disambiguate.
+    if [ $# -ge 2 ]; then
+        case "$2" in
+            hour|hours|day|days|week|weeks|month|months|year|years)
+                clk__run_view "$@"
+                exit $?
+                ;;
+        esac
+    fi
     # Syntactic sugar: clk -<n> → clk last -<n>
     clk_subcmd="last"
     clk_last_n="$1"
@@ -3512,20 +3531,9 @@ alias)
     clk_do_last "$clk_last_n"
     ;;
 
-today|yesterday)
-    # Syntactic sugar: clk today → clk view today, clk yesterday → clk view yesterday
-    clk_subcmd="view"
-    case "$1" in
-        today)     view_offset=0; view_range_desc="Today" ;;
-        yesterday) view_offset=1; view_range_desc="Yesterday" ;;
-    esac
-    view_start_epoch="$(clk__midnight_epoch "-$view_offset")"
-    if [ "$view_offset" -eq 0 ]; then
-        view_end_epoch="$(clk__now_epoch)"
-    else
-        view_end_epoch="$(clk__midnight_epoch "-$(( view_offset - 1 ))")"
-    fi
-    clk_do_view "$view_start_epoch" "$view_end_epoch" "$view_range_desc" "" ""
+all|past|from|this|today|yesterday)
+    # Syntactic sugar: bare range keywords dispatch to view.
+    clk__run_view "$@"
     ;;
 
 *)

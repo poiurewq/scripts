@@ -72,10 +72,10 @@
 .Cm log
 .br
 .Nm
-.Bro Cm today | Cm yesterday Brc
+.Bro Cm view | Cm v Brc Ar range Op Ar filter
 .br
 .Nm
-.Bro Cm view | Cm v Brc Ar range Op Ar filter
+.Ar range Op Ar filter
 .br
 .Nm
 .Cm alias
@@ -321,12 +321,12 @@ The shorthand
 .Pq e.g., Nm Fl 3
 is equivalent to
 .Nm Cm last Fl Ar n .
-.It Cm today
-Shorthand for
-.Nm Cm view Cm today .
-.It Cm yesterday
-Shorthand for
-.Nm Cm view Cm yesterday .
+If followed by a time unit, however,
+.Nm Fl Ar n Ar unit
+is interpreted as a
+.Cm view
+range
+.Pq e.g., Ql clk -1 month = Ql clk view -1 month .
 .It Cm log
 Open the log file in
 .Ev VISUAL ,
@@ -338,16 +338,27 @@ or
 The
 .Cm view
 command summarizes sessions over a time range with optional filtering.
+The
+.Cm view
+keyword is optional: any
+.Ar range
+may also be given directly as the top-level command, e.g.
+.Ql clk today ,
+.Ql clk past 3 days ,
+.Ql clk -1 month ,
+or
+.Ql clk from 2026-03-01 to 2026-03-15 .
 .Pp
 .D1 Nm Bro Cm view | Cm v Brc Ar range Op Ar filter
+.D1 Nm Ar range Op Ar filter
 .Pp
 .Ar range
 is one of:
 .Bl -tag -width indent -compact
 .It Bro Cm all | Cm today | Cm yesterday Brc
-.It Bro Fl Ar n | Cm current | Cm this Brc Ar unit Op Cm through No ...
+.It Bro Fl Ar n | Cm this Brc Ar unit Op Cm through No ...
 .It Cm past Op Ar n Ar unit Op Cm before Ar timestamp | Cm before Cm minus Ar minutes
-.It Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp
+.It Cm from Ar timestamp Cm to Ar timestamp
 .El
 .Pp
 .Ar filter
@@ -367,12 +378,10 @@ Summarize all sessions in the log.
 Summarize sessions from midnight today until now.
 .It Cm yesterday
 Summarize sessions from midnight yesterday until midnight today.
-.It Bro Fl Ar n | Cm current | Cm this Brc Ar unit Op Cm through No ...
+.It Bro Fl Ar n | Cm this Brc Ar unit Op Cm through No ...
 View sessions for a calendar period relative to the current one.
-.Cm current
-and
 .Cm this
-are aliases for
+is an alias for
 .Fl 0 .
 .Cm today
 is equivalent to
@@ -405,7 +414,7 @@ The
 .Cm through
 period must be more recent than the starting period.
 The same aliases
-.Pq Cm current , Cm this , Cm today , Cm yesterday
+.Pq Cm this , Cm today , Cm yesterday
 are accepted after
 .Cm through .
 Start and end units may differ
@@ -426,11 +435,8 @@ modifier anchors the lookback window to a point other than now:
 anchors to the given timestamp, and
 .Cm before Cm minus Ar minutes
 anchors to that many minutes ago.
-.It Cm from Ar timestamp Bro Cm until | Cm to Brc Ar timestamp
+.It Cm from Ar timestamp Cm to Ar timestamp
 Summarize sessions in an explicit time range.
-.Cm to
-is accepted as an alias for
-.Cm until .
 .El
 .Ss Filter details
 All
@@ -588,22 +594,23 @@ Log a session that ended at a specific time:
 Add 10 minutes to the current session (moves start time back):
 .Dl $ clk add 10
 .Ss Viewing time
-See what you did today, this week, or over any range:
+See what you did today, this week, or over any range
+.Pq the Cm view No keyword is optional :
 .Bd -literal -offset indent
-$ clk view today
-$ clk view -0 week
-$ clk view past 3 days
-$ clk view from 2026-03-01 to 2026-03-15
+$ clk today
+$ clk this week
+$ clk past 3 days
+$ clk from 2026-03-01 to 2026-03-15
 .Ed
 .Pp
 Filter by tag and see a bar chart grouped by day:
-.Dl $ clk view -0 month for dev by day
+.Dl $ clk this month for dev by day
 .Pp
 Combine multiple tags:
-.Dl $ clk view past 2 weeks for dev,pm by week
+.Dl $ clk past 2 weeks for dev,pm by week
 .Pp
 Match a tag and all its children with a trailing dot:
-.Dl $ clk view -0 month for dev. by session
+.Dl $ clk this month for dev. by session
 .Pp
 This matches
 .Ql dev ,

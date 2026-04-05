@@ -42,43 +42,43 @@ _view_setup_multi_day() {
     "$CLK_SCRIPT" out admin at '2026-03-19T14:30:00' >/dev/null 2>&1
 }
 
-test_view_from_until() {
+test_view_from_to_multi_tag() {
     "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-20T10:30:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
 
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' 2>&1)"
-    clk_test__assert_output_contains "TOTAL" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' &&
-    clk_test__assert_output_contains "dev" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' &&
-    clk_test__assert_output_contains "pm" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' &&
-    clk_test__assert_output_contains "150" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59'
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' 2>&1)"
+    clk_test__assert_output_contains "TOTAL" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' &&
+    clk_test__assert_output_contains "dev" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' &&
+    clk_test__assert_output_contains "pm" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' &&
+    clk_test__assert_output_contains "150" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
 }
 
-test_view_from_until_range_desc() {
+test_view_from_to_range_desc() {
     "$CLK_SCRIPT" in dev at '2026-01-15T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-01-15T10:00:00' >/dev/null 2>&1
-    clk_test__assert_output_contains "2026-01-15 00:00" "$CLK_SCRIPT" view from '2026-01-15T00:00:00' until '2026-01-15T23:59:59'
+    clk_test__assert_output_contains "2026-01-15 00:00" "$CLK_SCRIPT" view from '2026-01-15T00:00:00' to '2026-01-15T23:59:59'
 }
 
-test_view_from_until_correct_totals() {
+test_view_from_to_correct_totals() {
     "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-20T10:30:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
 
-    clk_test__assert_output_contains "2.50h" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59'
+    clk_test__assert_output_contains "2.50h" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
 }
 
-test_view_from_until_percentages() {
+test_view_from_to_percentages() {
     "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-20T10:30:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
 
-    clk_test__assert_output_contains "60.00%" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' &&
-    clk_test__assert_output_contains "40.00%" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59'
+    clk_test__assert_output_contains "60.00%" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' &&
+    clk_test__assert_output_contains "40.00%" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
 }
 
 test_view_past_days() {
@@ -141,7 +141,7 @@ test_view_not_blocked_by_active() {
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in active-task at '2026-03-20T14:00:00' >/dev/null 2>&1
     # view should succeed even with an active session
-    clk_test__assert_exit 0 "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59'
+    clk_test__assert_exit 0 "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
 }
 
 test_view_excludes_active_from_totals() {
@@ -149,7 +149,7 @@ test_view_excludes_active_from_totals() {
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in active-task at '2026-03-20T14:00:00' >/dev/null 2>&1
     # Total should only be 60 minutes (1h dev), not include active-task
-    clk_test__assert_output_contains "60" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59'
+    clk_test__assert_output_contains "60" "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
 }
 
 test_view_active_note() {
@@ -157,14 +157,14 @@ test_view_active_note() {
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in active-task at '2026-03-20T14:00:00' >/dev/null 2>&1
     clk_test__assert_output_contains "1 active session(s) not included" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59'
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59'
 }
 
 test_view_no_active_no_note() {
     "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' 2>&1)"
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' 2>&1)"
     if printf '%s' "$output" | grep -qF "active session(s)"; then
         printf 'FAIL: should not show active note when no active sessions\n'
         printf '  actual output: %s\n' "$output"
@@ -179,7 +179,7 @@ test_view_empty_range() {
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     # Query a range that has no sessions
     clk_test__assert_output_contains "No completed sessions" \
-        "$CLK_SCRIPT" view from '2026-03-15T00:00:00' until '2026-03-15T23:59:59'
+        "$CLK_SCRIPT" view from '2026-03-15T00:00:00' to '2026-03-15T23:59:59'
 }
 
 test_view_today() {
@@ -201,7 +201,7 @@ test_view_sorted_by_time() {
     "$CLK_SCRIPT" out big at '2026-03-20T12:00:00' >/dev/null 2>&1
 
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' 2>&1)"
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' 2>&1)"
     # "big" should appear before "small" in the output (sorted descending by seconds)
     local big_pos small_pos
     big_pos="$(printf '%s' "$output" | grep -n "big" | head -1 | cut -d: -f1)"
@@ -231,17 +231,17 @@ test_view_past_bad_unit() {
     clk_test__assert_exit 1 "$CLK_SCRIPT" view past 3 fortnights
 }
 
-test_view_from_missing_until() {
+test_view_from_missing_to() {
     clk_test__assert_exit 1 "$CLK_SCRIPT" view from '2026-03-20T00:00:00'
 }
 
 test_view_from_bad_timestamp() {
-    clk_test__assert_exit 1 "$CLK_SCRIPT" view from 'nope' until '2026-03-20T23:59:59'
+    clk_test__assert_exit 1 "$CLK_SCRIPT" view from 'nope' to '2026-03-20T23:59:59'
 }
 
 test_view_alias_v() {
     "$CLK_SCRIPT" add work for 60 at 2026-01-15T12:00:00 >/dev/null 2>&1
-    clk_test__assert_exit 0 "$CLK_SCRIPT" v from 2026-01-15T00:00:00 until 2026-01-15T23:59:59
+    clk_test__assert_exit 0 "$CLK_SCRIPT" v from 2026-01-15T00:00:00 to 2026-01-15T23:59:59
 }
 
 test_view_alias_v_today() {
@@ -251,7 +251,7 @@ test_view_alias_v_today() {
 test_view_from_simplified_timestamp() {
     "$CLK_SCRIPT" add work for 60 at 2026-01-15T12:00:00 >/dev/null 2>&1
     # Use yyyy-mm-ddTHH:MM format (no seconds)
-    clk_test__assert_exit 0 "$CLK_SCRIPT" view from 2026-01-15T00:00 until 2026-01-15T23:59
+    clk_test__assert_exit 0 "$CLK_SCRIPT" view from 2026-01-15T00:00 to 2026-01-15T23:59
 }
 
 test_view_before_simplified_timestamp() {
@@ -319,7 +319,7 @@ test_view_for_tag_filter() {
     "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
     clk_test__assert_output_contains "dev" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for dev
 }
 
 test_view_for_tag_excludes_other() {
@@ -328,7 +328,7 @@ test_view_for_tag_excludes_other() {
     "$CLK_SCRIPT" in pm at '2026-03-20T11:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev 2>&1)"
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for dev 2>&1)"
     if printf '%s' "$output" | grep -qw "pm"; then
         printf 'FAIL: "pm" should not appear when filtering for "dev"\n'
         printf '  output: %s\n' "$output"
@@ -345,14 +345,14 @@ test_view_for_tag_correct_total() {
     "$CLK_SCRIPT" out pm at '2026-03-20T12:00:00' >/dev/null 2>&1
     # Filtering for dev: should show 60 minutes total (not 120)
     clk_test__assert_output_contains "1.00h" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for dev
 }
 
 test_view_for_tag_shows_filter_label() {
     "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     clk_test__assert_output_contains "Filtered by tag: dev" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for dev
 }
 
 test_view_for_tag_with_past() {
@@ -368,7 +368,7 @@ test_view_for_tag_no_match() {
     "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     clk_test__assert_output_contains "No completed sessions" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for nonexistent
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for nonexistent
 }
 
 test_view_for_missing_tag() {
@@ -382,7 +382,7 @@ test_view_for_tag_no_active_note_other_tag() {
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in other-tag at '2026-03-20T14:00:00' >/dev/null 2>&1
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev 2>&1)"
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for dev 2>&1)"
     if printf '%s' "$output" | grep -qF "active session(s)"; then
         printf 'FAIL: should not show active note when active session is for a different tag\n'
         printf '  actual output: %s\n' "$output"
@@ -398,7 +398,7 @@ test_view_for_tag_active_note_same_tag() {
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" in dev at '2026-03-20T14:00:00' >/dev/null 2>&1
     clk_test__assert_output_contains "1 active session(s) not included" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for dev
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for dev
 }
 
 #####################################################################
@@ -657,7 +657,7 @@ test_view_multi_tag_filter() {
     "$CLK_SCRIPT" out admin at '2026-03-20T14:00:00' >/dev/null 2>&1
     # Filter for dev,pm → should show both, not admin
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev,pm' 2>&1)"
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for 'dev,pm' 2>&1)"
     if ! printf '%s' "$output" | grep -qw "dev" || ! printf '%s' "$output" | grep -qw "pm"; then
         printf 'FAIL: expected both "dev" and "pm" in multi-tag output\n'
         printf '  output: %s\n' "$output"
@@ -675,7 +675,7 @@ test_view_multi_tag_excludes_other() {
     "$CLK_SCRIPT" in admin at '2026-03-20T13:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out admin at '2026-03-20T14:00:00' >/dev/null 2>&1
     local output
-    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev,pm' 2>&1)"
+    output="$("$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for 'dev,pm' 2>&1)"
     if printf '%s' "$output" | grep -qw "admin"; then
         printf 'FAIL: "admin" should not appear when filtering for "dev,pm"\n'
         printf '  output: %s\n' "$output"
@@ -694,14 +694,14 @@ test_view_multi_tag_correct_total() {
     "$CLK_SCRIPT" out admin at '2026-03-20T14:00:00' >/dev/null 2>&1
     # dev (60m) + pm (60m) = 120m total, not 180m
     clk_test__assert_output_contains "2.00h" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev,pm'
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for 'dev,pm'
 }
 
 test_view_multi_tag_shows_filter_label() {
     "$CLK_SCRIPT" in dev at '2026-03-20T09:00:00' >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at '2026-03-20T10:00:00' >/dev/null 2>&1
     clk_test__assert_output_contains "Filtered by tag: dev, pm" \
-        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' until '2026-03-20T23:59:59' for 'dev,pm'
+        "$CLK_SCRIPT" view from '2026-03-20T00:00:00' to '2026-03-20T23:59:59' for 'dev,pm'
 }
 
 test_view_multi_tag_by_day() {
@@ -968,7 +968,7 @@ test_view_offset_day_shows_data() {
         "$CLK_SCRIPT" view -1 day
 }
 
-test_view_current_day() {
+test_view_this_day() {
     # 'current' is alias for -0
     local ts_in ts_out
     ts_in="$(_view_ts_at_day_offset 0 09:00:00)"
@@ -976,7 +976,7 @@ test_view_current_day() {
     "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
     clk_test__assert_output_contains "Today" \
-        "$CLK_SCRIPT" view current day
+        "$CLK_SCRIPT" view this day
 }
 
 test_view_offset_0_week() {
@@ -1011,14 +1011,14 @@ test_view_offset_2_weeks() {
         "$CLK_SCRIPT" view -2 weeks
 }
 
-test_view_current_week() {
+test_view_this_week() {
     local ts_in ts_out
     ts_in="$(_view_ts_at_week_offset 0 2 09:00:00)"
     ts_out="$(_view_ts_at_week_offset 0 2 10:00:00)"
     "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
     clk_test__assert_output_contains "This week" \
-        "$CLK_SCRIPT" view current week
+        "$CLK_SCRIPT" view this week
 }
 
 test_view_offset_week_shows_data() {
@@ -1064,14 +1064,14 @@ test_view_offset_2_months() {
         "$CLK_SCRIPT" view -2 months
 }
 
-test_view_current_month() {
+test_view_this_month() {
     local ts_in ts_out
     ts_in="$(_view_ts_at_month_offset 0 5 09:00:00)"
     ts_out="$(_view_ts_at_month_offset 0 5 10:00:00)"
     "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
     clk_test__assert_output_contains "This month" \
-        "$CLK_SCRIPT" view current month
+        "$CLK_SCRIPT" view this month
 }
 
 test_view_offset_month_shows_data() {
@@ -1189,15 +1189,15 @@ test_view_through_months_range_desc() {
         "$CLK_SCRIPT" view -2 months through -1 month
 }
 
-test_view_through_current() {
-    # -1 week through current week: should end at now
+test_view_through_this() {
+    # -1 week through this week: should end at now
     local ts_in ts_out
     ts_in="$(_view_ts_at_week_offset -1 3 09:00:00)"
     ts_out="$(_view_ts_at_week_offset -1 3 10:00:00)"
     "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
     "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
     clk_test__assert_output_contains "Last week through this week" \
-        "$CLK_SCRIPT" view -1 week through current week
+        "$CLK_SCRIPT" view -1 week through this week
 }
 
 test_view_through_with_for() {
@@ -1295,27 +1295,6 @@ test_sugar_yesterday_shows_data() {
     clk_test__assert_output_contains "Yesterday" "$CLK_SCRIPT" yesterday
 }
 
-test_view_this_week() {
-    # 'this' is alias for 'current'
-    local ts_in ts_out
-    ts_in="$(_view_ts_at_week_offset 0 2 09:00:00)"
-    ts_out="$(_view_ts_at_week_offset 0 2 10:00:00)"
-    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
-    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
-    clk_test__assert_output_contains "This week" \
-        "$CLK_SCRIPT" view this week
-}
-
-test_view_this_month() {
-    local ts_in ts_out
-    ts_in="$(_view_ts_at_month_offset 0 5 09:00:00)"
-    ts_out="$(_view_ts_at_month_offset 0 5 10:00:00)"
-    "$CLK_SCRIPT" in dev at "$ts_in" >/dev/null 2>&1
-    "$CLK_SCRIPT" out dev at "$ts_out" >/dev/null 2>&1
-    clk_test__assert_output_contains "This month" \
-        "$CLK_SCRIPT" view this month
-}
-
 test_view_yesterday_through_today() {
     # yesterday through today — both are aliases, no explicit units
     local ts_in ts_out
@@ -1396,10 +1375,10 @@ CLK_TESTS_VIEW=(
     test_script_unknown_command_message
 
     # clk view (integration)
-    test_view_from_until
-    test_view_from_until_range_desc
-    test_view_from_until_correct_totals
-    test_view_from_until_percentages
+    test_view_from_to_multi_tag
+    test_view_from_to_range_desc
+    test_view_from_to_correct_totals
+    test_view_from_to_percentages
     test_view_past_days
     test_view_past_hours
     test_view_past_weeks
@@ -1420,7 +1399,7 @@ CLK_TESTS_VIEW=(
     test_view_unknown_mode
     test_view_past_missing_unit
     test_view_past_bad_unit
-    test_view_from_missing_until
+    test_view_from_missing_to
     test_view_from_bad_timestamp
     test_view_alias_v
     test_view_alias_v_today
@@ -1501,16 +1480,16 @@ CLK_TESTS_VIEW=(
     test_view_offset_1_day
     test_view_offset_2_days
     test_view_offset_day_shows_data
-    test_view_current_day
+    test_view_this_day
     test_view_offset_0_week
     test_view_offset_1_week
     test_view_offset_2_weeks
-    test_view_current_week
+    test_view_this_week
     test_view_offset_week_shows_data
     test_view_offset_0_month
     test_view_offset_1_month
     test_view_offset_2_months
-    test_view_current_month
+    test_view_this_month
     test_view_offset_month_shows_data
     test_view_offset_day_for_tag
     test_view_offset_week_by_day
@@ -1524,7 +1503,7 @@ CLK_TESTS_VIEW=(
     test_view_through_days_range_desc
     test_view_through_months
     test_view_through_months_range_desc
-    test_view_through_current
+    test_view_through_this
     test_view_through_with_for
     test_view_through_with_by
     test_view_through_invalid_order
@@ -1541,8 +1520,6 @@ CLK_TESTS_VIEW=(
     test_sugar_today_shows_data
     test_sugar_yesterday
     test_sugar_yesterday_shows_data
-    test_view_this_week
-    test_view_this_month
     test_view_yesterday_through_today
     test_view_yesterday_through_today_shows_data
     test_view_offset_through_today
