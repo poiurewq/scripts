@@ -498,6 +498,41 @@ test_remove_by_index_no_done_records() {
     clk_test__assert_exit 5 "$CLK_SCRIPT" remove -1
 }
 
+test_remove_positive_index_basic() {
+    # `clk remove 1` removes the oldest active session (index +1)
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove 1 >/dev/null 2>&1
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$count" "remove 1 removes one active session"
+    local tags
+    tags="$(awk -F'\t' '/^[^#]/ && NF>0 {print $4}' "$CLK_TEST_DIR/clk/clk.tsv" | tr '\n' ' ' | sed 's/ *$//')"
+    clk_test__assert_equals "b" "$tags" "remove 1 removes 'a' (oldest active)"
+}
+
+test_remove_positive_index_n2() {
+    # `clk remove 2` removes the second-oldest active session
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in c at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove 2 >/dev/null 2>&1
+    local tags
+    tags="$(awk -F'\t' '/^[^#]/ && NF>0 {print $4}' "$CLK_TEST_DIR/clk/clk.tsv" | tr '\n' ' ' | sed 's/ *$//')"
+    clk_test__assert_equals "a c" "$tags" "remove 2 removes 'b' (second-oldest active)"
+}
+
+test_remove_positive_index_out_of_range() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" remove 5
+}
+
+test_remove_positive_index_no_active() {
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" remove 1
+}
+
 #####################################################################
 # Tests — clk undo (integration)
 #####################################################################
@@ -878,6 +913,10 @@ CLK_TESTS_MUTATION=(
     test_remove_by_index_n2
     test_remove_by_index_out_of_range
     test_remove_by_index_no_done_records
+    test_remove_positive_index_basic
+    test_remove_positive_index_n2
+    test_remove_positive_index_out_of_range
+    test_remove_positive_index_no_active
 
     # clk reactivate (integration)
     test_reactivate_basic

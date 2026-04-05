@@ -230,9 +230,11 @@ test_fmt_record_done_basic() {
     local line="done${tab}2026-03-19T09:00:00${tab}2026-03-19T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
     local result
     result="$(clk__fmt_record "$line")"
+    # Start and end share the date, so the end-date is elided:
+    #   "2026-03-19 09:00 → 10:00" rather than
+    #   "2026-03-19 09:00 → 2026-03-19 10:00"
     clk_test__assert_output_contains "work" printf '%s' "$result" &&
-    clk_test__assert_output_contains "2026-03-19 09:00" printf '%s' "$result" &&
-    clk_test__assert_output_contains "2026-03-19 10:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "2026-03-19 09:00 → 10:00" printf '%s' "$result" &&
     clk_test__assert_output_contains "1h 0m" printf '%s' "$result"
 }
 

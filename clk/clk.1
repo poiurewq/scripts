@@ -44,7 +44,7 @@ Record management:
 .Cm extend Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp | Cm by Ar duration
 .br
 .Nm
-.Bro Cm remove | Cm pop Brc Op Fl Ar n
+.Bro Cm remove | Cm pop Brc Op Fl Ar n | Ar n
 .br
 .Nm
 .Bro Cm reactivate | Cm ra Brc Fl Ar n
@@ -142,9 +142,9 @@ separator are omitted
 .Pq e.g.\& Ql 2026-03-19 12:16 ,
 and timestamps from the current date show only the time
 .Pq e.g.\& Ql 12:16 .
-The
-.Cm last
-command shows full ISO\ 8601 timestamps for inspection.
+When the start and end of a completed session fall on the same day,
+the end-date is elided
+.Pq e.g., Ql 2026-03-19 09:00 -> 10:00 .
 .Pp
 .Nm
 offers a shell alias
@@ -277,7 +277,7 @@ or
 the new end time must be at or after the original end time.
 .Cm by Ar duration
 shifts the end timestamp forward by exactly that much time.
-.It Bro Cm remove | Cm pop Brc Op Fl Ar n
+.It Bro Cm remove | Cm pop Brc Op Fl Ar n | Ar n
 Without an index, removes the last record from the log
 .Pq whether active or completed
 and displays the removed record.
@@ -285,6 +285,10 @@ With
 .Fl Ar n ,
 removes the nth-to-last completed session
 .Pq same negative-index convention as Cm edit and Cm reactivate .
+With a positive
+.Ar n ,
+removes the nth-oldest active session
+.Pq the one displayed by Ql clk <n> or marked Ql +<n> No in Cm status .
 .It Bro Cm reactivate | Cm ra Brc Fl Ar n
 Convert a completed session back to active.
 .Fl Ar n
@@ -382,6 +386,13 @@ Non-delete edits show the record before and after the change for comparison.
 .It Bro Cm status | Cm s Brc
 Show all active sessions with their tag, start time, elapsed active time,
 break time, pause state, and description.
+Each session is prefixed with its positive index
+.Pq Ql +1 , Ql +2 , No ...
+matching the convention used by
+.Nm Ar n ,
+.Cm edit Ar n ,
+and
+.Cm remove Ar n .
 If no sessions are active, prints
 .Dq \&No active sessions .
 .It Bro Cm last | Cm l Brc Op Ar n
@@ -399,7 +410,6 @@ exceeds the number of completed sessions, all available are shown
 .Pq no error .
 .Cm last
 only looks at the done pool; active sessions are never shown.
-Full ISO\ 8601 timestamps are shown for inspection.
 .It Bro Fl Ar n | Ar n Brc
 Show a single session by index.
 A negative index
@@ -656,6 +666,11 @@ When more than one session is active, the tag is required for
 .Cm pause ,
 and
 .Cm resume .
+.Cm status
+displays each active session with its positive index
+.Pq Ql +1 , Ql +2 , No ... ;
+you can drop one by index with
+.Ql clk remove <n> .
 .Ss Adding past sessions
 Log a 45-minute meeting that just ended:
 .Dl $ clk add pm for 45
