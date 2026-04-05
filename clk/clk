@@ -56,7 +56,10 @@ clk [help]
     status | s
     last | l [<n>]
     -<n> | <n>
-    edit | e (-<n> | <n>) {tag|start|end|break|pause|on} <value>
+    edit | e                                              (interactive)
+    edit | e (-<n> | <n>) {tag|start|pause|on} <value>
+    edit | e (-<n> | <n>) {end} <timestamp> [--adjust active|break]
+    edit | e (-<n> | <n>) {active|break} <duration> [--adjust ...]
     edit | e (-<n> | <n>) delete
     log
     view | v <range> [<filter>]
@@ -506,6 +509,34 @@ clk__validate_positive_int() {
     if ! printf '%s' "$val" | grep -Eq '^[0-9]+$'; then
         clk__die 1 "Expected a positive integer for ${label}, got '$val'."
     fi
+}
+
+# clk__parse_duration(str) → sets CLK_PARSED_DURATION_SECS
+# Accepts: plain integer (minutes), "Xh", "Ym", "XhYm" (case-insensitive).
+# Dies on invalid input.
+CLK_PARSED_DURATION_SECS=0
+clk__parse_duration() {
+    local input="$1"
+    # Plain integer → minutes
+    if printf '%s' "$input" | grep -Eq '^[0-9]+$'; then
+        CLK_PARSED_DURATION_SECS=$(( input * 60 ))
+        return 0
+    fi
+    # Duration string: Xh, Ym, XhYm (case-insensitive)
+    local lower
+    lower="$(printf '%s' "$input" | tr 'HM' 'hm')"
+    local hours=0 mins=0
+    if printf '%s' "$lower" | grep -Eq '^[0-9]+h[0-9]+m$'; then
+        hours="$(printf '%s' "$lower" | grep -o '^[0-9]*')"
+        mins="$(printf '%s' "$lower" | grep -o '[0-9]*m$' | tr -d 'm')"
+    elif printf '%s' "$lower" | grep -Eq '^[0-9]+h$'; then
+        hours="$(printf '%s' "$lower" | tr -d 'h')"
+    elif printf '%s' "$lower" | grep -Eq '^[0-9]+m$'; then
+        mins="$(printf '%s' "$lower" | tr -d 'm')"
+    else
+        clk__die 1 "Invalid duration '$input'. Expected: minutes (e.g. 90), Xh, Ym, or XhYm (e.g. 1h30m)."
+    fi
+    CLK_PARSED_DURATION_SECS=$(( hours * 3600 + mins * 60 ))
 }
 
 # --- File I/O helpers ---
@@ -1627,11 +1658,471 @@ clk_do_reactivate() {
     printf '\nReactivated session in\n  %s\n  started at %s\n\n' "$tag" "$(clk__fmt_ts_display "$start_ts")"
 }
 
+# --- Interactive edit TUI ---
+# clk edit (no args) opens an interactive record browser.
+# Shows active sessions + last N done sessions (up to 10 rows).
+# Arrow keys navigate, Enter selects, q quits.
+
+# Save/restore terminal state for TUI
+CLK_TUI_SAVED_STTY=""
+
+clk__tui_cleanup() {
+    # Restore terminal, show cursor
+    if [ -n "$CLK_TUI_SAVED_STTY" ]; then
+        stty "$CLK_TUI_SAVED_STTY" 2>/dev/null
+    fi
+    printf '\033[?25h' >/dev/tty
+}
+
+clk__tui_read_key() {
+    local key
+    IFS= read -r -s -n 1 key </dev/tty
+    # Arrow keys: ESC [ A/B/C/D
+    if [ "$key" = "$(printf '\033')" ]; then
+        local seq
+        IFS= read -r -s -n 2 -t 1 seq </dev/tty || true
+        case "$seq" in
+            '[A') printf 'UP' ;;
+            '[B') printf 'DOWN' ;;
+            *)    printf 'ESC' ;;
+        esac
+        return
+    fi
+    printf '%s' "$key"
+}
+
+# clk__tui_gather_rows() — collects rows for the interactive table.
+# Sets CLK_TUI_ROWS (newline-separated: "signed_n<TAB>lineno<TAB>line_content")
+# and CLK_TUI_ROW_COUNT.
+CLK_TUI_ROWS=""
+CLK_TUI_ROW_COUNT=0
+
+clk__tui_gather_rows() {
+    CLK_TUI_ROWS=""
+    CLK_TUI_ROW_COUNT=0
+
+    # Collect active sessions (positive index, oldest first)
+    local active_lines active_count
+    active_lines="$(awk -F'\t' '$1=="active" {print NR}' "$CLK_LOG")" || true
+    active_count=0
+    if [ -n "$active_lines" ]; then
+        active_count="$(printf '%s\n' "$active_lines" | wc -l | tr -d ' ')"
+    fi
+
+    local i lineno line_content
+    i=1
+    while [ "$i" -le "$active_count" ]; do
+        lineno="$(printf '%s\n' "$active_lines" | head -n "$i" | tail -n 1)"
+        line_content="$(clk__get_line "$lineno")"
+        if [ -n "$CLK_TUI_ROWS" ]; then
+            CLK_TUI_ROWS="${CLK_TUI_ROWS}
+${i}${CLK_TAB}${lineno}${CLK_TAB}${line_content}"
+        else
+            CLK_TUI_ROWS="${i}${CLK_TAB}${lineno}${CLK_TAB}${line_content}"
+        fi
+        CLK_TUI_ROW_COUNT=$(( CLK_TUI_ROW_COUNT + 1 ))
+        i=$(( i + 1 ))
+    done
+
+    # Collect done sessions (negative index, most recent first)
+    local done_lines done_count
+    done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")" || true
+    done_count=0
+    if [ -n "$done_lines" ]; then
+        done_count="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
+    fi
+
+    i=1
+    while [ "$i" -le "$done_count" ]; do
+        lineno="$(printf '%s\n' "$done_lines" | tail -n "$i" | head -n 1)"
+        line_content="$(clk__get_line "$lineno")"
+        CLK_TUI_ROWS="${CLK_TUI_ROWS}
+-${i}${CLK_TAB}${lineno}${CLK_TAB}${line_content}"
+        CLK_TUI_ROW_COUNT=$(( CLK_TUI_ROW_COUNT + 1 ))
+        i=$(( i + 1 ))
+    done
+}
+
+# clk__tui_draw(selected_idx, scroll_offset) — draws a 3-row scrolling window.
+# selected_idx is 0-based absolute index into CLK_TUI_ROWS.
+# scroll_offset is the first visible row (0-based).
+CLK_TUI_WINDOW=3
+
+clk__tui_draw() {
+    local sel="$1" offset="$2"
+    local rev='\033[7m'
+    local reset='\033[0m'
+    local win_end=$(( offset + CLK_TUI_WINDOW ))
+
+    # Move cursor to top of our drawing area and clear
+    printf '\033[H\033[J' >/dev/tty
+
+    # Scroll indicator
+    local pos_str="$(( sel + 1 ))/${CLK_TUI_ROW_COUNT}"
+    printf '  clk edit — ↑/↓ navigate, Enter select, q quit  [%s]\n' "$pos_str" >/dev/tty
+    printf '  ─────────────────────────────────────────────────\n' >/dev/tty
+
+    # Header
+    printf '  %3s  %-10s %-17s %-17s %8s %8s  %s\n' \
+        "#" "TAG" "START" "END" "ACTIVE" "BREAK" "DESC" >/dev/tty
+    printf '  ─────────────────────────────────────────────────\n' >/dev/tty
+
+    # Up-scroll indicator
+    if [ "$offset" -gt 0 ]; then
+        printf '  %3s\n' "↑" >/dev/tty
+    fi
+
+    local row_idx=0
+    local row
+    printf '%s\n' "$CLK_TUI_ROWS" | while IFS= read -r row; do
+        [ -z "$row" ] && { row_idx=$(( row_idx + 1 )); continue; }
+
+        # Skip rows outside the visible window
+        if [ "$row_idx" -lt "$offset" ] || [ "$row_idx" -ge "$win_end" ]; then
+            row_idx=$(( row_idx + 1 ))
+            continue
+        fi
+
+        local signed_n row_data
+        signed_n="$(printf '%s' "$row" | cut -d"$CLK_TAB" -f1)"
+        row_data="$(printf '%s' "$row" | cut -d"$CLK_TAB" -f3-)"
+
+        clk__read_line "$row_data"
+        local r_status="$CLK_F1" r_start="$CLK_F2" r_end="$CLK_F3" r_tag="$CLK_F4"
+        local r_length="$CLK_F5" r_break="${CLK_F6:-0}" r_paused="$CLK_F7" r_desc="$CLK_F8"
+
+        local disp_start disp_end active_str break_str desc_str marker
+        disp_start="$(clk__fmt_ts_display "$r_start")"
+        if [ "$r_status" = "done" ]; then
+            disp_end="$(clk__fmt_ts_display "$r_end")"
+            active_str="$(clk__fmt_duration "$r_length")"
+        else
+            disp_end="(active)"
+            local now_epoch start_epoch elapsed_secs
+            now_epoch="$(clk__now_epoch)"
+            start_epoch="$(clk__to_epoch "$r_start" 2>/dev/null)" || start_epoch="$now_epoch"
+            elapsed_secs=$(( now_epoch - start_epoch ))
+            if [ -n "$r_break" ] && [ "$r_break" -gt 0 ] 2>/dev/null; then
+                elapsed_secs=$(( elapsed_secs - r_break ))
+            fi
+            if [ -n "$r_paused" ]; then
+                elapsed_secs=$(( elapsed_secs - (now_epoch - r_paused) ))
+            fi
+            if [ "$elapsed_secs" -lt 0 ]; then elapsed_secs=0; fi
+            active_str="$(clk__fmt_duration "$elapsed_secs")"
+        fi
+        if [ -n "$r_break" ] && [ "$r_break" -gt 0 ] 2>/dev/null; then
+            break_str="$(clk__fmt_duration "$r_break")"
+        else
+            break_str="—"
+        fi
+        desc_str="$r_desc"
+        if [ "${#desc_str}" -gt 20 ]; then
+            desc_str="$(printf '%.17s' "$desc_str")…"
+        fi
+
+        if [ "$row_idx" -eq "$sel" ]; then
+            marker="▸"
+        else
+            marker=" "
+        fi
+
+        local line_text
+        line_text="$(printf '%s %3s  %-10s %-17s %-17s %8s %8s  %s' \
+            "$marker" "$signed_n" "$r_tag" "$disp_start" "$disp_end" "$active_str" "$break_str" "$desc_str")"
+
+        if [ "$row_idx" -eq "$sel" ]; then
+            printf "${rev}  %s${reset}\n" "$line_text" >/dev/tty
+        else
+            printf '  %s\n' "$line_text" >/dev/tty
+        fi
+
+        row_idx=$(( row_idx + 1 ))
+    done
+
+    # Down-scroll indicator
+    if [ "$win_end" -lt "$CLK_TUI_ROW_COUNT" ]; then
+        printf '  %3s\n' "↓" >/dev/tty
+    fi
+
+    printf '  ─────────────────────────────────────────────────\n' >/dev/tty
+}
+
+# clk__tui_field_menu(signed_n, status) — prompts user for which field to edit.
+# Returns field name in CLK_TUI_FIELD. Returns 1 if user cancels.
+CLK_TUI_FIELD=""
+
+clk__tui_field_menu() {
+    local signed_n="$1" status="$2"
+
+    printf '\n' >/dev/tty
+    if [ "$status" = "active" ]; then
+        printf '  Edit record %s: [t]ag [s]tart [a]ctive [b]reak [d]esc [p]ause [D]elete [q]back\n' "$signed_n" >/dev/tty
+    else
+        printf '  Edit record %s: [t]ag [s]tart [e]nd [a]ctive [b]reak [d]esc [D]elete [q]back\n' "$signed_n" >/dev/tty
+    fi
+    printf '  > ' >/dev/tty
+
+    local key
+    key="$(clk__tui_read_key)"
+
+    case "$key" in
+        t) CLK_TUI_FIELD="tag" ;;
+        s) CLK_TUI_FIELD="start" ;;
+        e) [ "$status" = "done" ] && CLK_TUI_FIELD="end" || { printf '\n  (No end time on active sessions)\n' >/dev/tty; return 1; } ;;
+        a) CLK_TUI_FIELD="active" ;;
+        b) CLK_TUI_FIELD="break" ;;
+        d) CLK_TUI_FIELD="on" ;;
+        p) [ "$status" = "active" ] && CLK_TUI_FIELD="pause" || { printf '\n  (Pause only for active sessions)\n' >/dev/tty; return 1; } ;;
+        D) CLK_TUI_FIELD="delete" ;;
+        q|ESC) return 1 ;;
+        *) printf '\n  Unknown key.\n' >/dev/tty; return 1 ;;
+    esac
+    return 0
+}
+
+# clk__tui_prompt(prompt_text) — reads a line of input in cooked mode.
+# Sets CLK_TUI_INPUT. Returns 1 on empty input.
+CLK_TUI_INPUT=""
+
+clk__tui_prompt() {
+    local prompt="$1"
+    # Temporarily restore cooked mode for line editing
+    stty "$CLK_TUI_SAVED_STTY" 2>/dev/null
+    printf '  %s' "$prompt" >/dev/tty
+    CLK_TUI_INPUT=""
+    IFS= read -r CLK_TUI_INPUT </dev/tty || true
+    stty -echo -icanon 2>/dev/null
+    if [ -z "$CLK_TUI_INPUT" ]; then
+        return 1
+    fi
+    return 0
+}
+
+# clk__tui_adjust_menu(field, status) — prompts for adjust mode.
+# Sets CLK_TUI_ADJUST. Returns 1 on cancel.
+CLK_TUI_ADJUST=""
+
+clk__tui_adjust_menu() {
+    local field="$1" status="$2"
+
+    case "$field" in
+        end)
+            printf '  Adjust: [a]ctive time or [b]reak time? ' >/dev/tty
+            local key
+            key="$(clk__tui_read_key)"
+            printf '\n' >/dev/tty
+            case "$key" in
+                a) CLK_TUI_ADJUST="active" ;;
+                b) CLK_TUI_ADJUST="break" ;;
+                *) return 1 ;;
+            esac
+            ;;
+        active)
+            if [ "$status" = "done" ]; then
+                printf '  Adjust: push [s]tart, push [e]nd, or adjust [b]reak? ' >/dev/tty
+            else
+                printf '  Adjust: push [s]tart or adjust [b]reak? ' >/dev/tty
+            fi
+            local key
+            key="$(clk__tui_read_key)"
+            printf '\n' >/dev/tty
+            case "$key" in
+                s) CLK_TUI_ADJUST="start" ;;
+                e) [ "$status" = "done" ] && CLK_TUI_ADJUST="end" || return 1 ;;
+                b) CLK_TUI_ADJUST="break" ;;
+                *) return 1 ;;
+            esac
+            ;;
+        break)
+            if [ "$status" = "done" ]; then
+                printf '  Adjust: push [s]tart, push [e]nd, or adjust [a]ctive? ' >/dev/tty
+            else
+                printf '  Adjust: push [s]tart or adjust [a]ctive? ' >/dev/tty
+            fi
+            local key
+            key="$(clk__tui_read_key)"
+            printf '\n' >/dev/tty
+            case "$key" in
+                s) CLK_TUI_ADJUST="start" ;;
+                e) [ "$status" = "done" ] && CLK_TUI_ADJUST="end" || return 1 ;;
+                a) CLK_TUI_ADJUST="active" ;;
+                *) return 1 ;;
+            esac
+            ;;
+    esac
+    return 0
+}
+
+# clk_do_edit_interactive() — main TUI loop
+clk_do_edit_interactive() {
+    # Require a terminal
+    if ! [ -t 0 ] || ! [ -t 1 ]; then
+        clk__die 1 "Interactive edit requires a terminal. Use 'clk edit <n> <field> <value>' for non-interactive editing."
+    fi
+
+    clk__tui_gather_rows
+    if [ "$CLK_TUI_ROW_COUNT" -eq 0 ]; then
+        printf 'No records to edit.\n'
+        return 0
+    fi
+
+    # Set up terminal
+    CLK_TUI_SAVED_STTY="$(stty -g 2>/dev/null)"
+    trap clk__tui_cleanup EXIT INT TERM
+    stty -echo -icanon 2>/dev/null
+    # Hide cursor
+    printf '\033[?25l' >/dev/tty
+
+    local selected=0
+    local scroll_offset=0
+    local running=1
+
+    while [ "$running" = "1" ]; do
+        clk__tui_draw "$selected" "$scroll_offset"
+
+        local key
+        key="$(clk__tui_read_key)"
+
+        case "$key" in
+            UP)
+                if [ "$selected" -gt 0 ]; then
+                    selected=$(( selected - 1 ))
+                    # Scroll up if cursor moves above visible window
+                    if [ "$selected" -lt "$scroll_offset" ]; then
+                        scroll_offset="$selected"
+                    fi
+                fi
+                ;;
+            DOWN)
+                if [ "$selected" -lt $(( CLK_TUI_ROW_COUNT - 1 )) ]; then
+                    selected=$(( selected + 1 ))
+                    # Scroll down if cursor moves below visible window
+                    if [ "$selected" -ge $(( scroll_offset + CLK_TUI_WINDOW )) ]; then
+                        scroll_offset=$(( selected - CLK_TUI_WINDOW + 1 ))
+                    fi
+                fi
+                ;;
+            q|ESC)
+                running=0
+                ;;
+            "")
+                # Enter key (read as empty in raw mode)
+                # Extract the selected row's signed_n and status
+                local sel_row signed_n row_lineno row_data
+                sel_row="$(printf '%s\n' "$CLK_TUI_ROWS" | awk -v n=$(( selected + 1 )) 'NR==n')"
+                signed_n="$(printf '%s' "$sel_row" | cut -d"$CLK_TAB" -f1)"
+                row_data="$(printf '%s' "$sel_row" | cut -d"$CLK_TAB" -f3-)"
+                clk__read_line "$row_data"
+                local rec_status="$CLK_F1"
+
+                # Show field menu
+                if clk__tui_field_menu "$signed_n" "$rec_status"; then
+                    local edit_field="$CLK_TUI_FIELD"
+                    local edit_value="" edit_adjust=""
+
+                    if [ "$edit_field" = "delete" ]; then
+                        printf '\n  Confirm delete record %s? [y/n] ' "$signed_n" >/dev/tty
+                        local confirm
+                        confirm="$(clk__tui_read_key)"
+                        printf '\n' >/dev/tty
+                        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                            # Temporarily restore terminal for clk_do_edit output
+                            stty "$CLK_TUI_SAVED_STTY" 2>/dev/null
+                            clk_do_edit "$signed_n" "delete" "" ""
+                            stty -echo -icanon 2>/dev/null
+                            clk__tui_gather_rows
+                            if [ "$CLK_TUI_ROW_COUNT" -eq 0 ]; then
+                                running=0
+                                printf '\n  No more records.\n' >/dev/tty
+                            else
+                                if [ "$selected" -ge "$CLK_TUI_ROW_COUNT" ]; then
+                                    selected=$(( CLK_TUI_ROW_COUNT - 1 ))
+                                fi
+                                # Clamp scroll offset
+                                local max_offset=$(( CLK_TUI_ROW_COUNT - CLK_TUI_WINDOW ))
+                                if [ "$max_offset" -lt 0 ]; then max_offset=0; fi
+                                if [ "$scroll_offset" -gt "$max_offset" ]; then
+                                    scroll_offset="$max_offset"
+                                fi
+                                if [ "$selected" -lt "$scroll_offset" ]; then
+                                    scroll_offset="$selected"
+                                fi
+                            fi
+                        fi
+                    else
+                        # Prompt for value
+                        local prompt_label
+                        case "$edit_field" in
+                            tag)   prompt_label="New tag: " ;;
+                            start) prompt_label="New start (HH:MM or yyyy-mm-ddTHH:MM): " ;;
+                            end)   prompt_label="New end (HH:MM or yyyy-mm-ddTHH:MM): " ;;
+                            active) prompt_label="New active time (e.g. 90, 1h30m): " ;;
+                            break) prompt_label="New break time (e.g. 15, 1h): " ;;
+                            on)    prompt_label="New description: " ;;
+                            pause) prompt_label="New pause time (HH:MM or 'clear'): " ;;
+                        esac
+
+                        if clk__tui_prompt "$prompt_label"; then
+                            edit_value="$CLK_TUI_INPUT"
+
+                            # Smart adjustment prompts for end, active, break
+                            local needs_adjust=0
+                            case "$edit_field" in
+                                end|active|break) needs_adjust=1 ;;
+                            esac
+
+                            if [ "$needs_adjust" = "1" ]; then
+                                if clk__tui_adjust_menu "$edit_field" "$rec_status"; then
+                                    edit_adjust="$CLK_TUI_ADJUST"
+                                else
+                                    printf '  Cancelled.\n' >/dev/tty
+                                    # Brief pause for user to see message
+                                    IFS= read -r -s -n 1 -t 1 _ </dev/tty 2>/dev/null || true
+                                    continue
+                                fi
+                            fi
+
+                            # Apply edit
+                            stty "$CLK_TUI_SAVED_STTY" 2>/dev/null
+                            if clk_do_edit "$signed_n" "$edit_field" "$edit_value" "$edit_adjust"; then
+                                clk__tui_gather_rows
+                                # Clamp in case row count changed
+                                if [ "$selected" -ge "$CLK_TUI_ROW_COUNT" ] && [ "$CLK_TUI_ROW_COUNT" -gt 0 ]; then
+                                    selected=$(( CLK_TUI_ROW_COUNT - 1 ))
+                                fi
+                                local max_offset=$(( CLK_TUI_ROW_COUNT - CLK_TUI_WINDOW ))
+                                if [ "$max_offset" -lt 0 ]; then max_offset=0; fi
+                                if [ "$scroll_offset" -gt "$max_offset" ]; then
+                                    scroll_offset="$max_offset"
+                                fi
+                            else
+                                printf '  Edit failed.\n'
+                            fi
+                            stty -echo -icanon 2>/dev/null
+
+                            # Brief pause to see before/after output
+                            printf '\n  Press any key to continue...' >/dev/tty
+                            IFS= read -r -s -n 1 _ </dev/tty 2>/dev/null || true
+                        fi
+                    fi
+                fi
+                ;;
+        esac
+    done
+
+    # Clean up
+    clk__tui_cleanup
+    trap - EXIT INT TERM
+    printf '\033[H\033[J' >/dev/tty
+}
+
 # --- clk_do_edit ---
 # clk edit -<n> tag <new-tag>    — edit the Nth-to-last done session
 # clk edit -<n> start <timestamp>
-# clk edit -<n> end <timestamp>
-# clk edit -<n> break <minutes>
+# clk edit -<n> end <timestamp> [--adjust active|break]
+# clk edit -<n> active <duration> [--adjust start|end|break]
+# clk edit -<n> break <duration> [--adjust active|start|end]
 # clk edit -<n> pause <timestamp> | clear
 # clk edit -<n> on <description>
 # clk edit -<n> delete
@@ -1640,15 +2131,18 @@ clk_do_reactivate() {
 # Negative index targets done sessions; positive index targets active sessions.
 # Mirrors the convention used by clk last.
 #
+# 4th arg (adjust_mode): which field absorbs the change.
+#   end   → "active" (default) or "break"
+#   active → "start", "end", or "break"
+#   break  → "active" (default), "start", or "end"
+#
 # --- RATIONALE: pause editing ---
 # Occasionally the user pauses at the wrong time and minus on the initial
 # pause command wasn't used. Rather than requiring undo + pause minus,
 # direct editing of the PAUSED_AT field via edit is more surgical and
 # doesn't disturb the undo stack.
 clk_do_edit() {
-    local signed_n="$1" field="$2"
-    shift 2
-    local value="$*"
+    local signed_n="$1" field="$2" value="$3" adjust_mode="${4:-}"
 
     local is_negative=0 abs_n
     if printf '%s' "$signed_n" | grep -Eq '^-[0-9]+$'; then
@@ -1741,28 +2235,156 @@ clk_do_edit() {
             if [ "$new_end_epoch" -lt "$start_epoch" ]; then
                 clk__die 1 "End time ${value} is before start time ${start_ts}."
             fi
-            length_secs=$(( new_end_epoch - start_epoch - break_secs ))
-            if [ "$length_secs" -lt 0 ]; then
-                clk__die 1 "Active time would be negative with end ${value} and break $(clk__fmt_duration "$break_secs")."
-            fi
+            local span=$(( new_end_epoch - start_epoch ))
+            : "${adjust_mode:=active}"
+            case "$adjust_mode" in
+                active)
+                    length_secs=$(( span - break_secs ))
+                    if [ "$length_secs" -lt 0 ]; then
+                        clk__die 1 "Active time would be negative with end ${value} and break $(clk__fmt_duration "$break_secs")."
+                    fi
+                    ;;
+                break)
+                    break_secs=$(( span - length_secs ))
+                    if [ "$break_secs" -lt 0 ]; then
+                        clk__die 1 "Break time would be negative with end ${value} and active $(clk__fmt_duration "$length_secs")."
+                    fi
+                    ;;
+                *)
+                    clk__die 1 "Invalid --adjust '${adjust_mode}' for end. Expected: active, break."
+                    ;;
+            esac
             clk__save_undo
             end_ts="$value"
             local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
             clk__replace_line "$lineno" "$new_record"
             ;;
-        break)
-            [ -n "$value" ] || clk__die 1 "Missing minutes for 'edit ${signed_n} break <minutes>'."
-            clk__validate_positive_int "$value" "<minutes> in 'edit ${signed_n} break'"
-            local new_break_secs=$(( value * 60 ))
+        active)
+            [ -n "$value" ] || clk__die 1 "Missing duration for 'edit ${signed_n} active <duration>'."
+            clk__parse_duration "$value"
+            local new_active_secs="$CLK_PARSED_DURATION_SECS"
+            if [ "$new_active_secs" -le 0 ]; then
+                clk__die 1 "Active time must be positive."
+            fi
             if [ "$status" = "done" ]; then
                 local start_epoch end_epoch
                 start_epoch="$(clk__to_epoch "$start_ts")"
                 end_epoch="$(clk__to_epoch "$end_ts")"
-                local span=$(( end_epoch - start_epoch ))
-                if [ "$new_break_secs" -gt "$span" ]; then
-                    clk__die 1 "Break time (${value}m) exceeds session span ($(clk__fmt_duration "$span"))."
-                fi
-                length_secs=$(( span - new_break_secs ))
+                [ -n "$adjust_mode" ] || clk__die 1 "Editing active time requires --adjust (start, end, or break)."
+                case "$adjust_mode" in
+                    start)
+                        local new_start_epoch=$(( end_epoch - new_active_secs - break_secs ))
+                        start_ts="$(clk__from_epoch "$new_start_epoch")"
+                        ;;
+                    end)
+                        local new_end_epoch=$(( start_epoch + new_active_secs + break_secs ))
+                        end_ts="$(clk__from_epoch "$new_end_epoch")"
+                        ;;
+                    break)
+                        local span=$(( end_epoch - start_epoch ))
+                        break_secs=$(( span - new_active_secs ))
+                        if [ "$break_secs" -lt 0 ]; then
+                            clk__die 1 "Active $(clk__fmt_duration "$new_active_secs") exceeds session span $(clk__fmt_duration "$span")."
+                        fi
+                        ;;
+                    *)
+                        clk__die 1 "Invalid --adjust '${adjust_mode}' for active. Expected: start, end, break."
+                        ;;
+                esac
+            else
+                # Active session: no end timestamp
+                [ -n "$adjust_mode" ] || clk__die 1 "Editing active time requires --adjust (start or break)."
+                case "$adjust_mode" in
+                    start)
+                        local now_epoch
+                        now_epoch="$(clk__now_epoch)"
+                        local pause_secs=0
+                        if [ -n "$paused_at" ]; then
+                            pause_secs=$(( now_epoch - paused_at ))
+                        fi
+                        local new_start_epoch=$(( now_epoch - new_active_secs - break_secs - pause_secs ))
+                        start_ts="$(clk__from_epoch "$new_start_epoch")"
+                        ;;
+                    break)
+                        local now_epoch
+                        now_epoch="$(clk__now_epoch)"
+                        local pause_secs=0
+                        if [ -n "$paused_at" ]; then
+                            pause_secs=$(( now_epoch - paused_at ))
+                        fi
+                        local elapsed=$(( now_epoch - $(clk__to_epoch "$start_ts") - pause_secs ))
+                        break_secs=$(( elapsed - new_active_secs ))
+                        if [ "$break_secs" -lt 0 ]; then
+                            clk__die 1 "Active $(clk__fmt_duration "$new_active_secs") exceeds elapsed time $(clk__fmt_duration "$elapsed")."
+                        fi
+                        ;;
+                    end)
+                        clk__die 1 "Cannot use --adjust end on an active session (no end timestamp)."
+                        ;;
+                    *)
+                        clk__die 1 "Invalid --adjust '${adjust_mode}' for active. Expected: start, end, break."
+                        ;;
+                esac
+            fi
+            clk__save_undo
+            length_secs="$new_active_secs"
+            local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
+            clk__replace_line "$lineno" "$new_record"
+            ;;
+        break)
+            [ -n "$value" ] || clk__die 1 "Missing duration for 'edit ${signed_n} break <duration>'."
+            clk__parse_duration "$value"
+            local new_break_secs="$CLK_PARSED_DURATION_SECS"
+            : "${adjust_mode:=active}"
+            if [ "$status" = "done" ]; then
+                local start_epoch end_epoch
+                start_epoch="$(clk__to_epoch "$start_ts")"
+                end_epoch="$(clk__to_epoch "$end_ts")"
+                case "$adjust_mode" in
+                    active)
+                        local span=$(( end_epoch - start_epoch ))
+                        if [ "$new_break_secs" -gt "$span" ]; then
+                            clk__die 1 "Break $(clk__fmt_duration "$new_break_secs") exceeds session span $(clk__fmt_duration "$span")."
+                        fi
+                        length_secs=$(( span - new_break_secs ))
+                        ;;
+                    start)
+                        local new_start_epoch=$(( end_epoch - length_secs - new_break_secs ))
+                        start_ts="$(clk__from_epoch "$new_start_epoch")"
+                        ;;
+                    end)
+                        local new_end_epoch=$(( start_epoch + length_secs + new_break_secs ))
+                        end_ts="$(clk__from_epoch "$new_end_epoch")"
+                        ;;
+                    *)
+                        clk__die 1 "Invalid --adjust '${adjust_mode}' for break. Expected: active, start, end."
+                        ;;
+                esac
+            else
+                # Active session: adjust_mode "end" is invalid (no end timestamp)
+                case "$adjust_mode" in
+                    active|start)
+                        # For active sessions, break edit doesn't recalculate length_secs
+                        # (there is no length_secs yet). Only "start" needs special handling.
+                        if [ "$adjust_mode" = "start" ]; then
+                            local now_epoch
+                            now_epoch="$(clk__now_epoch)"
+                            local pause_secs=0
+                            if [ -n "$paused_at" ]; then
+                                pause_secs=$(( now_epoch - paused_at ))
+                            fi
+                            local elapsed=$(( now_epoch - $(clk__to_epoch "$start_ts") - break_secs - pause_secs ))
+                            local new_start_epoch=$(( now_epoch - elapsed - new_break_secs - pause_secs ))
+                            start_ts="$(clk__from_epoch "$new_start_epoch")"
+                        fi
+                        ;;
+                    end)
+                        clk__die 1 "Cannot use --adjust end on an active session (no end timestamp)."
+                        ;;
+                    *)
+                        clk__die 1 "Invalid --adjust '${adjust_mode}' for break. Expected: active, start, end."
+                        ;;
+                esac
             fi
             clk__save_undo
             break_secs="$new_break_secs"
@@ -1801,7 +2423,7 @@ clk_do_edit() {
             return 0
             ;;
         *)
-            clk__die 1 "Unknown field '${field}'. Expected: tag, start, end, break, pause, on, delete."
+            clk__die 1 "Unknown field '${field}'. Expected: tag, start, end, active, break, pause, on, delete."
             ;;
     esac
 
@@ -3459,8 +4081,11 @@ view|v)
 edit|e)
     clk_subcmd="edit"
     shift
+
+    # No args → interactive mode
     if [ $# -eq 0 ]; then
-        clk__die 1 "Missing index. Usage: 'clk edit (-<n> | <n>) <field> <value>'."
+        clk_do_edit_interactive
+        exit 0
     fi
 
     # Parse signed index: -<n> targets done sessions, <n> targets active sessions
@@ -3483,6 +4108,7 @@ edit|e)
     # For 'delete', no value needed
     # For others, take next arg as value
     clk_edit_value=""
+    clk_edit_adjust=""
     case "$clk_edit_field" in
         on)
             [ $# -ge 1 ] || clk__die 1 "Missing <description> after 'on'."
@@ -3491,7 +4117,7 @@ edit|e)
         delete)
             [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'delete'."
             ;;
-        tag|start|end|break|pause)
+        tag|start|end|active|break|pause)
             [ $# -ge 1 ] || clk__die 1 "Missing value for 'edit ${clk_edit_n} ${clk_edit_field}'."
             case "$clk_edit_field" in
                 start|end)
@@ -3515,14 +4141,20 @@ edit|e)
                     clk_edit_value="$1"; shift
                     ;;
             esac
+            # Parse optional --adjust flag for end, active, break
+            if [ $# -ge 1 ] && [ "$1" = "--adjust" ]; then
+                shift
+                [ $# -ge 1 ] || clk__die 1 "Missing value after --adjust."
+                clk_edit_adjust="$1"; shift
+            fi
             [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk edit ${clk_edit_n} ${clk_edit_field} ${clk_edit_value}'."
             ;;
         *)
-            clk__die 1 "Unknown field '${clk_edit_field}'. Expected: tag, start, end, break, pause, on, delete."
+            clk__die 1 "Unknown field '${clk_edit_field}'. Expected: tag, start, end, active, break, pause, on, delete."
             ;;
     esac
 
-    clk_do_edit "$clk_edit_n" "$clk_edit_field" "$clk_edit_value"
+    clk_do_edit "$clk_edit_n" "$clk_edit_field" "$clk_edit_value" "$clk_edit_adjust"
     ;;
 
 log)
