@@ -1724,12 +1724,15 @@ ${i}${CLK_TAB}${lineno}${CLK_TAB}${line_content}"
         i=$(( i + 1 ))
     done
 
-    # Collect done sessions (negative index, most recent first)
-    local done_lines done_count
+    # Collect done sessions (negative index, most recent first, capped at 30)
+    local done_lines done_count max_done=30
     done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")" || true
     done_count=0
     if [ -n "$done_lines" ]; then
         done_count="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
+    fi
+    if [ "$done_count" -gt "$max_done" ]; then
+        done_count="$max_done"
     fi
 
     i=1
@@ -1757,19 +1760,29 @@ clk__tui_draw() {
     # Move cursor to top of our drawing area and clear
     printf '\033[H\033[J' >/dev/tty
 
+    # Build divider to match header width (76 chars content + 2 indent)
+    local divider=""
+    local di=0
+    while [ "$di" -lt 76 ]; do
+        divider="${divider}─"
+        di=$(( di + 1 ))
+    done
+
     # Scroll indicator
     local pos_str="$(( sel + 1 ))/${CLK_TUI_ROW_COUNT}"
     printf '  clk edit — ↑/↓ navigate, Enter select, q quit  [%s]\n' "$pos_str" >/dev/tty
-    printf '  ─────────────────────────────────────────────────\n' >/dev/tty
+    printf '  %s\n' "$divider" >/dev/tty
 
-    # Header
-    printf '  %3s  %-10s %-17s %-17s %8s %8s  %s\n' \
+    # Header (2 extra cols for marker column: "▸ " or "  ")
+    printf '    %3s  %-10s %-17s %-17s %8s %8s  %s\n' \
         "#" "TAG" "START" "END" "ACTIVE" "BREAK" "DESC" >/dev/tty
-    printf '  ─────────────────────────────────────────────────\n' >/dev/tty
+    printf '  %s\n' "$divider" >/dev/tty
 
-    # Up-scroll indicator
+    # Up-scroll indicator (always occupies a line for stable layout)
     if [ "$offset" -gt 0 ]; then
         printf '  %3s\n' "↑" >/dev/tty
+    else
+        printf '\n' >/dev/tty
     fi
 
     local row_idx=0
@@ -1827,9 +1840,20 @@ clk__tui_draw() {
             marker=" "
         fi
 
+        # Right-pad break_str to 8 display columns manually (— is 1 col but 3 bytes)
+        local break_pad=""
+        local break_disp_len="${#break_str}"
+        if [ "$break_str" = "—" ]; then
+            break_disp_len=1
+        fi
+        while [ "$break_disp_len" -lt 8 ]; do
+            break_pad="${break_pad} "
+            break_disp_len=$(( break_disp_len + 1 ))
+        done
+
         local line_text
-        line_text="$(printf '%s %3s  %-10s %-17s %-17s %8s %8s  %s' \
-            "$marker" "$signed_n" "$r_tag" "$disp_start" "$disp_end" "$active_str" "$break_str" "$desc_str")"
+        line_text="$(printf '%s %3s  %-10s %-17s %-17s %8s %s%s  %s' \
+            "$marker" "$signed_n" "$r_tag" "$disp_start" "$disp_end" "$active_str" "$break_pad" "$break_str" "$desc_str")"
 
         if [ "$row_idx" -eq "$sel" ]; then
             printf "${rev}  %s${reset}\n" "$line_text" >/dev/tty
@@ -1840,12 +1864,14 @@ clk__tui_draw() {
         row_idx=$(( row_idx + 1 ))
     done
 
-    # Down-scroll indicator
+    # Down-scroll indicator (always occupies a line for stable layout)
     if [ "$win_end" -lt "$CLK_TUI_ROW_COUNT" ]; then
         printf '  %3s\n' "↓" >/dev/tty
+    else
+        printf '\n' >/dev/tty
     fi
 
-    printf '  ─────────────────────────────────────────────────\n' >/dev/tty
+    printf '  %s\n' "$divider" >/dev/tty
 }
 
 # clk__tui_field_menu(signed_n, status) — prompts user for which field to edit.
@@ -1969,7 +1995,8 @@ clk_do_edit_interactive() {
 
     # Set up terminal
     CLK_TUI_SAVED_STTY="$(stty -g 2>/dev/null)"
-    trap clk__tui_cleanup EXIT INT TERM
+    trap clk__tui_cleanup EXIT
+    trap 'clk__tui_cleanup; exit 0' INT TERM
     stty -echo -icanon 2>/dev/null
     # Hide cursor
     printf '\033[?25l' >/dev/tty
