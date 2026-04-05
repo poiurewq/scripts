@@ -39,31 +39,41 @@ CLK_LOG_TMP=""
 # Synopsis for --help / no-args display
 read -r -d '' CLK_SYNOPSIS << 'EOF' || true
 clk [help]
+
+Core workflow:
     in <tag> [minus <duration> | at <timestamp>] [on <description>]
     out [<tag>] [minus <duration> | at <timestamp>] [on <description>]
     switch <new-tag> [from <old-tag>] [minus <duration> | at <timestamp>] [on <description>]
+    pause | p [<tag>] [minus <duration> | at <timestamp>]
+    resume | r [<tag>] [minus <duration> | at <timestamp>]
+    resume-focus | R <tag> [minus <duration> | at <timestamp>]
+    unpause | up [<tag>]
+
+Record management:
     add | a <tag> for <duration> [minus <duration> | at <timestamp>] [on <description>]
     add | a <duration> [to <tag>]
     add-break | ab <duration> [to <tag>]
     extend [<tag>] [minus <duration> | at <timestamp> | by <duration>]
     remove | pop [-<n>]
     reactivate | ra -<n>
-    pause | p [<tag>] [minus <duration> | at <timestamp>]
-    resume | r [<tag>] [minus <duration> | at <timestamp>]
-    resume-focus | R <tag> [minus <duration> | at <timestamp>]
-    unpause | up [<tag>]
-    undo | redo
-    status | s
-    last | l [<n>]
-    -<n> | <n>
+
+Editing:
     edit | e                                              (interactive)
     edit | e (-<n> | <n>) {tag|start|pause|on} <value>
     edit | e (-<n> | <n>) {end} <timestamp> [--adjust active|break]
     edit | e (-<n> | <n>) {active|break} <duration> [--adjust ...]
     edit | e (-<n> | <n>) delete
+
+Viewing:
+    status | s
+    last | l [<n>]
+    -<n> | <n>
     log
     view | v <range> [<filter>]
     <range> [<filter>]
+
+Utilities:
+    undo | redo
     alias
 
 <range>:

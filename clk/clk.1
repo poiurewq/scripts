@@ -7,7 +7,8 @@
 .Sh SYNOPSIS
 .Nm
 .Op Cm help
-.br
+.Pp
+Core workflow:
 .Nm
 .Cm in Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
@@ -17,6 +18,19 @@
 .Nm
 .Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
+.Nm
+.Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
+.br
+.Nm
+.Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
+.br
+.Nm
+.Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
+.br
+.Nm
+.Bro Cm unpause | Cm up Brc Op Ar tag
+.Pp
+Record management:
 .Nm
 .Bro Cm add | Cm a Brc Ar tag Cm for Ar duration Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
@@ -34,34 +48,8 @@
 .br
 .Nm
 .Bro Cm reactivate | Cm ra Brc Fl Ar n
-.br
-.Nm
-.Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
-.br
-.Nm
-.Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
-.br
-.Nm
-.Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
-.br
-.Nm
-.Bro Cm unpause | Cm up Brc Op Ar tag
-.br
-.Nm
-.Cm undo
-.br
-.Nm
-.Cm redo
-.br
-.Nm
-.Bro Cm status | Cm s Brc
-.br
-.Nm
-.Bro Cm last | Cm l Brc Op Ar n
-.br
-.Nm
-.Bro Fl Ar n | Ar n Brc
-.br
+.Pp
+Editing:
 .Nm
 .Bro Cm edit | Cm e Brc
 .br
@@ -76,6 +64,16 @@
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm delete
+.Pp
+Viewing:
+.Nm
+.Bro Cm status | Cm s Brc
+.br
+.Nm
+.Bro Cm last | Cm l Brc Op Ar n
+.br
+.Nm
+.Bro Fl Ar n | Ar n Brc
 .br
 .Nm
 .Cm log
@@ -85,6 +83,13 @@
 .br
 .Nm
 .Ar range Op Ar filter
+.Pp
+Utilities:
+.Nm
+.Cm undo
+.br
+.Nm
+.Cm redo
 .br
 .Nm
 .Cm alias
@@ -147,7 +152,7 @@ offers a shell alias
 that you can inject via
 .Ql clk alias
 for faster invocation.
-.Ss Clock in/out
+.Ss Core workflow
 .Bl -tag -width indent
 .It Cm in Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 Clock in to a work session labeled with
@@ -200,8 +205,37 @@ specifies which active session to close.
 If omitted and exactly one session is active, it is inferred.
 .Cm on Ar description
 applies to the session being closed.
+.It Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
+Pause an active session.
+The session must not already be paused.
+.Cm minus Ar duration
+sets the pause start to that much time ago.
+If
+.Ar tag
+is omitted and exactly one session is active, it is inferred.
+.It Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
+Resume a paused session.
+The pause duration is added to the session's accumulated break time.
+.Cm minus Ar duration
+sets the resume point to that much time ago.
+.Cm at Ar timestamp
+sets the resume point to an explicit time.
+.It Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
+Resume the specified session and pause all other active (non-paused) sessions.
+If the target session is already running (not paused), it is left as-is and only the
+other sessions are paused.
+The tag is required.
+.Cm minus Ar duration
+and
+.Cm at Ar timestamp
+set the timestamp used for both the resume and the pauses.
+The entire operation is a single undo step.
+.It Bro Cm unpause | Cm up Brc Op Ar tag
+Cancel a pause without adding break time.
+Useful when a pause was started by mistake.
+Does not affect the undo stack.
 .El
-.Ss Adding and modifying sessions
+.Ss Record management
 .Bl -tag -width indent
 .It Cm add Ar tag Cm for Ar duration Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 Add a completed session of
@@ -263,49 +297,86 @@ The session's start time, tag, accumulated break time, and description are
 preserved; end time, length, and pause state are cleared.
 Fails if the same tag already has an active session.
 .El
-.Ss Pause and resume
+.Ss Editing records
 .Bl -tag -width indent
-.It Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
-Pause an active session.
-The session must not already be paused.
-.Cm minus Ar duration
-sets the pause start to that much time ago.
-If
-.Ar tag
-is omitted and exactly one session is active, it is inferred.
-.It Bro Cm resume | Cm r Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
-Resume a paused session.
-The pause duration is added to the session's accumulated break time.
-.Cm minus Ar duration
-sets the resume point to that much time ago.
-.Cm at Ar timestamp
-sets the resume point to an explicit time.
-.It Bro Cm resume-focus | Cm R Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
-Resume the specified session and pause all other active (non-paused) sessions.
-If the target session is already running (not paused), it is left as-is and only the
-other sessions are paused.
-The tag is required.
-.Cm minus Ar duration
-and
-.Cm at Ar timestamp
-set the timestamp used for both the resume and the pauses.
-The entire operation is a single undo step.
-.It Bro Cm unpause | Cm up Brc Op Ar tag
-Cancel a pause without adding break time.
-Useful when a pause was started by mistake.
-Does not affect the undo stack.
+.It Cm edit
+With no arguments, opens an interactive TUI for browsing and editing records.
+Displays all active sessions plus the most recent completed sessions (up to 10 rows).
+Use arrow keys to navigate, Enter to select a record, and
+.Sy q
+to quit.
+When editing time-related fields interactively, the TUI prompts for which field
+should absorb the change.
+Requires a terminal.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm tag Ar new-tag
+Change the tag of the specified record.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm start Ar timestamp
+Change the start time.
+Recalculates length on completed records.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm end Ar timestamp Op Fl -adjust Cm active | Cm break
+Change the end time.
+Only valid on completed records.
+By default
+.Pq Fl -adjust Cm active ,
+recalculates active time.
+With
+.Fl -adjust Cm break ,
+keeps active time fixed and recalculates break time.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm active Ar duration Fl -adjust Cm start | Cm end | Cm break
+Set active time directly.
+.Ar duration
+may be an integer (minutes) or a string like
+.Dq 1h30m ,
+.Dq 2h ,
+or
+.Dq 45m .
+Requires
+.Fl -adjust
+to specify which field absorbs the change:
+.Cm start
+pushes the start time,
+.Cm end
+pushes the end time (done sessions only),
+.Cm break
+adjusts break time.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm break Ar duration Op Fl -adjust Cm active | Cm start | Cm end
+Set break time.
+.Ar duration
+accepts the same formats as
+.Cm active .
+By default
+.Pq Fl -adjust Cm active ,
+recalculates active time.
+With
+.Fl -adjust Cm start ,
+pushes the start time.
+With
+.Fl -adjust Cm end ,
+pushes the end time (done sessions only).
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm pause Bro Ar timestamp | Cm clear Brc
+Set or clear the paused-at timestamp on an active record.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm on Ar description
+Change the description.
+All arguments after
+.Cm on
+are collected as the description.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm delete
+Delete the record entirely.
 .El
-.Ss Undo and redo
-.Bl -tag -width indent
-.It Cm undo
-Undo the last mutating operation.
-Displays a human-readable diff of the change.
-Only one level of undo is supported; each new mutation overwrites the
-undo snapshot.
-.It Cm redo
-Redo the last undone operation.
-Displays a human-readable diff of the change.
-.El
+.Pp
+The index uses the same signed convention as the
+.Nm Bro Fl Ar n | Ar n Brc
+single-record shortcut:
+a negative index
+.Fl Ar n
+counts back from the most recent completed session
+.Pq Fl 1 No = most recent done ;
+a positive index
+.Ar n
+counts forward from the oldest active session
+.Pq Ar 1 No = oldest active .
+All edit operations save an undo snapshot.
+Non-delete edits show the record before and after the change for comparison.
 .Ss Viewing records
 .Bl -tag -width indent
 .It Bro Cm status | Cm s Brc
@@ -496,88 +567,16 @@ Without
 displays a table of tags with total minutes, hours, and percentages.
 Active sessions whose start time falls within the range are excluded
 from totals and noted separately.
-.Ss Editing records
+.Ss Utilities
 .Bl -tag -width indent
-.It Cm edit
-With no arguments, opens an interactive TUI for browsing and editing records.
-Displays all active sessions plus the most recent completed sessions (up to 10 rows).
-Use arrow keys to navigate, Enter to select a record, and
-.Sy q
-to quit.
-When editing time-related fields interactively, the TUI prompts for which field
-should absorb the change.
-Requires a terminal.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm tag Ar new-tag
-Change the tag of the specified record.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm start Ar timestamp
-Change the start time.
-Recalculates length on completed records.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm end Ar timestamp Op Fl -adjust Cm active | Cm break
-Change the end time.
-Only valid on completed records.
-By default
-.Pq Fl -adjust Cm active ,
-recalculates active time.
-With
-.Fl -adjust Cm break ,
-keeps active time fixed and recalculates break time.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm active Ar duration Fl -adjust Cm start | Cm end | Cm break
-Set active time directly.
-.Ar duration
-may be an integer (minutes) or a string like
-.Dq 1h30m ,
-.Dq 2h ,
-or
-.Dq 45m .
-Requires
-.Fl -adjust
-to specify which field absorbs the change:
-.Cm start
-pushes the start time,
-.Cm end
-pushes the end time (done sessions only),
-.Cm break
-adjusts break time.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm break Ar duration Op Fl -adjust Cm active | Cm start | Cm end
-Set break time.
-.Ar duration
-accepts the same formats as
-.Cm active .
-By default
-.Pq Fl -adjust Cm active ,
-recalculates active time.
-With
-.Fl -adjust Cm start ,
-pushes the start time.
-With
-.Fl -adjust Cm end ,
-pushes the end time (done sessions only).
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm pause Bro Ar timestamp | Cm clear Brc
-Set or clear the paused-at timestamp on an active record.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm on Ar description
-Change the description.
-All arguments after
-.Cm on
-are collected as the description.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm delete
-Delete the record entirely.
-.El
-.Pp
-The index uses the same signed convention as the
-.Nm Bro Fl Ar n | Ar n Brc
-single-record shortcut:
-a negative index
-.Fl Ar n
-counts back from the most recent completed session
-.Pq Fl 1 No = most recent done ;
-a positive index
-.Ar n
-counts forward from the oldest active session
-.Pq Ar 1 No = oldest active .
-All edit operations save an undo snapshot.
-Non-delete edits show the record before and after the change for comparison.
-.Ss Miscellaneous
-.Bl -tag -width indent
+.It Cm undo
+Undo the last mutating operation.
+Displays a human-readable diff of the change.
+Only one level of undo is supported; each new mutation overwrites the
+undo snapshot.
+.It Cm redo
+Redo the last undone operation.
+Displays a human-readable diff of the change.
 .It Cm help
 Show this man page.
 Falls back to a synopsis if the man page is not installed.
