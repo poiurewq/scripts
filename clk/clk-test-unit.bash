@@ -852,6 +852,48 @@ test_ensure_log_idempotent() {
 }
 
 #####################################################################
+# Tests — clk__parse_duration
+#####################################################################
+
+test_parse_duration_plain_minutes() {
+    clk__parse_duration "90"
+    clk_test__assert_equals "5400" "$CLK_PARSED_DURATION_SECS" "90 minutes = 5400 seconds"
+}
+
+test_parse_duration_hours_only() {
+    clk__parse_duration "2h"
+    clk_test__assert_equals "7200" "$CLK_PARSED_DURATION_SECS" "2h = 7200 seconds"
+}
+
+test_parse_duration_minutes_only() {
+    clk__parse_duration "45m"
+    clk_test__assert_equals "2700" "$CLK_PARSED_DURATION_SECS" "45m = 2700 seconds"
+}
+
+test_parse_duration_hours_and_minutes() {
+    clk__parse_duration "1h30m"
+    clk_test__assert_equals "5400" "$CLK_PARSED_DURATION_SECS" "1h30m = 5400 seconds"
+}
+
+test_parse_duration_uppercase() {
+    clk__parse_duration "2H15M"
+    clk_test__assert_equals "8100" "$CLK_PARSED_DURATION_SECS" "2H15M = 8100 seconds"
+}
+
+test_parse_duration_zero() {
+    clk__parse_duration "0"
+    clk_test__assert_equals "0" "$CLK_PARSED_DURATION_SECS" "0 minutes = 0 seconds"
+}
+
+test_parse_duration_invalid() {
+    clk_test__assert_exit 1 clk__parse_duration "abc"
+}
+
+test_parse_duration_invalid_mixed() {
+    clk_test__assert_exit 1 clk__parse_duration "1h30"
+}
+
+#####################################################################
 # Test list
 #####################################################################
 
@@ -937,6 +979,16 @@ CLK_TESTS_UNIT=(
     test_fmt_ts_display_non_today
     test_fmt_ts_display_today
     test_fmt_ts_display_raw_mode
+
+    # parse_duration
+    test_parse_duration_plain_minutes
+    test_parse_duration_hours_only
+    test_parse_duration_minutes_only
+    test_parse_duration_hours_and_minutes
+    test_parse_duration_uppercase
+    test_parse_duration_zero
+    test_parse_duration_invalid
+    test_parse_duration_invalid_mixed
 
     # validate_positive_int
     test_validate_positive_int_valid

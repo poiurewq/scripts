@@ -63,7 +63,16 @@
 .Bro Fl Ar n | Ar n Brc
 .br
 .Nm
-.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm start | Cm end | Cm break | Cm pause | Cm on Brc Ar value
+.Bro Cm edit | Cm e Brc
+.br
+.Nm
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm start | Cm pause | Cm on Brc Ar value
+.br
+.Nm
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm end Ar timestamp Op Fl -adjust Bro Cm active | Cm break Brc
+.br
+.Nm
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm active | Cm break Brc Ar duration Op Fl -adjust Bro Cm start | Cm end | Cm break | Cm active Brc
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm delete
@@ -476,18 +485,60 @@ Active sessions whose start time falls within the range are excluded
 from totals and noted separately.
 .Ss Editing records
 .Bl -tag -width indent
+.It Cm edit
+With no arguments, opens an interactive TUI for browsing and editing records.
+Displays all active sessions plus the most recent completed sessions (up to 10 rows).
+Use arrow keys to navigate, Enter to select a record, and
+.Sy q
+to quit.
+When editing time-related fields interactively, the TUI prompts for which field
+should absorb the change.
+Requires a terminal.
 .It Cm edit Bro Fl Ar n | Ar n Brc Cm tag Ar new-tag
 Change the tag of the specified record.
 .It Cm edit Bro Fl Ar n | Ar n Brc Cm start Ar timestamp
 Change the start time.
 Recalculates length on completed records.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm end Ar timestamp
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm end Ar timestamp Op Fl -adjust Cm active | Cm break
 Change the end time.
-Only valid on completed records; recalculates length.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm break Ar minutes
-Set break time to
-.Ar minutes .
-Recalculates length on completed records.
+Only valid on completed records.
+By default
+.Pq Fl -adjust Cm active ,
+recalculates active time.
+With
+.Fl -adjust Cm break ,
+keeps active time fixed and recalculates break time.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm active Ar duration Fl -adjust Cm start | Cm end | Cm break
+Set active time directly.
+.Ar duration
+may be an integer (minutes) or a string like
+.Dq 1h30m ,
+.Dq 2h ,
+or
+.Dq 45m .
+Requires
+.Fl -adjust
+to specify which field absorbs the change:
+.Cm start
+pushes the start time,
+.Cm end
+pushes the end time (done sessions only),
+.Cm break
+adjusts break time.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm break Ar duration Op Fl -adjust Cm active | Cm start | Cm end
+Set break time.
+.Ar duration
+accepts the same formats as
+.Cm active .
+By default
+.Pq Fl -adjust Cm active ,
+recalculates active time.
+With
+.Fl -adjust Cm start ,
+pushes the start time.
+With
+.Fl -adjust Cm end ,
+pushes the end time (done sessions only).
 .It Cm edit Bro Fl Ar n | Ar n Brc Cm pause Bro Ar timestamp | Cm clear Brc
 Set or clear the paused-at timestamp on an active record.
 .It Cm edit Bro Fl Ar n | Ar n Brc Cm on Ar description
@@ -639,11 +690,23 @@ Show just the second-to-last completed record:
 Show just the oldest active session:
 .Dl $ clk 1
 .Pp
+Browse and edit records interactively:
+.Dl $ clk edit
+.Pp
 Change the tag on the most recent record:
 .Dl $ clk edit -1 tag admin
 .Pp
 Fix the start time of the second-to-last record:
 .Dl $ clk edit -2 start 09:15
+.Pp
+Change end time, adjusting break time instead of active time:
+.Dl $ clk edit -1 end 17:30 --adjust break
+.Pp
+Set active time directly, pushing start back to match:
+.Dl $ clk edit -1 active 2h30m --adjust start
+.Pp
+Set break time using a duration string:
+.Dl $ clk edit -1 break 1h15m
 .Pp
 Delete a record:
 .Dl $ clk edit -3 delete

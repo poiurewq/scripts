@@ -310,6 +310,123 @@ test_edit_start_date_only_timestamp() {
 }
 
 #####################################################################
+# Tests — clk edit end --adjust
+#####################################################################
+
+test_edit_end_adjust_active_default() {
+    # Default behavior: adjusting end recalculates active time
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Original: start=09:00, end=10:00, length=3600, break=0
+    "$CLK_SCRIPT" edit -1 end 2026-01-01T10:30:00 >/dev/null 2>&1
+    # New: span=90m, break=0 → length=5400
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:30:00	work	5400	0'
+}
+
+test_edit_end_adjust_break() {
+    # Add a session with break: start=09:00, end=10:00, break=600 (10m), length=2400 (40m)
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" edit -1 break 10 >/dev/null 2>&1
+    # Now: start=09:00, end=10:00, break=600, length=3000 (50m)
+    # Move end to 10:30 --adjust break → keep active=3000, new break = 5400-3000 = 2400
+    "$CLK_SCRIPT" edit -1 end 2026-01-01T10:30:00 --adjust break >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:30:00	work	3000	2400'
+}
+
+test_edit_end_adjust_break_negative() {
+    # If keeping active would make break negative, should fail
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # length=3600, break=0. If we move end to 09:30 --adjust break → break = -1800
+    clk_test__assert_exit 1 "$CLK_SCRIPT" edit -1 end 2026-01-01T09:30:00 --adjust break
+}
+
+#####################################################################
+# Tests — clk edit active (new field)
+#####################################################################
+
+test_edit_active_adjust_start() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Original: start=09:00, end=10:00, length=3600, break=0
+    # Set active to 30m (1800s), --adjust start → new start = 10:00 - 1800 - 0 = 09:30
+    "$CLK_SCRIPT" edit -1 active 30m --adjust start >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:30:00	2026-01-01T10:00:00	work	1800	0'
+}
+
+test_edit_active_adjust_end() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Set active to 90m (5400s), --adjust end → new end = 09:00 + 5400 + 0 = 10:30
+    "$CLK_SCRIPT" edit -1 active 1h30m --adjust end >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:30:00	work	5400	0'
+}
+
+test_edit_active_adjust_break() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Original: span=3600, length=3600, break=0
+    # Set active to 50m (3000s), --adjust break → break = 3600 - 3000 = 600
+    "$CLK_SCRIPT" edit -1 active 50 --adjust break >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:00:00	work	3000	600'
+}
+
+test_edit_active_adjust_break_exceeds_span() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Set active to 90m with --adjust break → break = 3600 - 5400 = negative
+    clk_test__assert_exit 1 "$CLK_SCRIPT" edit -1 active 90 --adjust break
+}
+
+test_edit_active_requires_adjust() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # active without --adjust should fail
+    clk_test__assert_exit 1 "$CLK_SCRIPT" edit -1 active 30
+}
+
+test_edit_active_duration_string() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Test 2h format
+    "$CLK_SCRIPT" edit -1 active 2h --adjust end >/dev/null 2>&1
+    # new end = 09:00 + 7200 + 0 = 11:00
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T11:00:00	work	7200	0'
+}
+
+#####################################################################
+# Tests — clk edit break with duration strings and --adjust
+#####################################################################
+
+test_edit_break_duration_string() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Use "30m" instead of "30"
+    "$CLK_SCRIPT" edit -1 break 30m >/dev/null 2>&1
+    # span=3600, new break=1800, length=1800
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:00:00	work	1800	1800'
+}
+
+test_edit_break_duration_hm() {
+    "$CLK_SCRIPT" add work for 120 at 2026-01-01T12:00:00 >/dev/null 2>&1
+    # Original: start=10:00, end=12:00, length=7200, break=0
+    "$CLK_SCRIPT" edit -1 break 1h --adjust active >/dev/null 2>&1
+    # break=3600, length=3600
+    clk_test__assert_log_line 1 '^done	2026-01-01T10:00:00	2026-01-01T12:00:00	work	3600	3600'
+}
+
+test_edit_break_adjust_start() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Original: start=09:00, end=10:00, length=3600, break=0
+    # Set break=30m, --adjust start → new start = 10:00 - 3600 - 1800 = 08:30
+    "$CLK_SCRIPT" edit -1 break 30 --adjust start >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T08:30:00	2026-01-01T10:00:00	work	3600	1800'
+}
+
+test_edit_break_adjust_end() {
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Set break=30m, --adjust end → new end = 09:00 + 3600 + 1800 = 10:30
+    "$CLK_SCRIPT" edit -1 break 30 --adjust end >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:30:00	work	3600	1800'
+}
+
+test_edit_interactive_requires_tty() {
+    # Piped input should fail
+    clk_test__assert_exit 1 sh -c "echo '' | $CLK_SCRIPT edit"
+}
+
+#####################################################################
 # Test registry
 #####################################################################
 
@@ -349,4 +466,26 @@ CLK_TESTS_EDIT=(
     test_edit_start_simplified_timestamp
     test_edit_end_simplified_timestamp
     test_edit_start_date_only_timestamp
+
+    # edit end --adjust
+    test_edit_end_adjust_active_default
+    test_edit_end_adjust_break
+    test_edit_end_adjust_break_negative
+
+    # edit active (new field)
+    test_edit_active_adjust_start
+    test_edit_active_adjust_end
+    test_edit_active_adjust_break
+    test_edit_active_adjust_break_exceeds_span
+    test_edit_active_requires_adjust
+    test_edit_active_duration_string
+
+    # edit break duration + --adjust
+    test_edit_break_duration_string
+    test_edit_break_duration_hm
+    test_edit_break_adjust_start
+    test_edit_break_adjust_end
+
+    # interactive mode
+    test_edit_interactive_requires_tty
 )
