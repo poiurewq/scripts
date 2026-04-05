@@ -79,6 +79,39 @@ test_add_session_simplified_timestamp_no_seconds() {
     clk_test__assert_log_line 1 '^done	2026-01-01T09:30:00	2026-01-01T10:00:00	work	1800	0'
 }
 
+test_add_session_for_duration_string() {
+    "$CLK_SCRIPT" add work for 1h30m at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # 1h30m = 5400s, start = 08:30
+    clk_test__assert_log_line 1 '^done	2026-01-01T08:30:00	2026-01-01T10:00:00	work	5400	0'
+}
+
+test_add_session_minus_duration_string() {
+    # 'minus 2h' should resolve end_ts to now-2h; start = end - 30m
+    "$CLK_SCRIPT" in play at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" add work for 30m at 2026-01-01T10:00:00
+}
+
+test_add_time_duration_string() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add 1h to work >/dev/null 2>&1
+    # Start time should move back 1h to 08:00
+    clk_test__assert_log_line 1 '^active	2026-01-01T08:00:00		work'
+}
+
+test_add_time_duration_hm() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add 1h15m >/dev/null 2>&1
+    # 1h15m back → 07:45
+    clk_test__assert_log_line 1 '^active	2026-01-01T07:45:00		work'
+}
+
+test_add_break_duration_string() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" add-break 2h to work >/dev/null 2>&1
+    # break_secs field (6) should be 7200
+    clk_test__assert_log_line 1 '^active	2026-01-01T09:00:00		work		7200		$'
+}
+
 #####################################################################
 # Tests — clk add (time to active) (integration)
 #####################################################################
@@ -111,7 +144,7 @@ test_add_time_confirmation_output() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" add 15 to work 2>&1)"
-    clk_test__assert_output_contains "Added 15 minutes" printf '%s' "$output" &&
+    clk_test__assert_output_contains "Added 15m" printf '%s' "$output" &&
     clk_test__assert_output_contains "2026-01-01 09:00" printf '%s' "$output" &&
     clk_test__assert_output_contains "2026-01-01 08:45" printf '%s' "$output"
 }
@@ -331,6 +364,14 @@ test_extend_by_shifts_end_time() {
     clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T10:30:00	work	5400	0'
 }
 
+test_extend_by_duration_string() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" extend by 1h30m >/dev/null 2>&1
+    # End should now be 11:30, length should be 2h30m = 9000s
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:00:00	2026-01-01T11:30:00	work	9000	0'
+}
+
 test_extend_by_with_tag() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
@@ -455,6 +496,41 @@ test_remove_by_index_out_of_range() {
 test_remove_by_index_no_done_records() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     clk_test__assert_exit 5 "$CLK_SCRIPT" remove -1
+}
+
+test_remove_positive_index_basic() {
+    # `clk remove 1` removes the oldest active session (index +1)
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove 1 >/dev/null 2>&1
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$count" "remove 1 removes one active session"
+    local tags
+    tags="$(awk -F'\t' '/^[^#]/ && NF>0 {print $4}' "$CLK_TEST_DIR/clk/clk.tsv" | tr '\n' ' ' | sed 's/ *$//')"
+    clk_test__assert_equals "b" "$tags" "remove 1 removes 'a' (oldest active)"
+}
+
+test_remove_positive_index_n2() {
+    # `clk remove 2` removes the second-oldest active session
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in b at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in c at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" remove 2 >/dev/null 2>&1
+    local tags
+    tags="$(awk -F'\t' '/^[^#]/ && NF>0 {print $4}' "$CLK_TEST_DIR/clk/clk.tsv" | tr '\n' ' ' | sed 's/ *$//')"
+    clk_test__assert_equals "a c" "$tags" "remove 2 removes 'b' (second-oldest active)"
+}
+
+test_remove_positive_index_out_of_range() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" remove 5
+}
+
+test_remove_positive_index_no_active() {
+    "$CLK_SCRIPT" in a at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out a at 2026-01-01T10:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" remove 1
 }
 
 #####################################################################
@@ -781,6 +857,8 @@ CLK_TESTS_MUTATION=(
     test_add_session_alias_a
     test_add_time_alias_a
     test_add_session_simplified_timestamp_no_seconds
+    test_add_session_for_duration_string
+    test_add_session_minus_duration_string
 
     # clk add (time to active)
     test_add_time_basic
@@ -790,6 +868,8 @@ CLK_TESTS_MUTATION=(
     test_add_time_confirmation_output
     test_add_time_creates_undo
     test_add_time_no_active
+    test_add_time_duration_string
+    test_add_time_duration_hm
 
     # clk add-break (integration)
     test_add_break_basic
@@ -801,6 +881,7 @@ CLK_TESTS_MUTATION=(
     test_add_break_confirmation_output
     test_add_break_creates_undo
     test_add_break_missing_minutes
+    test_add_break_duration_string
 
     # clk extend (integration)
     test_extend_basic
@@ -816,6 +897,7 @@ CLK_TESTS_MUTATION=(
     test_extend_tag_active_session_errors
     test_extend_tag_active_session_message
     test_extend_by_shifts_end_time
+    test_extend_by_duration_string
     test_extend_by_with_tag
 
     # clk remove (integration)
@@ -831,6 +913,10 @@ CLK_TESTS_MUTATION=(
     test_remove_by_index_n2
     test_remove_by_index_out_of_range
     test_remove_by_index_no_done_records
+    test_remove_positive_index_basic
+    test_remove_positive_index_n2
+    test_remove_positive_index_out_of_range
+    test_remove_positive_index_no_active
 
     # clk reactivate (integration)
     test_reactivate_basic

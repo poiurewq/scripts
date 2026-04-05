@@ -82,13 +82,14 @@ test_out_display_simplified_timestamps() {
     clk_test__assert_output_contains "2026-01-15 10:00" printf '%s' "$output"
 }
 
-test_last_shows_full_timestamps() {
+test_last_shows_short_timestamps() {
+    # last shows the friendly short format, with the end-date elided when
+    # it matches the start-date.
     "$CLK_SCRIPT" in work at 2026-01-15T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work at 2026-01-15T10:00:00 >/dev/null 2>&1
     local output
     output="$("$CLK_SCRIPT" last 2>&1)"
-    clk_test__assert_output_contains "2026-01-15T09:00:00" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026-01-15T10:00:00" printf '%s' "$output"
+    clk_test__assert_output_contains "2026-01-15 09:00 → 10:00" printf '%s' "$output"
 }
 
 
@@ -249,6 +250,26 @@ test_status_not_shown_after_out() {
     "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
     "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
     clk_test__assert_output_contains "No active sessions" "$CLK_SCRIPT" status
+}
+
+test_status_shows_positive_index() {
+    # Each active session is labeled with +N so users can target it via
+    # `clk <n>`, `clk edit <n>`, or `clk remove <n>`.
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    local output
+    output="$("$CLK_SCRIPT" status 2>&1)"
+    if ! printf '%s' "$output" | grep -q '+1.*work'; then
+        printf 'FAIL: status should prefix first active session with +1\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    if ! printf '%s' "$output" | grep -q '+2.*play'; then
+        printf 'FAIL: status should prefix second active session with +2\n  actual: %s\n' "$output"
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
 }
 
 test_status_alias_s() {
@@ -433,8 +454,7 @@ test_lifecycle_in_out_last() {
     output="$("$CLK_SCRIPT" last 2>&1)"
     # Should show: dev, both timestamps, 2h 30m (9000s), description
     clk_test__assert_output_contains "dev" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026-03-01T08:00:00" printf '%s' "$output" &&
-    clk_test__assert_output_contains "2026-03-01T10:30:00" printf '%s' "$output" &&
+    clk_test__assert_output_contains "2026-03-01 08:00 → 10:30" printf '%s' "$output" &&
     clk_test__assert_output_contains "2h 30m" printf '%s' "$output" &&
     clk_test__assert_output_contains "feature work" printf '%s' "$output"
 }
@@ -486,7 +506,7 @@ CLK_TESTS_SESSION=(
     test_in_confirmation_output
     test_in_space_format_timestamp
     test_out_display_simplified_timestamps
-    test_last_shows_full_timestamps
+    test_last_shows_short_timestamps
 
     # clk out (integration)
     test_out_basic
@@ -511,6 +531,7 @@ CLK_TESTS_SESSION=(
     test_status_multiple_sessions
     test_status_alignment
     test_status_not_shown_after_out
+    test_status_shows_positive_index
     test_status_alias_s
 
     # clk last (integration)

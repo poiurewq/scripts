@@ -17,6 +17,7 @@ set -u
 CLK_FMT='%Y-%m-%dT%H:%M:%S'
 CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM, yyyy-mm-dd)'
 CLK_FMT_RAW=0
+CLK_FMT_DONE_TAG_WIDTH=0
 CLK_TAB='	'
 CLK_LOG_VERSION_MARKER='#clk-v3'
 CLK_VERSION="0.4.0"
@@ -39,37 +40,47 @@ CLK_LOG_TMP=""
 # Synopsis for --help / no-args display
 read -r -d '' CLK_SYNOPSIS << 'EOF' || true
 clk [help]
-    in <tag> [minus <minutes> | at <timestamp>] [on <description>]
-    out [<tag>] [minus <minutes> | at <timestamp>] [on <description>]
-    switch <new-tag> [from <old-tag>] [minus <minutes> | at <timestamp>] [on <description>]
-    add | a <tag> for <minutes> [minus <minutes> | at <timestamp>] [on <description>]
-    add | a <minutes> [to <tag>]
-    add-break | ab <minutes> [to <tag>]
-    extend [<tag>] [minus <minutes> | at <timestamp> | by <minutes>]
-    remove | pop [-<n>]
-    reactivate | ra -<n>
-    pause | p [<tag>] [minus <minutes> | at <timestamp>]
-    resume | r [<tag>] [minus <minutes> | at <timestamp>]
-    resume-focus | R <tag> [minus <minutes> | at <timestamp>]
+
+Core workflow:
+    in <tag> [minus <duration> | at <timestamp>] [on <description>]
+    out [<tag>] [minus <duration> | at <timestamp>] [on <description>]
+    switch <new-tag> [from <old-tag>] [minus <duration> | at <timestamp>] [on <description>]
+    pause | p [<tag>] [minus <duration> | at <timestamp>]
+    resume | r [<tag>] [minus <duration> | at <timestamp>]
+    resume-focus | R <tag> [minus <duration> | at <timestamp>]
     unpause | up [<tag>]
-    undo | redo
-    status | s
-    last | l [<n>]
-    -<n> | <n>
+
+Record management:
+    add | a <tag> for <duration> [minus <duration> | at <timestamp>] [on <description>]
+    add | a <duration> [to <tag>]
+    add-break | ab <duration> [to <tag>]
+    extend [<tag>] [minus <duration> | at <timestamp> | by <duration>]
+    remove | pop [-<n> | <n>]
+    reactivate | ra -<n>
+
+Editing:
     edit | e                                              (interactive)
     edit | e (-<n> | <n>) {tag|start|pause|on} <value>
     edit | e (-<n> | <n>) {end} <timestamp> [--adjust active|break]
     edit | e (-<n> | <n>) {active|break} <duration> [--adjust ...]
     edit | e (-<n> | <n>) delete
+
+Viewing:
+    status | s
+    last | l [<n>]
+    -<n> | <n>
     log
     view | v <range> [<filter>]
     <range> [<filter>]
+
+Utilities:
+    undo | redo
     alias
 
 <range>:
     all | today | yesterday
     {-<n> | this} <unit> [through ...]
-    past [<n>] <unit> [before <timestamp> | before minus <minutes>]
+    past [<n>] <unit> [before <timestamp> | before minus <duration>]
     from <timestamp> to <timestamp>
 
 <filter>:
@@ -77,6 +88,7 @@ clk [help]
 
 <unit>       = hour(s) | day(s) | week(s) | month(s) | year(s)
 <timestamp>  = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
+<duration>   = <minutes> | Xh | Ym | XhYm    (e.g., 90, 2h, 45m, 1h30m)
 EOF
 
 #####################################################################
@@ -142,22 +154,22 @@ clk__now_fmt() {
     date +"$CLK_FMT"
 }
 
-# clk__resolve_time(at_val, minus_val) → timestamp
+# clk__resolve_time(at_val, minus_secs) → timestamp
 # Resolves the at/minus/now tri-state that recurs in nearly every subcommand.
-# If at_val is set, return it. Elif minus_val is set, return now - N minutes.
+# If at_val is set, return it. Elif minus_secs is set, return now - N seconds.
 # Else return now.
 #
 # --- RATIONALE: Extracted tri-state ---
 # This tri-state recurs in in, out, switch, add, extend, pause, resume.
 # Extracting it eliminates ~80 lines of duplicated logic from v1.
 clk__resolve_time() {
-    local at_val="$1" minus_val="$2"
+    local at_val="$1" minus_secs="$2"
     if [ -n "$at_val" ]; then
         printf '%s' "$at_val"
-    elif [ -n "$minus_val" ]; then
+    elif [ -n "$minus_secs" ]; then
         local now_epoch
         now_epoch="$(clk__now_epoch)"
-        clk__from_epoch "$(( now_epoch - minus_val * 60 ))"
+        clk__from_epoch "$(( now_epoch - minus_secs ))"
     else
         clk__now_fmt
     fi
@@ -360,7 +372,21 @@ clk__fmt_record() {
         local disp_start disp_end
         disp_start="$(clk__fmt_ts_display "$start_time")"
         disp_end="$(clk__fmt_ts_display "$end_time")"
-        out="${tag}  ${disp_start} → ${disp_end}  ${dur_str}"
+        # Elide end-date when it matches start-date (non-raw mode only):
+        # "2026-04-04 14:58 → 2026-04-04 15:43" becomes
+        # "2026-04-04 14:58 → 15:43".
+        if [ "$CLK_FMT_RAW" != "1" ]; then
+            local start_date="${start_time%%T*}"
+            local end_date="${end_time%%T*}"
+            if [ "$start_date" = "$end_date" ] && [ "${disp_end#* }" != "$disp_end" ]; then
+                disp_end="${disp_end#* }"
+            fi
+        fi
+        local tag_display="$tag"
+        if [ "${CLK_FMT_DONE_TAG_WIDTH:-0}" -gt "${#tag}" ]; then
+            tag_display="$(printf "%-${CLK_FMT_DONE_TAG_WIDTH}s" "$tag")"
+        fi
+        out="${tag_display}  ${disp_start} → ${disp_end}  ${dur_str}"
         if [ -n "$break_secs" ] && [ "$break_secs" -gt 0 ] 2>/dev/null; then
             local break_str
             break_str="$(clk__fmt_duration "$break_secs")"
@@ -429,9 +455,9 @@ clk__validate_tag() {
     fi
     if printf '%s' "$tag" | grep -Eq '^[0-9]+$'; then
         # --- RATIONALE: No numeric tags ---
-        # The add subcommand is overloaded: add <tag> for <minutes> vs
-        # add <minutes> [to <tag>]. The parser disambiguates by checking if $2
-        # is numeric. If tags could be numbers, this would be ambiguous.
+        # The add subcommand is overloaded: add <tag> for <duration> vs
+        # add <duration> [to <tag>]. The parser disambiguates by checking if $2
+        # looks like a duration. If tags could be numbers, this would be ambiguous.
         clk__die 1 "Tag '$tag' cannot be purely numeric. Use a descriptive name."
     fi
     if printf '%s' "$tag" | grep -Eq '[[:space:]]'; then
@@ -759,7 +785,7 @@ clk__ensure_log() {
 #####################################################################
 
 # --- clk_do_in ---
-# clk in <tag> [minus <minutes> | at <timestamp>] [on <description>]
+# clk in <tag> [minus <duration> | at <timestamp>] [on <description>]
 #
 # --- RATIONALE: Description at clock-in ---
 # Users often know what they're about to work on when they clock in, but may
@@ -792,7 +818,7 @@ clk_do_in() {
 }
 
 # --- clk_do_out ---
-# clk out [<tag>] [minus <minutes> | at <timestamp>] [on <description>]
+# clk out [<tag>] [minus <duration> | at <timestamp>] [on <description>]
 #
 # --- RATIONALE: Description override at clock-out ---
 # Users often set a description at clock-in for intent, then refine it at
@@ -887,13 +913,18 @@ clk_do_status() {
 
     # Pad tags to a minimum width so "started" stays column-aligned across rows
     CLK_FMT_ACTIVE_TAG_WIDTH=7
-    local lineno
+    local lineno idx=1
     while IFS= read -r lineno; do
         local line_content
         line_content="$(clk__get_line "$lineno")"
         local formatted
         formatted="$(clk__fmt_record "$line_content")"
-        printf '  %s\n' "$formatted"
+        # Show the positive index (+N) so users can target a session by
+        # index with `clk <n>`, `clk edit <n> ...`, or `clk remove <n>`.
+        # Active lines come out of clk__find_active in log order (oldest
+        # first), which matches the +1..+N convention.
+        printf '  +%d  %s\n' "$idx" "$formatted"
+        idx=$(( idx + 1 ))
     done <<< "$lines"
 
     CLK_FMT_ACTIVE_TAG_WIDTH=0
@@ -933,10 +964,8 @@ clk__show_done_at() {
 
     local line_content
     line_content="$(clk__get_line "$lineno")"
-    CLK_FMT_RAW=1
     local formatted
     formatted="$(clk__fmt_record "$line_content")"
-    CLK_FMT_RAW=0
 
     local this_tag="${formatted%%  *}"
     local this_rest="${formatted#*  }"
@@ -970,10 +999,8 @@ clk__show_active_at() {
 
     local line_content
     line_content="$(clk__get_line "$lineno")"
-    CLK_FMT_RAW=1
     local formatted
     formatted="$(clk__fmt_record "$line_content")"
-    CLK_FMT_RAW=0
 
     local this_tag="${formatted%%  *}"
     local this_rest="${formatted#*  }"
@@ -1006,15 +1033,21 @@ clk_do_last() {
         n="$total_done"
     fi
 
+    # Pad tags to a 7-char floor so the start/end times stay column-aligned
+    # across rows (mirrors the pattern used by clk_do_status).
+    CLK_FMT_DONE_TAG_WIDTH=7
+
     local i="$n"
     while [ "$i" -ge 1 ]; do
         clk__show_done_at "$i"
         i=$(( i - 1 ))
     done
+
+    CLK_FMT_DONE_TAG_WIDTH=0
 }
 
 # --- clk_do_pause ---
-# clk pause [<tag>] [minus <minutes> | at <timestamp>]
+# clk pause [<tag>] [minus <duration> | at <timestamp>]
 clk_do_pause() {
     local tag="$1" minus_val="$2" at_ts="$3"
 
@@ -1094,7 +1127,7 @@ ${lineno}"
     elif [ -n "$minus_val" ]; then
         local now_epoch
         now_epoch="$(clk__now_epoch)"
-        pause_epoch=$(( now_epoch - minus_val * 60 ))
+        pause_epoch=$(( now_epoch - minus_val ))
     else
         pause_epoch="$(clk__now_epoch)"
     fi
@@ -1121,7 +1154,7 @@ ${lineno}"
 }
 
 # --- clk_do_resume ---
-# clk resume [<tag>] [minus <minutes>]
+# clk resume [<tag>] [minus <duration>]
 clk_do_resume() {
     local tag="$1" minus_val="$2" at_ts="$3"
 
@@ -1151,7 +1184,7 @@ clk_do_resume() {
     elif [ -n "$minus_val" ]; then
         local now_epoch
         now_epoch="$(clk__now_epoch)"
-        resume_epoch=$(( now_epoch - minus_val * 60 ))
+        resume_epoch=$(( now_epoch - minus_val ))
     else
         resume_epoch="$(clk__now_epoch)"
     fi
@@ -1229,7 +1262,7 @@ clk_do_unpause() {
 }
 
 # --- clk_do_resume_focus ---
-# clk resume-focus <tag> [minus <minutes> | at <timestamp>]
+# clk resume-focus <tag> [minus <duration> | at <timestamp>]
 #
 # Resume the specified tag and pause all other active (non-paused) sessions.
 # A single undo snapshot covers the entire compound operation.
@@ -1261,7 +1294,7 @@ clk_do_resume_focus() {
     elif [ -n "$minus_val" ]; then
         local now_epoch
         now_epoch="$(clk__now_epoch)"
-        action_epoch=$(( now_epoch - minus_val * 60 ))
+        action_epoch=$(( now_epoch - minus_val ))
     else
         action_epoch="$(clk__now_epoch)"
     fi
@@ -1353,7 +1386,7 @@ ${lineno}"
 }
 
 # --- clk_do_switch ---
-# clk switch <new-tag> [from <old-tag>] [minus <minutes> | at <timestamp>] [on <description>]
+# clk switch <new-tag> [from <old-tag>] [minus <duration> | at <timestamp>] [on <description>]
 #
 # --- RATIONALE: from keyword ---
 # With multiple active sessions, the script cannot infer which session to
@@ -1384,20 +1417,19 @@ clk_do_switch() {
 }
 
 # --- clk_do_add_session ---
-# clk add <tag> for <minutes> [minus <minutes> | at <timestamp>] [on <description>]
+# clk add <tag> for <duration> [minus <duration> | at <timestamp>] [on <description>]
 # Creates a completed (done) record directly.
 clk_do_add_session() {
-    local tag="$1" for_minutes="$2" at_ts="$3" minus_val="$4" description="$5"
+    local tag="$1" for_secs="$2" at_ts="$3" minus_val="$4" description="$5"
 
     clk__validate_tag "$tag"
-    clk__validate_positive_int "$for_minutes" "<minutes> after 'for'"
 
     local end_ts
     end_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
 
     local end_epoch start_epoch length_secs start_ts
     end_epoch="$(clk__to_epoch "$end_ts")"
-    length_secs=$(( for_minutes * 60 ))
+    length_secs="$for_secs"
     start_epoch=$(( end_epoch - length_secs ))
     start_ts="$(clk__from_epoch "$start_epoch")"
 
@@ -1416,17 +1448,15 @@ clk_do_add_session() {
 }
 
 # --- clk_do_add_time ---
-# clk add <minutes> [to <tag>]
-# Adjusts the active session's START_TIME backwards by <minutes> minutes.
+# clk add <duration> [to <tag>]
+# Adjusts the active session's START_TIME backwards by <duration>.
 #
 # --- RATIONALE: Adjusting start time ---
 # "Add 15 minutes" means "I was actually working 15 minutes before I
 # clocked in." Moving the start time backwards preserves the invariant
 # LENGTH = (END - START) - BREAK without a separate "bonus time" field.
 clk_do_add_time() {
-    local minutes="$1" tag="$2"
-
-    clk__validate_positive_int "$minutes" "<minutes> in 'clk add <minutes>'"
+    local add_secs="$1" tag="$2"
 
     clk__require_active_tag "$tag"
     local active_line="$CLK_ACTIVE_LINE"
@@ -1445,7 +1475,7 @@ clk_do_add_time() {
     # Calculate new start time
     local old_start_epoch new_start_epoch new_start_ts
     old_start_epoch="$(clk__to_epoch "$old_start_ts")"
-    new_start_epoch=$(( old_start_epoch - minutes * 60 ))
+    new_start_epoch=$(( old_start_epoch - add_secs ))
     new_start_ts="$(clk__from_epoch "$new_start_epoch")"
 
     clk__save_undo
@@ -1453,22 +1483,22 @@ clk_do_add_time() {
     local new_record="active${CLK_TAB}${new_start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
     clk__replace_line "$active_line" "$new_record"
 
-    printf '\nAdded %d minutes to session in\n  %s\n  %s → %s\n\n' \
-        "$minutes" "$active_tag" "$(clk__fmt_ts_display "$old_start_ts")" "$(clk__fmt_ts_display "$new_start_ts")"
+    local add_str
+    add_str="$(clk__fmt_duration "$add_secs")"
+    printf '\nAdded %s to session in\n  %s\n  %s → %s\n\n' \
+        "$add_str" "$active_tag" "$(clk__fmt_ts_display "$old_start_ts")" "$(clk__fmt_ts_display "$new_start_ts")"
 }
 
 # --- clk_do_add_break ---
-# clk add-break <minutes> [to <tag>]
-# clk ab <minutes> [to <tag>]
+# clk add-break <duration> [to <tag>]
+# clk ab <duration> [to <tag>]
 #
 # --- RATIONALE: add-break blocked while paused ---
 # Adding manual break time while the session is paused would double-count:
 # the pause duration AND the manual addition both become break. Requiring
 # resume first keeps accounting unambiguous.
 clk_do_add_break() {
-    local minutes="$1" tag="$2"
-
-    clk__validate_positive_int "$minutes" "<minutes> in 'clk add-break <minutes>'"
+    local add_secs="$1" tag="$2"
 
     clk__require_active_tag "$tag"
     local active_line="$CLK_ACTIVE_LINE"
@@ -1489,7 +1519,6 @@ clk_do_add_break() {
         clk__die 5 "Session '$active_tag' is currently paused. Resume first with 'clk resume $active_tag'."
     fi
 
-    local add_secs=$(( minutes * 60 ))
     local new_break_secs=$(( break_secs + add_secs ))
 
     clk__save_undo
@@ -1505,7 +1534,7 @@ clk_do_add_break() {
 }
 
 # --- clk_do_extend ---
-# clk extend [minus <minutes> | at <timestamp> | by <minutes>]
+# clk extend [minus <duration> | at <timestamp> | by <duration>]
 # Extends the last completed (done) record's end time.
 clk_do_extend() {
     local tag="$1" at_ts="$2" minus_val="$3" by_val="$4"
@@ -1544,7 +1573,7 @@ clk_do_extend() {
 
     local new_end_ts new_end_epoch
     if [ -n "$by_val" ]; then
-        new_end_epoch=$(( old_end_epoch + by_val * 60 ))
+        new_end_epoch=$(( old_end_epoch + by_val ))
         new_end_ts="$(clk__from_epoch "$new_end_epoch")"
     else
         new_end_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
@@ -1570,25 +1599,43 @@ clk_do_extend() {
 }
 
 # --- clk_do_remove ---
-# clk remove | pop [-<n>]
+# clk remove | pop [-<n> | <n>]
 # Without an index: removes the last record (whether active or completed).
 # With -<n>: removes the nth-to-last done session.
+# With <n>:  removes the nth-oldest active session (same convention as `clk <n>`).
 clk_do_remove() {
     local signed_n="${1:-}"
     local lineno line_content formatted
 
     if [ -n "$signed_n" ]; then
-        local abs_n="${signed_n#-}"
-        local done_lines total_done
-        done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
-        if [ -z "$done_lines" ]; then
-            clk__die 5 "No completed records in log."
-        fi
-        total_done="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
-        if [ "$abs_n" -gt "$total_done" ]; then
-            clk__die 1 "Index -${abs_n} out of range. Only ${total_done} completed record(s) in log."
-        fi
-        lineno="$(printf '%s\n' "$done_lines" | tail -n "${abs_n}" | head -n 1)"
+        case "$signed_n" in
+        -*)
+            local abs_n="${signed_n#-}"
+            local done_lines total_done
+            done_lines="$(awk -F'\t' '$1=="done" {print NR}' "$CLK_LOG")"
+            if [ -z "$done_lines" ]; then
+                clk__die 5 "No completed records in log."
+            fi
+            total_done="$(printf '%s\n' "$done_lines" | wc -l | tr -d ' ')"
+            if [ "$abs_n" -gt "$total_done" ]; then
+                clk__die 1 "Index -${abs_n} out of range. Only ${total_done} completed record(s) in log."
+            fi
+            lineno="$(printf '%s\n' "$done_lines" | tail -n "${abs_n}" | head -n 1)"
+            ;;
+        *)
+            local abs_n="$signed_n"
+            local active_lines total_active
+            active_lines="$(awk -F'\t' '$1=="active" {print NR}' "$CLK_LOG")"
+            if [ -z "$active_lines" ]; then
+                clk__die 5 "No active sessions."
+            fi
+            total_active="$(printf '%s\n' "$active_lines" | wc -l | tr -d ' ')"
+            if [ "$abs_n" -gt "$total_active" ]; then
+                clk__die 1 "Index ${abs_n} out of range. Only ${total_active} active session(s)."
+            fi
+            lineno="$(printf '%s\n' "$active_lines" | head -n "${abs_n}" | tail -n 1)"
+            ;;
+        esac
     else
         local total
         total="$(clk__record_count)"
@@ -2582,7 +2629,7 @@ clk_do_redo() {
 
 # --- clk_do_view ---
 # clk view today | yesterday
-# clk view past [<n>] <hour(s)|day(s)|week(s)|month(s)> [before <timestamp> | before minus <minutes>]
+# clk view past [<n>] <hour(s)|day(s)|week(s)|month(s)> [before <timestamp> | before minus <duration>]
 # clk view from <timestamp> until|to <timestamp>
 # Optional suffixes: [for <tag>] [by <day|week>]
 #
@@ -3371,15 +3418,15 @@ clk__run_view() {
                 if [ "$1" = "before" ]; then
                     shift
                     if [ $# -eq 0 ]; then
-                        clk__die 1 "Missing value after 'before'. Expected a timestamp or 'minus <minutes>'."
+                        clk__die 1 "Missing value after 'before'. Expected a timestamp or 'minus <duration>'."
                     fi
                     if [ "$1" = "minus" ]; then
                         shift
-                        [ $# -ge 1 ] || clk__die 1 "Missing <minutes> after 'before minus'."
-                        clk__validate_positive_int "$1" "<minutes> after 'before minus'"
-                        before_minus_val="$1"; shift
+                        [ $# -ge 1 ] || clk__die 1 "Missing <duration> after 'before minus'."
+                        clk__parse_duration "$1"
+                        before_minus_val="$CLK_PARSED_DURATION_SECS"; shift
                         now_ep="$(clk__now_epoch)"
-                        view_anchor_epoch=$(( now_ep - before_minus_val * 60 ))
+                        view_anchor_epoch=$(( now_ep - before_minus_val ))
                     else
                         clk__consume_timestamp "$1" "${2:-}"
                         view_anchor_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
@@ -3704,9 +3751,9 @@ clk__ensure_log
 clk_subcmd=""
 clk_tag=""
 clk_at_timestamp=""
-clk_minus_minutes=""
+clk_minus_secs=""
 clk_description=""
-clk_for_minutes=""
+clk_for_secs=""
 clk_from_tag=""
 clk_last_n=""
 
@@ -3723,9 +3770,9 @@ in)
     while [ $# -gt 0 ]; do
         case "$1" in
             minus)
-                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
-                clk__validate_positive_int "$2" "<minutes> after 'minus'"
-                clk_minus_minutes="$2"; shift 2
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                clk__parse_duration "$2"
+                clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                 ;;
             at)
                 [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
@@ -3744,7 +3791,7 @@ in)
         esac
     done
 
-    clk_do_in "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    clk_do_in "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
     ;;
 
 out)
@@ -3759,9 +3806,9 @@ out)
     while [ $# -gt 0 ]; do
         case "$1" in
             minus)
-                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
-                clk__validate_positive_int "$2" "<minutes> after 'minus'"
-                clk_minus_minutes="$2"; shift 2
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                clk__parse_duration "$2"
+                clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                 ;;
             at)
                 [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
@@ -3780,7 +3827,7 @@ out)
         esac
     done
 
-    clk_do_out "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    clk_do_out "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
     ;;
 
 status|s)
@@ -3816,9 +3863,9 @@ pause|p)
     while [ $# -gt 0 ]; do
         case "$1" in
             minus)
-                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
-                clk__validate_positive_int "$2" "<minutes> after 'minus'"
-                clk_minus_minutes="$2"; shift 2
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                clk__parse_duration "$2"
+                clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                 ;;
             at)
                 [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
@@ -3831,7 +3878,7 @@ pause|p)
         esac
     done
 
-    clk_do_pause "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
+    clk_do_pause "$clk_tag" "$clk_minus_secs" "$clk_at_timestamp"
     ;;
 
 resume|r)
@@ -3846,9 +3893,9 @@ resume|r)
     while [ $# -gt 0 ]; do
         case "$1" in
             minus)
-                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
-                clk__validate_positive_int "$2" "<minutes> after 'minus'"
-                clk_minus_minutes="$2"; shift 2
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                clk__parse_duration "$2"
+                clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                 ;;
             at)
                 [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
@@ -3861,7 +3908,7 @@ resume|r)
         esac
     done
 
-    clk_do_resume "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
+    clk_do_resume "$clk_tag" "$clk_minus_secs" "$clk_at_timestamp"
     ;;
 
 resume-focus|R)
@@ -3877,9 +3924,9 @@ resume-focus|R)
     while [ $# -gt 0 ]; do
         case "$1" in
             minus)
-                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
-                clk__validate_positive_int "$2" "<minutes> after 'minus'"
-                clk_minus_minutes="$2"; shift 2
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                clk__parse_duration "$2"
+                clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                 ;;
             at)
                 [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
@@ -3892,7 +3939,7 @@ resume-focus|R)
         esac
     done
 
-    clk_do_resume_focus "$clk_tag" "$clk_minus_minutes" "$clk_at_timestamp"
+    clk_do_resume_focus "$clk_tag" "$clk_minus_secs" "$clk_at_timestamp"
     ;;
 
 unpause|up)
@@ -3923,9 +3970,9 @@ switch)
                 clk_from_tag="$2"; shift 2
                 ;;
             minus)
-                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
-                clk__validate_positive_int "$2" "<minutes> after 'minus'"
-                clk_minus_minutes="$2"; shift 2
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                clk__parse_duration "$2"
+                clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                 ;;
             at)
                 [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
@@ -3944,43 +3991,45 @@ switch)
         esac
     done
 
-    clk_do_switch "$clk_tag" "$clk_from_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+    clk_do_switch "$clk_tag" "$clk_from_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
     ;;
 
 add|a)
     clk_subcmd="add"
     shift
     if [ $# -eq 0 ]; then
-        clk__die 1 "Missing arguments. Usage: 'clk add <tag> for <minutes>' or 'clk add <minutes> [to <tag>]'."
+        clk__die 1 "Missing arguments. Usage: 'clk add <tag> for <duration>' or 'clk add <duration> [to <tag>]'."
     fi
 
-    # Disambiguate: if $1 is a positive integer, it's "add <minutes> [to <tag>]"
-    if printf '%s' "$1" | grep -Eq '^[0-9]+$'; then
-        # Form: add <minutes> [to <tag>]
-        clk_for_minutes="$1"; shift
+    # Disambiguate: if $1 looks like a duration (plain int or X/Y/XhYm form),
+    # it's "add <duration> [to <tag>]". Otherwise it's "add <tag> for <duration>".
+    if printf '%s' "$1" | grep -Eq '^[0-9]+([hH]([0-9]+[mM])?|[mM])?$'; then
+        # Form: add <duration> [to <tag>]
+        clk__parse_duration "$1"
+        clk_for_secs="$CLK_PARSED_DURATION_SECS"; shift
         if [ $# -gt 0 ] && [ "$1" = "to" ]; then
             [ $# -ge 2 ] || clk__die 1 "Missing <tag> after 'to'."
             clk_tag="$2"; shift 2
         fi
-        [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk add $clk_for_minutes'."
-        clk_do_add_time "$clk_for_minutes" "$clk_tag"
+        [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk add'."
+        clk_do_add_time "$clk_for_secs" "$clk_tag"
     else
-        # Form: add <tag> for <minutes> [minus <minutes> | at <timestamp>] [on <description>]
+        # Form: add <tag> for <duration> [minus <duration> | at <timestamp>] [on <description>]
         clk_tag="$1"; shift
         if [ $# -eq 0 ] || [ "$1" != "for" ]; then
-            clk__die 1 "Expected 'for <minutes>' after 'clk add ${clk_tag}'. Run 'clk' for usage."
+            clk__die 1 "Expected 'for <duration>' after 'clk add ${clk_tag}'. Run 'clk' for usage."
         fi
         shift  # consume 'for'
-        [ $# -ge 1 ] || clk__die 1 "Missing <minutes> after 'for'."
-        clk__validate_positive_int "$1" "<minutes> after 'for'"
-        clk_for_minutes="$1"; shift
+        [ $# -ge 1 ] || clk__die 1 "Missing <duration> after 'for'."
+        clk__parse_duration "$1"
+        clk_for_secs="$CLK_PARSED_DURATION_SECS"; shift
 
         while [ $# -gt 0 ]; do
             case "$1" in
                 minus)
-                    [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
-                    clk__validate_positive_int "$2" "<minutes> after 'minus'"
-                    clk_minus_minutes="$2"; shift 2
+                    [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                    clk__parse_duration "$2"
+                    clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                     ;;
                 at)
                     [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
@@ -3994,12 +4043,12 @@ add|a)
                     break
                     ;;
                 *)
-                    clk__die 1 "Unknown option '$1' after 'clk add ${clk_tag} for ${clk_for_minutes}'."
+                    clk__die 1 "Unknown option '$1' after 'clk add ${clk_tag} for <duration>'."
                     ;;
             esac
         done
 
-        clk_do_add_session "$clk_tag" "$clk_for_minutes" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_description"
+        clk_do_add_session "$clk_tag" "$clk_for_secs" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
     fi
     ;;
 
@@ -4007,18 +4056,18 @@ add-break|ab)
     clk_subcmd="add-break"
     shift
     if [ $# -eq 0 ]; then
-        clk__die 1 "Missing <minutes> in 'clk add-break <minutes>'. Run 'clk' for usage."
+        clk__die 1 "Missing <duration> in 'clk add-break <duration>'. Run 'clk' for usage."
     fi
-    clk__validate_positive_int "$1" "<minutes> in 'clk add-break <minutes>'"
-    clk_for_minutes="$1"; shift
+    clk__parse_duration "$1"
+    clk_for_secs="$CLK_PARSED_DURATION_SECS"; shift
 
     if [ $# -gt 0 ] && [ "$1" = "to" ]; then
         [ $# -ge 2 ] || clk__die 1 "Missing <tag> after 'to'."
         clk_tag="$2"; shift 2
     fi
-    [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1'. Usage: 'clk add-break <minutes> [to <tag>]'."
+    [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1'. Usage: 'clk add-break <duration> [to <tag>]'."
 
-    clk_do_add_break "$clk_for_minutes" "$clk_tag"
+    clk_do_add_break "$clk_for_secs" "$clk_tag"
     ;;
 
 extend)
@@ -4030,13 +4079,13 @@ extend)
         clk_tag="$1"; shift
     fi
 
-    clk_by_minutes=""
+    clk_by_secs=""
     while [ $# -gt 0 ]; do
         case "$1" in
             minus)
-                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'minus'."
-                clk__validate_positive_int "$2" "<minutes> after 'minus'"
-                clk_minus_minutes="$2"; shift 2
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'minus'."
+                clk__parse_duration "$2"
+                clk_minus_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                 ;;
             at)
                 [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
@@ -4044,9 +4093,9 @@ extend)
                 clk_at_timestamp="$CLK_VALIDATED_TS"; shift $(( 1 + CLK_TIMESTAMP_ARGC ))
                 ;;
             by)
-                [ $# -ge 2 ] || clk__die 1 "Missing <minutes> after 'by'."
-                clk__validate_positive_int "$2" "<minutes> after 'by'"
-                clk_by_minutes="$2"; shift 2
+                [ $# -ge 2 ] || clk__die 1 "Missing <duration> after 'by'."
+                clk__parse_duration "$2"
+                clk_by_secs="$CLK_PARSED_DURATION_SECS"; shift 2
                 ;;
             *)
                 clk__die 1 "Unknown option '$1' after 'clk extend'."
@@ -4054,7 +4103,7 @@ extend)
         esac
     done
 
-    clk_do_extend "$clk_tag" "$clk_at_timestamp" "$clk_minus_minutes" "$clk_by_minutes"
+    clk_do_extend "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_by_secs"
     ;;
 
 remove|pop)
@@ -4062,12 +4111,12 @@ remove|pop)
     shift
     clk_remove_n=""
     if [ $# -gt 0 ]; then
-        if ! printf '%s' "$1" | grep -Eq '^-[1-9][0-9]*$'; then
-            clk__die 1 "Expected -<n> index or no argument. Usage: 'clk remove [-<n>]'"
+        if ! printf '%s' "$1" | grep -Eq '^-?[1-9][0-9]*$'; then
+            clk__die 1 "Expected -<n> (done) or <n> (active) index, or no argument. Usage: 'clk remove [-<n> | <n>]'"
         fi
         clk_remove_n="$1"; shift
     fi
-    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk remove [-<n>]'"
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk remove [-<n> | <n>]'"
     clk_do_remove "$clk_remove_n"
     ;;
 

@@ -119,12 +119,12 @@ test_resolve_time_at() {
 }
 
 test_resolve_time_minus() {
-    # resolve_time with minus should return now - N minutes
+    # resolve_time with minus_secs should return now - N seconds
     # Use epoch comparison with 2-second tolerance to avoid race conditions
     local result now_epoch expected_epoch result_epoch
     now_epoch="$(clk__now_epoch)"
-    expected_epoch=$(( now_epoch - 30 * 60 ))
-    result="$(clk__resolve_time "" "30")"
+    expected_epoch=$(( now_epoch - 1800 ))
+    result="$(clk__resolve_time "" "1800")"
     result_epoch="$(clk__to_epoch "$result")"
     local diff=$(( result_epoch - expected_epoch ))
     if [ "$diff" -lt 0 ]; then diff=$(( -diff )); fi
@@ -230,9 +230,11 @@ test_fmt_record_done_basic() {
     local line="done${tab}2026-03-19T09:00:00${tab}2026-03-19T10:00:00${tab}work${tab}3600${tab}0${tab}${tab}"
     local result
     result="$(clk__fmt_record "$line")"
+    # Start and end share the date, so the end-date is elided:
+    #   "2026-03-19 09:00 → 10:00" rather than
+    #   "2026-03-19 09:00 → 2026-03-19 10:00"
     clk_test__assert_output_contains "work" printf '%s' "$result" &&
-    clk_test__assert_output_contains "2026-03-19 09:00" printf '%s' "$result" &&
-    clk_test__assert_output_contains "2026-03-19 10:00" printf '%s' "$result" &&
+    clk_test__assert_output_contains "2026-03-19 09:00 → 10:00" printf '%s' "$result" &&
     clk_test__assert_output_contains "1h 0m" printf '%s' "$result"
 }
 
