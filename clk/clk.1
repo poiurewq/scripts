@@ -1,6 +1,6 @@
 .Dd April 5, 2026
 .Dt CLK 1
-.Os "clk 0.4.5"
+.Os "clk 0.4.6"
 .Sh NAME
 .Nm clk
 .Nd clock in & out of work
@@ -109,6 +109,11 @@ is expected:
 and
 .Ql HH:MM:SS
 are interpreted as times on the current date;
+.Ql mm-dd
+and
+.Ql mm-dd HH:MM
+are interpreted as dates in the current year
+.Pq midnight if no time is given ;
 .Ql yyyy-mm-ddTHH:MM
 and
 .Ql yyyy-mm-dd HH:MM
@@ -118,6 +123,7 @@ are treated as if seconds were
 .Ql yyyy-mm-dd
 alone is treated as midnight
 .Pq Ql T00:00:00 .
+Timestamps that resolve to a time in the future are rejected.
 Multiple sessions may be active simultaneously.
 .Pp
 Wherever a
@@ -639,6 +645,8 @@ Clock out at a specific time:
 .Pp
 Timestamps accept several shorthand forms:
 .Ql HH:MM ,
+.Ql mm-dd ,
+.Ql mm-dd HH:MM ,
 .Ql yyyy-mm-dd ,
 and
 .Ql yyyy-mm-ddTHH:MM

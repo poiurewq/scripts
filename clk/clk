@@ -15,12 +15,12 @@ set -u
 #####################################################################
 
 CLK_FMT='%Y-%m-%dT%H:%M:%S'
-CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM, yyyy-mm-dd)'
+CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, mm-dd, mm-dd HH:MM, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM, yyyy-mm-dd)'
 CLK_FMT_RAW=0
 CLK_FMT_DONE_TAG_WIDTH=0
 CLK_TAB='	'
 CLK_LOG_VERSION_MARKER='#clk-v3'
-CLK_VERSION="0.4.5"
+CLK_VERSION="0.4.6"
 
 # Detect OS once; all platform differences are isolated in helper functions.
 CLK_OS="$(uname)"
@@ -88,7 +88,8 @@ Utilities:
     [for <tag,tag.,...>] [by {day|week|month|session}]
 
 <unit>       = hour(s) | day(s) | week(s) | month(s) | year(s)
-<timestamp>  = HH:MM | HH:MM:SS | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
+<timestamp>  = HH:MM | HH:MM:SS | mm-dd | mm-dd HH:MM | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
+               mm-dd and mm-dd HH:MM are interpreted as this year. Timestamps in the future are rejected.
 <duration>   = <minutes> | Xh | Ym | XhYm    (e.g., 90, 2h, 45m, 1h30m)
 EOF
 
@@ -482,6 +483,8 @@ clk__validate_tag() {
 # Accepts simplified timestamp formats and expands them to CLK_FMT:
 #   HH:MM              → <today>THH:MM:00
 #   HH:MM:SS           → <today>THH:MM:SS
+#   mm-dd              → <this-year>-mm-ddT00:00:00
+#   mm-dd HH:MM        → <this-year>-mm-ddTHH:MM:00
 #   yyyy-mm-ddTHH:MM   → yyyy-mm-ddTHH:MM:00
 #   yyyy-mm-dd HH:MM   → yyyy-mm-ddTHH:MM:00
 #   yyyy-mm-dd         → yyyy-mm-ddT00:00:00
@@ -495,6 +498,14 @@ clk__normalize_timestamp() {
     # HH:MM (time only, no seconds)
     elif printf '%s' "$ts" | grep -Eq '^[0-9]{2}:[0-9]{2}$'; then
         printf '%s' "$(date +%Y-%m-%d)T${ts}:00"
+    # mm-dd HH:MM (month-day + time with space, no year)
+    elif printf '%s' "$ts" | grep -Eq '^[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$'; then
+        local md="${ts%% *}"
+        local t="${ts##* }"
+        printf '%s' "$(date +%Y)-${md}T${t}:00"
+    # mm-dd (month-day only, no year → midnight this year)
+    elif printf '%s' "$ts" | grep -Eq '^[0-9]{2}-[0-9]{2}$'; then
+        printf '%s' "$(date +%Y)-${ts}T00:00:00"
     # yyyy-mm-ddTHH:MM (date+time with T, no seconds)
     elif printf '%s' "$ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$'; then
         printf '%s' "${ts}:00"
@@ -514,12 +525,18 @@ clk__normalize_timestamp() {
 # clk__validate_timestamp(ts)
 # Normalizes ts via clk__normalize_timestamp, then validates it matches
 # CLK_FMT regex. Sets CLK_VALIDATED_TS to the normalized value.
-# Exits with error if the normalized form doesn't match CLK_FMT.
+# Exits with error if the normalized form doesn't match CLK_FMT or is in the future.
 CLK_VALIDATED_TS=""
 clk__validate_timestamp() {
     CLK_VALIDATED_TS="$(clk__normalize_timestamp "$1")"
     if ! printf '%s' "$CLK_VALIDATED_TS" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'; then
         clk__die 1 "Invalid timestamp '$1'. Expected format: ${CLK_USER_FMT}"
+    fi
+    local _ts_epoch _now_epoch
+    _ts_epoch="$(clk__to_epoch "$CLK_VALIDATED_TS")"
+    _now_epoch="$(date +%s)"
+    if [ "$_ts_epoch" -gt "$_now_epoch" ]; then
+        clk__die 1 "Timestamp '$1' is in the future."
     fi
 }
 
@@ -531,14 +548,16 @@ CLK_TIMESTAMP_ARGC=0
 clk__consume_timestamp() {
     local _ts="$1"
     local _next="${2:-}"
-    if printf '%s' "$_ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' && \
-       printf '%s' "$_next" | grep -Eq '^[0-9]{2}:[0-9]{2}(:[0-9]{2})?$'; then
-        clk__validate_timestamp "$_ts $_next"
-        CLK_TIMESTAMP_ARGC=2
-    else
-        clk__validate_timestamp "$_ts"
-        CLK_TIMESTAMP_ARGC=1
+    if printf '%s' "$_next" | grep -Eq '^[0-9]{2}:[0-9]{2}(:[0-9]{2})?$'; then
+        if printf '%s' "$_ts" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || \
+           printf '%s' "$_ts" | grep -Eq '^[0-9]{2}-[0-9]{2}$'; then
+            clk__validate_timestamp "$_ts $_next"
+            CLK_TIMESTAMP_ARGC=2
+            return
+        fi
     fi
+    clk__validate_timestamp "$_ts"
+    CLK_TIMESTAMP_ARGC=1
 }
 
 # clk__validate_positive_int(val, label)
