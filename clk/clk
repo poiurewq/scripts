@@ -321,6 +321,18 @@ clk__fmt_ts_display() {
     fi
 }
 
+# clk__fmt_ts_full(ts)
+# Always formats as "yyyy-mm-dd HH:MM" (no today-abbreviation).
+# Used for view range headers where both endpoints must be unambiguous.
+clk__fmt_ts_full() {
+    local ts="$1"
+    # ts format: yyyy-mm-ddTHH:MM:SS
+    local date_part="${ts%%T*}"
+    local time_full="${ts#*T}"
+    local time_hm="${time_full%:*}"    # drop :SS
+    printf '%s %s' "$date_part" "$time_hm"
+}
+
 # --- RATIONALE: Unified record schema ---
 # v1 used different field positions for active vs completed records (e.g.,
 # field 2 was "start time" in active but "tag" in completed). v2 uses a
@@ -2847,7 +2859,7 @@ clk_do_view() {
 
     # Print output
     printf '%s\n' "$range_desc"
-    printf '%s – %s\n' "$(clk__fmt_ts_display "$start_ts")" "$(clk__fmt_ts_display "$end_ts")"
+    printf '%s – %s\n' "$(clk__fmt_ts_full "$start_ts")" "$(clk__fmt_ts_full "$end_ts")"
     if [ -n "$filter_tag" ]; then
         printf 'Filtered by tag: %s\n' "$(printf '%s' "$filter_tag" | sed 's/,/, /g')"
     fi
@@ -2970,7 +2982,7 @@ clk__view_grouped() {
 
     # Print header
     printf '%s\n' "$range_desc"
-    printf '%s – %s\n' "$(clk__fmt_ts_display "$start_ts")" "$(clk__fmt_ts_display "$end_ts")"
+    printf '%s – %s\n' "$(clk__fmt_ts_full "$start_ts")" "$(clk__fmt_ts_full "$end_ts")"
     if [ -n "$filter_tag" ]; then
         printf 'Tag: %s  (by %s)\n\n' "$(printf '%s' "$filter_tag" | sed 's/,/, /g')" "$group_by"
     else
@@ -3557,7 +3569,7 @@ clk__run_view() {
 
             from_ts="$(clk__from_epoch "$view_start_epoch")"
             until_ts="$(clk__from_epoch "$view_end_epoch")"
-            view_range_desc="$(clk__fmt_ts_display "$from_ts") → $(clk__fmt_ts_display "$until_ts")"
+            view_range_desc="$(clk__fmt_ts_full "$from_ts") → $(clk__fmt_ts_full "$until_ts")"
             ;;
         -[0-9]*|this|today|yesterday)
             view_offset_unit=""
