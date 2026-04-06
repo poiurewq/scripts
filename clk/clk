@@ -794,6 +794,77 @@ clk__ensure_log() {
 }
 
 #####################################################################
+# Upgrade check
+#####################################################################
+
+# Returns 0 (true) if $1 > $2 in semver (X.Y.Z).
+clk__version_gt() {
+    local a1 a2 a3 b1 b2 b3 old_ifs
+    old_ifs="$IFS"
+    IFS='.'; set -- $1 $2; IFS="$old_ifs"
+    a1=$1 a2=$2 a3=$3 b1=$4 b2=$5 b3=$6
+    [ "$a1" -gt "$b1" ] 2>/dev/null && return 0
+    [ "$a1" -lt "$b1" ] 2>/dev/null && return 1
+    [ "$a2" -gt "$b2" ] 2>/dev/null && return 0
+    [ "$a2" -lt "$b2" ] 2>/dev/null && return 1
+    [ "$a3" -gt "$b3" ] 2>/dev/null && return 0
+    return 1
+}
+
+# Background: fetch latest clk tag from GitHub and write to cache.
+clk__upgrade_bg_fetch() {
+    local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/clk"
+    local cache_file="$cache_dir/latest-version"
+    local latest
+    mkdir -p "$cache_dir" 2>/dev/null || return 1
+    latest=$(git ls-remote --tags https://github.com/poiurewq/scripts.git 'refs/tags/clk-v*' 2>/dev/null \
+        | sed -n 's|.*refs/tags/clk-v\([^{]*\)$|\1|p' \
+        | sort -t. -k1,1n -k2,2n -k3,3n \
+        | tail -1)
+    [ -n "$latest" ] && printf '%s\n' "$latest" > "$cache_file"
+}
+
+# Check cache for a newer version; print reminder if found.
+# Spawn background fetch if cache is stale (>24h) or missing.
+clk__upgrade_check() {
+    [ -z "${CLK_NO_UPDATE_CHECK:-}" ] || return 0
+    [ -t 2 ] || return 0
+
+    local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/clk"
+    local cache_file="$cache_dir/latest-version"
+    local latest mtime now age
+
+    # Read cached version and show reminder if newer
+    if [ -f "$cache_file" ]; then
+        latest=$(head -1 "$cache_file" 2>/dev/null) || latest=""
+        if [ -n "$latest" ] && clk__version_gt "$latest" "$CLK_VERSION"; then
+            printf '\nA newer release of clk is available: %s \xe2\x86\x92 %s\n' "$CLK_VERSION" "$latest" >&2
+            printf 'To upgrade: brew upgrade poiurewq/tap/clk\n\n' >&2
+        fi
+    fi
+
+    # Spawn background fetch if cache is stale or missing
+    local stale=0
+    if [ ! -f "$cache_file" ]; then
+        stale=1
+    else
+        now=$(date +%s)
+        case "$CLK_OS" in
+            Darwin) mtime=$(stat -f %m "$cache_file" 2>/dev/null) ;;
+            Linux)  mtime=$(stat -c %Y "$cache_file" 2>/dev/null) ;;
+        esac
+        mtime=${mtime:-0}
+        age=$(( now - mtime ))
+        [ "$age" -ge 86400 ] && stale=1
+    fi
+
+    if [ "$stale" = 1 ]; then
+        ( clk__upgrade_bg_fetch ) &>/dev/null &
+        disown 2>/dev/null
+    fi
+}
+
+#####################################################################
 # Subcommand functions
 #####################################################################
 
@@ -3827,7 +3898,7 @@ if [ "$1" = 'help' ]; then
         if [ -f "$clk_self_dir/clk.1" ]; then
             man "$clk_self_dir/clk.1"
         else
-            printf "Man page not found. Install via 'brew install poiurewq/tools/clk' for full documentation.\n" >&2
+            printf "Man page not found. Install via 'brew install poiurewq/tap/clk' for full documentation.\n" >&2
             printf '\n%s\n\n' "$CLK_SYNOPSIS"
         fi
     }
@@ -3836,6 +3907,7 @@ fi
 
 # Initialize log
 clk__ensure_log
+clk__upgrade_check
 
 #####################################################################
 # Argument parsing and subcommand dispatch
