@@ -772,6 +772,14 @@ Defaults to
 .Pa ~/.local/share .
 The log is stored at
 .Pa ${XDG_DATA_HOME}/clk/clk.tsv .
+.It Ev XDG_CACHE_HOME
+Upgrade-check cache location.
+Defaults to
+.Pa ~/.cache .
+The cached latest version is stored at
+.Pa ${XDG_CACHE_HOME}/clk/latest-version .
+.It Ev CLK_NO_UPDATE_CHECK
+If set to any non-empty value, disables the automatic upgrade reminder.
 .It Ev VISUAL , Ev EDITOR
 Editor used by
 .Cm log .
