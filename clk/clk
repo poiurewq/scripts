@@ -80,7 +80,7 @@ Utilities:
 
 <range>:
     all | today | yesterday
-    {-<n> | this} <unit> [through ...]
+    {-<n> | this | last} <unit> [through ...]
     past [<n>] <unit> [before <timestamp> | before minus <duration>]
     from <timestamp> to <timestamp>
 
@@ -3661,12 +3661,13 @@ clk__run_view() {
             until_ts="$(clk__from_epoch "$view_end_epoch")"
             view_range_desc="$(clk__fmt_ts_full "$from_ts") → $(clk__fmt_ts_full "$until_ts")"
             ;;
-        -[0-9]*|this|today|yesterday)
+        -[0-9]*|this|today|yesterday|last)
             view_offset_unit=""
             case "$1" in
                 today)     view_offset=0; view_offset_unit="day" ;;
                 yesterday) view_offset=1; view_offset_unit="day" ;;
                 this)      view_offset=0 ;;
+                last)      view_offset=1 ;;
                 *)
                     view_offset="${1#-}"
                     if ! printf '%s' "$view_offset" | grep -Eq '^[0-9]+$'; then
@@ -3856,7 +3857,7 @@ clk__run_view() {
             fi
             ;;
         *)
-            clk__die 1 "Unknown view range '$1'. Expected 'all', 'today', 'yesterday', 'past', 'from', '-<n>', or 'this'."
+            clk__die 1 "Unknown view range '$1'. Expected 'all', 'today', 'yesterday', 'past', 'from', '-<n>', 'this', or 'last'."
             ;;
     esac
 
@@ -4061,6 +4062,16 @@ status|s)
     ;;
 
 last|l)
+    # 'last <unit>' is a range expression (e.g., 'clk last month').
+    # Distinguishable from 'clk last [<n>]' because a unit is neither empty nor numeric.
+    if [ $# -ge 2 ]; then
+        case "$2" in
+            hour|hours|day|days|week|weeks|month|months|year|years)
+                clk__run_view "$@"
+                exit $?
+                ;;
+        esac
+    fi
     clk_subcmd="last"
     shift
     if [ $# -gt 0 ]; then
