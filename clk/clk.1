@@ -480,7 +480,7 @@ or
 is one of:
 .Bl -tag -width indent -compact
 .It Bro Cm all | Cm today | Cm yesterday Brc
-.It Bro Fl Ar n | Cm this Brc Ar unit Op Cm through No ...
+.It Bro Fl Ar n | Cm this | Cm last Brc Ar unit Op Cm through No ...
 .It Cm past Op Ar n Ar unit Op Cm before Ar timestamp | Cm before Cm minus Ar duration
 .It Cm from Ar timestamp Cm to Ar timestamp
 .El
@@ -502,11 +502,14 @@ Summarize all sessions in the log.
 Summarize sessions from midnight today until now.
 .It Cm yesterday
 Summarize sessions from midnight yesterday until midnight today.
-.It Bro Fl Ar n | Cm this Brc Ar unit Op Cm through No ...
+.It Bro Fl Ar n | Cm this | Cm last Brc Ar unit Op Cm through No ...
 View sessions for a calendar period relative to the current one.
 .Cm this
 is an alias for
-.Fl 0 .
+.Fl 0 ;
+.Cm last
+is an alias for
+.Fl 1 .
 .Cm today
 is equivalent to
 .Fl 0 Cm day ;
