@@ -363,8 +363,9 @@ clk__read_line() {
 #   <tag>  <start_time> → <end_time>  <duration>  (break: Xm)  <description>
 # For active records:
 #   <tag>  started at <start_time>  (active, <elapsed> so far)  <description>
+#   <tag>  started at <start_time>  (<elapsed> so far, paused since <time>)  <description>
 # Break shown only if > 0. Description shown only if non-empty.
-# Pause state shown for active records if paused.
+# "active" label is omitted when the session is paused.
 clk__fmt_record() {
     local line="$1"
     clk__read_line "$line"
@@ -418,7 +419,11 @@ clk__fmt_record() {
         else
             tag_display="$tag"
         fi
-        out="${tag_display}  started at ${disp_start}  (active"
+        # Build the parenthetical: omit "active" label when paused
+        local paren=""
+        if [ -z "$paused_at" ]; then
+            paren="active"
+        fi
         # Calculate elapsed if possible
         local now_epoch start_epoch elapsed_secs elapsed_str
         now_epoch="$(clk__now_epoch)"
@@ -437,16 +442,24 @@ clk__fmt_record() {
                 elapsed_secs=0
             fi
             elapsed_str="$(clk__fmt_duration "$elapsed_secs")"
-            out="${out}, ${elapsed_str} so far"
+            if [ -n "$paren" ]; then
+                paren="${paren}, ${elapsed_str} so far"
+            else
+                paren="${elapsed_str} so far"
+            fi
         fi
         if [ -n "$paused_at" ]; then
             local paused_ts
             paused_ts="$(clk__from_epoch "$paused_at" 2>/dev/null)" || paused_ts="$paused_at"
             local disp_paused
             disp_paused="$(clk__fmt_ts_display "$paused_ts")"
-            out="${out}, paused since ${disp_paused}"
+            if [ -n "$paren" ]; then
+                paren="${paren}, paused since ${disp_paused}"
+            else
+                paren="paused since ${disp_paused}"
+            fi
         fi
-        out="${out})"
+        out="${tag_display}  started at ${disp_start}  (${paren})"
         if [ -n "$description" ]; then
             out="${out}  ${description}"
         fi
