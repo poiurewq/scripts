@@ -4267,8 +4267,8 @@ add|a)
                     ;;
                 at)
                     [ $# -ge 2 ] || clk__die 1 "Missing <timestamp> after 'at'."
-                    clk__validate_timestamp "$2"
-                    clk_at_timestamp="$CLK_VALIDATED_TS"; shift 2
+                    clk__consume_timestamp "$2" "${3:-}"
+                    clk_at_timestamp="$CLK_VALIDATED_TS"; shift $(( 1 + CLK_TIMESTAMP_ARGC ))
                     ;;
                 on)
                     [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
