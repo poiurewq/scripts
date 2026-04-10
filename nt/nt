@@ -172,8 +172,14 @@ sort_docs_by_index() {
 # With full zero-padding, lexicographic order on indices == hierarchical order.
 # Returns 1 if no indexed documents exist.
 last_indexed_doc() {
-	local -a docs
+	local -a docs _lid_filtered
 	docs=( [[:digit:]]##*(N.) )
+	_lid_filtered=()
+	local _lid_f
+	for _lid_f in "${docs[@]}"; do
+		nt_is_skip_ext "$_lid_f" || _lid_filtered+=( "$_lid_f" )
+	done
+	docs=( "${_lid_filtered[@]}" )
 	if [[ ${#docs[@]} -eq 0 ]]; then
 		return 1
 	fi
@@ -212,6 +218,23 @@ get_extension() {
 		return 1
 	fi
 	printf '%s' "$ext"
+}
+
+# Returns 0 if the file's extension marks it as a non-text (media/binary) file
+# that should be excluded from nt note matching.
+nt_is_skip_ext() {
+	local f="$1"
+	local ext="${f##*.}"
+	[[ "$ext" == "$f" ]] && return 1  # no extension
+	case "${ext:l}" in
+		png|jpg|jpeg|gif|bmp|tiff|tif|webp|svg|ico|heic|heif|\
+		mov|mp4|avi|mkv|webm|wmv|flv|m4v|\
+		mp3|wav|aac|flac|ogg|m4a|aiff|opus|\
+		pdf|doc|docx|xls|xlsx|ppt|pptx|\
+		zip|tar|gz|bz2|7z|rar)
+			return 0 ;;
+		*) return 1 ;;
+	esac
 }
 
 # Returns the matching filename for a given index (simple or hierarchical).
@@ -367,6 +390,8 @@ cmd_help() {
 	printf '  nt C                open CLAUDE.md\n'
 	printf '  nt t                open template file\n'
 	printf '  nt v                print version (alias: version)\n'
+	printf '  nt util month       rename files: month names → 2-digit numbers\n'
+	printf '  nt util delim D     rename nt-indexed files to use delimiter D\n'
 	printf '\nBare commands (no hyphen) consume all remaining words as the title.\n'
 	printf 'Hyphen-prefixed commands stop at numbers/flags, enabling chaining;\n'
 	printf 'chained commands are processed in the sequence they are passed:\n'
@@ -527,8 +552,14 @@ cmd_last() {
 		# Positive integer N: open Nth-to-last
 		_nt_consumed=1
 		local nth="$1"
-		local -a all_docs
+		local -a all_docs _cl_filtered
 		all_docs=( [[:digit:]]##*(N.) )
+		_cl_filtered=()
+		local _cl_f
+		for _cl_f in "${all_docs[@]}"; do
+			nt_is_skip_ext "$_cl_f" || _cl_filtered+=( "$_cl_f" )
+		done
+		all_docs=( "${_cl_filtered[@]}" )
 		local sorted_output
 		sorted_output="$(sort_docs_by_index "${all_docs[@]}")"
 		local -a sorted_docs
@@ -751,12 +782,18 @@ cmd_renumber() {
 }
 
 cmd_activity() {
-	local -a nt_files
+	local -a nt_files _act_filtered
 	if [ "$1" = "ar" ]; then
 		nt_files=( **/[[:digit:]]##*(N.) )
 	else
 		nt_files=( [[:digit:]]##*(N.) )
 	fi
+	_act_filtered=()
+	local _act_f
+	for _act_f in "${nt_files[@]}"; do
+		nt_is_skip_ext "$_act_f" || _act_filtered+=( "$_act_f" )
+	done
+	nt_files=( "${_act_filtered[@]}" )
 	if [ "${#nt_files[@]}" -eq 0 ]; then
 		printf 'No indexed documents found.\n'
 		exit 0
@@ -788,10 +825,15 @@ cmd_subtree() {
 	local _st_norm="${(j:.:)_st_parts}"
 	local _st_depth=${#_st_parts[@]}
 
-	local -a _st_all_docs _st_matches
+	local -a _st_all_docs _st_matches _st_filtered
 	_st_all_docs=( [[:digit:]]##*(N.) )
-	_st_matches=()
+	_st_filtered=()
 	local _st_f _st_idx
+	for _st_f in "${_st_all_docs[@]}"; do
+		nt_is_skip_ext "$_st_f" || _st_filtered+=( "$_st_f" )
+	done
+	_st_all_docs=( "${_st_filtered[@]}" )
+	_st_matches=()
 	for _st_f in "${_st_all_docs[@]}"; do
 		_st_idx="$(extract_index "$_st_f")"
 		[[ -z "$_st_idx" ]] && continue
@@ -848,6 +890,83 @@ cmd_template() {
 	else
 		touch "${nt_template_name}.md"
 		files_to_open+=( "${nt_template_name}.md" )
+	fi
+}
+
+# Scans cwd and renames files containing month names to their 2-digit numeric
+# equivalents. Handles full names (January → 01) and abbreviations (Jan → 01).
+# Uses word-boundary matching: month name must not be adjacent to other letters,
+# so "Mar" in "summary" is NOT replaced but "Mar" in "Mar2025" is.
+cmd_util_month() {
+	local -a all_files
+	all_files=( *(N.) )
+	if [[ ${#all_files[@]} -eq 0 ]]; then
+		printf 'No files found in current directory.\n'
+		return 0
+	fi
+
+	# Full names first (longer → no partial match on abbreviations like "Mar" in "March").
+	local -a full_names full_nums abbr_names abbr_nums
+	full_names=( January February March April May June July August September October November December )
+	full_nums=(  01      02       03    04    05  06   07   08     09        10      11       12       )
+	abbr_names=( Jan Feb Mar Apr Jun Jul Aug Sep Oct Nov Dec )
+	abbr_nums=(  01  02  03  04  06  07  08  09  10  11  12 )
+
+	# Build a single sed script. Pattern (^|[^a-zA-Z])(NAME)([^a-zA-Z]|$) ensures
+	# the month name is not flanked by other letters. \1NUM\3 re-emits the boundary
+	# chars. The I flag makes matching case-insensitive (works on BSD and GNU sed).
+	local sed_expr="" i
+	for (( i = 1; i <= ${#full_names[@]}; i++ )); do
+		sed_expr+="s/(^|[^a-zA-Z])(${full_names[$i]})([^a-zA-Z]|\$)/\1${full_nums[$i]}\3/gI;"
+	done
+	for (( i = 1; i <= ${#abbr_names[@]}; i++ )); do
+		sed_expr+="s/(^|[^a-zA-Z])(${abbr_names[$i]})([^a-zA-Z]|\$)/\1${abbr_nums[$i]}\3/gI;"
+	done
+	sed_expr="${sed_expr%%;}"
+
+	local f newf renamed=0
+	for f in "${all_files[@]}"; do
+		newf="$(printf '%s' "$f" | sed -E "$sed_expr")"
+		if [[ "$newf" != "$f" ]]; then
+			\mv "$f" "$newf"
+			printf '%s -> %s\n' "$f" "$newf"
+			(( renamed++ )) || true
+		fi
+	done
+	if (( renamed == 0 )); then
+		printf 'No files with month names found.\n'
+	fi
+}
+
+# Scans cwd and renames nt-indexed files to use the specified delimiter
+# between the index and title portions (e.g. '001_title.md' → '001-title.md').
+# Skips files with non-text extensions.
+cmd_util_delim() {
+	if [[ "$#" -eq 0 ]]; then
+		nt_err "usage: nt util delim <delimiter>"
+		exit 1
+	fi
+	local new_delim="$1"
+
+	local -a all_docs
+	all_docs=( [[:digit:]]##*(N.) )
+
+	local f idx cur_delim rest newf renamed=0
+	for f in "${all_docs[@]}"; do
+		nt_is_skip_ext "$f" && continue
+		idx="$(extract_index "$f")"
+		[[ -z "$idx" ]] && continue
+		cur_delim="$(get_delimiter "$f")"
+		[[ -z "$cur_delim" ]] && continue
+		[[ "$cur_delim" == "$new_delim" ]] && continue
+		rest="${f#${idx}${cur_delim}}"
+		newf="${idx}${new_delim}${rest}"
+		\mv "$f" "$newf"
+		printf '%s -> %s\n' "$f" "$newf"
+		(( renamed++ )) || true
+	done
+	if (( renamed == 0 )); then
+		printf 'No nt-indexed files with delimiters found to update.\n'
 	fi
 }
 
@@ -942,6 +1061,22 @@ while [ "$#" -gt 0 ]; do
 		rn|renumber|-rn|--renumber)
 			shift; cmd_renumber "$@"; break ;;
 
+		util)
+			shift
+			if [[ "$#" -eq 0 ]]; then
+				nt_err "usage: nt util month | nt util delim <delimiter>"
+				exit 2
+			fi
+			case "$1" in
+				month)  cmd_util_month; break ;;
+				delim)  shift; cmd_util_delim "$@"; break ;;
+				*)
+					nt_err "Unknown util subcommand: $1"
+					nt_err "usage: nt util month | nt util delim <delimiter>"
+					exit 2 ;;
+			esac
+			;;
+
 		a|activity|-a|--activity)
 			cmd_activity "a"; break ;;
 
@@ -971,10 +1106,15 @@ while [ "$#" -gt 0 ]; do
 					nt_err "Range start is greater than end: ${_range_start}-${_range_end}"
 					exit 2
 				fi
-				local -a _range_all_docs _range_matches
+				local -a _range_all_docs _range_matches _range_filtered
 				_range_all_docs=( [[:digit:]]##*(N.) )
-				_range_matches=()
+				_range_filtered=()
 				local _range_f _range_idx
+				for _range_f in "${_range_all_docs[@]}"; do
+					nt_is_skip_ext "$_range_f" || _range_filtered+=( "$_range_f" )
+				done
+				_range_all_docs=( "${_range_filtered[@]}" )
+				_range_matches=()
 				for _range_f in "${_range_all_docs[@]}"; do
 					_range_idx="$(extract_index "$_range_f")"
 					[[ -z "$_range_idx" ]] && continue
