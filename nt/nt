@@ -27,7 +27,6 @@ nt_editor="${NT_EDITOR:-${VISUAL:-${EDITOR:-vim}}}"
 
 # Syntax references used in error messages
 nt_syn_r="${bf}rename${nf} ${uf}num${nf} ${uf}title${nf}"
-nt_syn_rn="${bf}renumber${nf} ${uf}n${nf} ${uf}m${nf}"
 
 #######################################################################
 # Cross-platform abstraction (§2.5)
@@ -383,7 +382,8 @@ cmd_help() {
 	printf '  nt NUM.             open immediate children of index\n'
 	printf '  nt r NUM TITLE      rename document by index (alias: rename)\n'
 	printf '  nt rl TITLE         rename last document\n'
-	printf '  nt rn N M           renumber consecutive run (alias: renumber)\n'
+	printf '  nt ri N M           reindex document N to index M (alias: reindex)\n'
+	printf '  nt ri N-M A-B       reindex range N..M to A..B one-to-one\n'
 	printf '  nt a                activity summary, current dir (alias: activity)\n'
 	printf '  nt ar               activity summary, recursive (alias: activity-recursive)\n'
 	printf '  nt R                open README.md\n'
@@ -662,123 +662,185 @@ cmd_rename_last() {
 		&& printf '%s renamed to %s\n' "${last_doc}" "${new_doc}"
 }
 
-cmd_renumber() {
-	if [ "$#" -lt 2 ]; then
-		printf 'usage: %s\n' "${nt_syn_rn}"
+cmd_reindex() {
+	if [[ "$#" -lt 2 ]]; then
+		nt_err "usage: nt ri <index> <index> | nt ri <range> <range>"
 		exit 1
 	fi
-	local rn_start="$1" rn_target="$2"
-	validate_index "$rn_start" || exit 2
-	validate_index "$rn_target" || exit 2
+	local ri_arg1="$1" ri_arg2="$2"
 
-	# Normalize all components to 3 digits
-	local -a start_parts target_parts
-	start_parts=( "${(@s:.:)rn_start}" )
-	target_parts=( "${(@s:.:)rn_target}" )
-	local _rn_i
-	for (( _rn_i = 1; _rn_i <= ${#start_parts[@]}; _rn_i++ )); do
-		start_parts[$_rn_i]="$(printf '%03d' "$(( 10#${start_parts[$_rn_i]} ))")"
-	done
-	for (( _rn_i = 1; _rn_i <= ${#target_parts[@]}; _rn_i++ )); do
-		target_parts[$_rn_i]="$(printf '%03d' "$(( 10#${target_parts[$_rn_i]} ))")"
-	done
-	local norm_start="${(j:.:)start_parts}"
-	local norm_target="${(j:.:)target_parts}"
+	local ri1_range=0 ri2_range=0
+	[[ "$ri_arg1" =~ $_nt_range_pat ]] && ri1_range=1
+	[[ "$ri_arg2" =~ $_nt_range_pat ]] && ri2_range=1
 
-	# Both indices must have the same depth
-	if [[ ${#start_parts[@]} -ne ${#target_parts[@]} ]]; then
-		nt_err "Start and target must have the same number of index components."
+	if [[ $ri1_range -ne $ri2_range ]]; then
+		nt_err "ri: both arguments must be the same form (both indices or both ranges)"
 		exit 2
 	fi
-	local depth=${#start_parts[@]}
 
-	if [[ "$norm_start" == "$norm_target" ]]; then
-		printf 'Nothing to renumber.\n'
-		exit 0
-	fi
+	if [[ $ri1_range -eq 0 ]]; then
+		# ── Single-file form ─────────────────────────────────────────
+		validate_index "$ri_arg1" || exit 2
+		validate_index "$ri_arg2" || exit 2
 
-	# Verify start document exists
-	find_doc_by_index "$norm_start" >/dev/null || exit 2
+		local -a ri_cur_p ri_new_p
+		ri_cur_p=( "${(@s:.:)ri_arg1}" )
+		ri_new_p=( "${(@s:.:)ri_arg2}" )
+		local _ri_i
+		for (( _ri_i = 1; _ri_i <= ${#ri_cur_p[@]}; _ri_i++ )); do
+			ri_cur_p[$_ri_i]="$(printf '%03d' "$(( 10#${ri_cur_p[$_ri_i]} ))")"
+		done
+		for (( _ri_i = 1; _ri_i <= ${#ri_new_p[@]}; _ri_i++ )); do
+			ri_new_p[$_ri_i]="$(printf '%03d' "$(( 10#${ri_new_p[$_ri_i]} ))")"
+		done
+		local ri_norm_cur="${(j:.:)ri_cur_p}" ri_norm_new="${(j:.:)ri_new_p}"
 
-	# Find consecutive run (increment last component, same parent prefix)
-	local -a rn_end_parts=( "${start_parts[@]}" )
-	local next_last next_idx
-	local -a next_parts
-	while true; do
-		next_last=$(( 10#${rn_end_parts[-1]} + 1 ))
-		next_parts=( "${rn_end_parts[@]}" )
-		next_parts[-1]="$next_last"
-		next_idx="${(j:.:)next_parts}"
-		if find_doc_by_index "$next_idx" >/dev/null 2>&1; then
-			rn_end_parts=( "${next_parts[@]}" )
-		else
-			break
+		if [[ "$ri_norm_cur" == "$ri_norm_new" ]]; then
+			printf 'Nothing to reindex.\n'; exit 0
 		fi
-	done
 
-	local start_last=$(( 10#${start_parts[-1]} ))
-	local end_last=$(( 10#${rn_end_parts[-1]} ))
-	local target_last=$(( 10#${target_parts[-1]} ))
-	local rn_count=$(( end_last - start_last ))
-
-	# Parent prefix of the start range (for overlap detection)
-	local start_prefix="" target_prefix=""
-	if [[ $depth -gt 1 ]]; then
-		start_prefix="${(j:.:)start_parts[1,-2]}"
-		target_prefix="${(j:.:)target_parts[1,-2]}"
-	fi
-
-	# Collision check: target slots must be free (unless within source range)
-	local rn_i ti_last chk_idx chk_doc
-	local -a chk_arr
-	for rn_i in $(seq 0 $rn_count); do
-		ti_last=$(( target_last + rn_i ))
-		# Skip slots that will be vacated (same prefix, overlapping range)
-		if [[ "$start_prefix" == "$target_prefix" ]] \
-			&& (( ti_last >= start_last && ti_last <= end_last )); then
-			continue
-		fi
-		chk_arr=( "${target_parts[@]}" )
-		chk_arr[-1]="$(printf '%03d' "$ti_last")"
-		chk_idx="${(j:.:)chk_arr}"
-		chk_doc=
-		if chk_doc="$(find_doc_by_index "$chk_idx" 2>/dev/null)"; then
-			nt_err "Target index ${chk_idx} already occupied by ${chk_doc}."
+		local ri_doc
+		ri_doc="$(find_doc_by_index "$ri_norm_cur")" || exit 2
+		if find_doc_by_index "$ri_norm_new" >/dev/null 2>&1; then
+			nt_err "Document with index ${ri_norm_new} already exists."
 			exit 2
 		fi
-	done
-
-	# Determine move order to avoid overwriting
-	local rn_seq
-	if [[ "$(compare_indices "$norm_target" "$norm_start")" == "1" ]]; then
-		rn_seq="$(seq $rn_count -1 0)"
-	else
-		rn_seq="$(seq 0 $rn_count)"
+		local ri_file_idx
+		ri_file_idx="$(extract_index "$ri_doc")"
+		local ri_new_doc="${ri_norm_new}${ri_doc#${ri_file_idx}}"
+		\mv "${ri_doc}" "${ri_new_doc}" \
+			&& printf '%s reindexed to %s\n' "${ri_doc}" "${ri_new_doc}"
+		return
 	fi
 
-	local si_last si_idx_norm ti_idx_norm si_doc ti_doc si_file_idx
-	local -a si_arr ti_arr
-	for rn_i in ${=rn_seq}; do
-		si_last=$(( start_last + rn_i ))
-		ti_last=$(( target_last + rn_i ))
+	# ── Range form: ri A-B C-D ────────────────────────────────────
+	local src_start="${ri_arg1%%-*}" src_end="${ri_arg1##*-}"
+	local tgt_start="${ri_arg2%%-*}" tgt_end="${ri_arg2##*-}"
 
-		# Build zero-padded source index
-		si_arr=( "${start_parts[@]}" )
-		si_arr[-1]="$(printf '%03d' "$si_last")"
-		si_idx_norm="${(j:.:)si_arr}"
+	validate_index "$src_start" || exit 2
+	validate_index "$src_end"   || exit 2
+	validate_index "$tgt_start" || exit 2
+	validate_index "$tgt_end"   || exit 2
 
-		# Build zero-padded target index
-		ti_arr=( "${target_parts[@]}" )
-		ti_arr[-1]="$(printf '%03d' "$ti_last")"
-		ti_idx_norm="${(j:.:)ti_arr}"
+	# Normalize all four endpoints to 3-digit components
+	local -a ss_p se_p ts_p te_p
+	ss_p=( "${(@s:.:)src_start}" ); se_p=( "${(@s:.:)src_end}" )
+	ts_p=( "${(@s:.:)tgt_start}" ); te_p=( "${(@s:.:)tgt_end}" )
+	local _ri_i
+	for (( _ri_i = 1; _ri_i <= ${#ss_p[@]}; _ri_i++ )); do
+		ss_p[$_ri_i]="$(printf '%03d' "$(( 10#${ss_p[$_ri_i]} ))")"
+	done
+	for (( _ri_i = 1; _ri_i <= ${#se_p[@]}; _ri_i++ )); do
+		se_p[$_ri_i]="$(printf '%03d' "$(( 10#${se_p[$_ri_i]} ))")"
+	done
+	for (( _ri_i = 1; _ri_i <= ${#ts_p[@]}; _ri_i++ )); do
+		ts_p[$_ri_i]="$(printf '%03d' "$(( 10#${ts_p[$_ri_i]} ))")"
+	done
+	for (( _ri_i = 1; _ri_i <= ${#te_p[@]}; _ri_i++ )); do
+		te_p[$_ri_i]="$(printf '%03d' "$(( 10#${te_p[$_ri_i]} ))")"
+	done
+	local norm_ss="${(j:.:)ss_p}" norm_se="${(j:.:)se_p}"
+	local norm_ts="${(j:.:)ts_p}" norm_te="${(j:.:)te_p}"
 
-		si_doc="$(find_doc_by_index "$si_idx_norm")" || exit 2
-		# Get the exact index prefix as it appears in the filename
-		si_file_idx="$(extract_index "$si_doc")"
-		# Replace the index prefix in the filename
-		ti_doc="${ti_idx_norm}${si_doc#${si_file_idx}}"
-		\mv "${si_doc}" "${ti_doc}" \
-			&& printf '%s -> %s\n' "${si_doc}" "${ti_doc}"
+	# Validate same depth within each range
+	if [[ ${#ss_p[@]} -ne ${#se_p[@]} ]]; then
+		nt_err "ri: source range endpoints must be at the same index depth"
+		exit 2
+	fi
+	if [[ ${#ts_p[@]} -ne ${#te_p[@]} ]]; then
+		nt_err "ri: target range endpoints must be at the same index depth"
+		exit 2
+	fi
+
+	# Validate same parent prefix within each range (depth > 1)
+	if [[ ${#ss_p[@]} -gt 1 ]]; then
+		if [[ "${(j:.:)ss_p[1,-2]}" != "${(j:.:)se_p[1,-2]}" ]]; then
+			nt_err "ri: source range endpoints must share the same parent index"
+			exit 2
+		fi
+	fi
+	if [[ ${#ts_p[@]} -gt 1 ]]; then
+		if [[ "${(j:.:)ts_p[1,-2]}" != "${(j:.:)te_p[1,-2]}" ]]; then
+			nt_err "ri: target range endpoints must share the same parent index"
+			exit 2
+		fi
+	fi
+
+	local src_first_last=$(( 10#${ss_p[-1]} ))
+	local src_last_last=$(( 10#${se_p[-1]} ))
+	local tgt_first_last=$(( 10#${ts_p[-1]} ))
+	local tgt_last_last=$(( 10#${te_p[-1]} ))
+
+	if (( src_first_last > src_last_last )); then
+		nt_err "ri: source range start is greater than end: ${norm_ss}-${norm_se}"
+		exit 2
+	fi
+	if (( tgt_first_last > tgt_last_last )); then
+		nt_err "ri: target range start is greater than end: ${norm_ts}-${norm_te}"
+		exit 2
+	fi
+
+	local src_span=$(( src_last_last - src_first_last ))
+	local tgt_span=$(( tgt_last_last - tgt_first_last ))
+	if [[ $src_span -ne $tgt_span ]]; then
+		nt_err "ri: source range (${norm_ss}-${norm_se}) and target range (${norm_ts}-${norm_te}) must span the same number of indices"
+		exit 2
+	fi
+
+	if [[ "$norm_ss" == "$norm_ts" ]] && [[ "$norm_se" == "$norm_te" ]]; then
+		printf 'Nothing to reindex.\n'; exit 0
+	fi
+
+	# Verify at least the first source document exists
+	find_doc_by_index "$norm_ss" >/dev/null || exit 2
+
+	# Build parallel source/target index lists
+	local -a ri_src_idxs ri_tgt_idxs
+	local _ri_n _ri_sa _ri_ta _ri_si _ri_ti
+	for (( _ri_n = 0; _ri_n <= src_span; _ri_n++ )); do
+		_ri_sa=( "${ss_p[@]}" ); _ri_ta=( "${ts_p[@]}" )
+		_ri_sa[-1]="$(printf '%03d' "$(( src_first_last + _ri_n ))")"
+		_ri_ta[-1]="$(printf '%03d' "$(( tgt_first_last + _ri_n ))")"
+		ri_src_idxs+=( "${(j:.:)_ri_sa}" )
+		ri_tgt_idxs+=( "${(j:.:)_ri_ta}" )
+	done
+
+	# Collision check: target occupied by a file not in the source set
+	for (( _ri_n = 1; _ri_n <= ${#ri_src_idxs[@]}; _ri_n++ )); do
+		_ri_si="${ri_src_idxs[$_ri_n]}"
+		_ri_ti="${ri_tgt_idxs[$_ri_n]}"
+		find_doc_by_index "$_ri_si" >/dev/null 2>&1 || continue
+		local _ri_chk_doc _ri_chk_idx _ri_is_src _ri_s
+		if _ri_chk_doc="$(find_doc_by_index "$_ri_ti" 2>/dev/null)"; then
+			_ri_chk_idx="$(extract_index "$_ri_chk_doc")"
+			_ri_is_src=0
+			for _ri_s in "${ri_src_idxs[@]}"; do
+				[[ "$_ri_chk_idx" == "$_ri_s" ]] && { _ri_is_src=1; break; }
+			done
+			if [[ $_ri_is_src -eq 0 ]]; then
+				nt_err "Target index ${_ri_ti} already occupied by ${_ri_chk_doc}."
+				exit 2
+			fi
+		fi
+	done
+
+	# Move order: backwards when target > source (avoids same-range self-overwrite)
+	local -a ri_seq
+	if [[ "$(compare_indices "$norm_ts" "$norm_ss")" == "1" ]]; then
+		for (( _ri_n = ${#ri_src_idxs[@]}; _ri_n >= 1; _ri_n-- )); do ri_seq+=( "$_ri_n" ); done
+	else
+		for (( _ri_n = 1; _ri_n <= ${#ri_src_idxs[@]}; _ri_n++ )); do ri_seq+=( "$_ri_n" ); done
+	fi
+
+	local _ri_doc _ri_file_idx _ri_new_doc
+	for _ri_n in "${ri_seq[@]}"; do
+		_ri_si="${ri_src_idxs[$_ri_n]}"
+		_ri_ti="${ri_tgt_idxs[$_ri_n]}"
+		_ri_doc="$(find_doc_by_index "$_ri_si" 2>/dev/null)" || continue
+		_ri_file_idx="$(extract_index "$_ri_doc")"
+		_ri_new_doc="${_ri_ti}${_ri_doc#${_ri_file_idx}}"
+		\mv "${_ri_doc}" "${_ri_new_doc}" \
+			&& printf '%s -> %s\n' "${_ri_doc}" "${_ri_new_doc}"
 	done
 }
 
@@ -1089,8 +1151,8 @@ while [ "$#" -gt 0 ]; do
 
 		# ── Stateless commands (greedy/non-greedy irrelevant) ────────
 
-		rn|renumber|-rn|--renumber)
-			shift; cmd_renumber "$@"; break ;;
+		ri|reindex|-ri|--reindex)
+			shift; cmd_reindex "$@"; break ;;
 
 		util)
 			shift

@@ -184,9 +184,9 @@ test_alias_new() {
     nt_test__assert_exit 0 env NT_EDITOR="true" "$NT_SCRIPT" new
 }
 
-test_alias_renumber() {
+test_alias_reindex() {
     nt_test__create_file "003-note.md"
-    nt_test__assert_exit 0 "$NT_SCRIPT" renumber 3 3
+    nt_test__assert_exit 0 "$NT_SCRIPT" reindex 3 3
 }
 
 test_alias_activity() {
@@ -243,7 +243,7 @@ NT_TESTS_MISC=(
     test_nt_editor_default_vim
     test_nt_editor_respects_env
     test_alias_new
-    test_alias_renumber
+    test_alias_reindex
     test_alias_activity
     test_alias_activity_recursive
     test_unknown_command_fails
