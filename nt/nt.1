@@ -49,6 +49,15 @@
 .br
 .Nm
 .Cm t
+.br
+.Nm
+.Cm util Cm month
+.br
+.Nm
+.Cm util Cm delim Ar D
+.br
+.Nm
+.Cm util Cm ext Ar E
 .Sh DESCRIPTION
 The
 .Nm
@@ -223,6 +232,37 @@ document in the current working directory.
 Creates
 .Pa nt_template.md
 if it does not exist.
+.It Cm util Cm month
+Rename all files in the current directory whose names contain a spelled-out month name
+(full or abbreviated, e.g.\&
+.Dq January
+or
+.Dq Jan )
+by replacing the month name with its two-digit numeric equivalent.
+Word-boundary matching is used: the month name must not be adjacent to other letters.
+.It Cm util Cm delim Ar D
+Rename all nt-indexed files in the current directory so that the delimiter between the
+numeric index and the title portion is
+.Ar D
+(e.g. replacing
+.Ql _
+with
+.Ql - ) .
+Files whose delimiter is already
+.Ar D
+are skipped.
+.It Cm util Cm ext Ar E
+Rename all nt-indexed files in the current directory so that their final extension is
+.Ar E .
+For example,
+.Ql nt util ext md
+converts
+.Pa 001-example.txt
+to
+.Pa 001-example.md .
+Files already using extension
+.Ar E
+are skipped.
 .El
 .Sh ENVIRONMENT
 .Bl -tag -width indent

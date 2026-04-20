@@ -392,6 +392,7 @@ cmd_help() {
 	printf '  nt v                print version (alias: version)\n'
 	printf '  nt util month       rename files: month names → 2-digit numbers\n'
 	printf '  nt util delim D     rename nt-indexed files to use delimiter D\n'
+	printf '  nt util ext E       rename nt-indexed files to use extension E\n'
 	printf '\nBare commands (no hyphen) consume all remaining words as the title.\n'
 	printf 'Hyphen-prefixed commands stop at numbers/flags, enabling chaining;\n'
 	printf 'chained commands are processed in the sequence they are passed:\n'
@@ -938,6 +939,36 @@ cmd_util_month() {
 	fi
 }
 
+# Scans cwd and renames nt-indexed files, changing their final extension to
+# the specified value (e.g. '001-title.txt' → '001-title.md').
+cmd_util_ext() {
+	if [[ "$#" -eq 0 ]]; then
+		nt_err "usage: nt util ext <extension>"
+		exit 1
+	fi
+	local new_ext="$1"
+
+	local -a all_docs
+	all_docs=( [[:digit:]]##*(N.) )
+
+	local f idx cur_ext stem newf renamed=0
+	for f in "${all_docs[@]}"; do
+		nt_is_skip_ext "$f" && continue
+		idx="$(extract_index "$f")"
+		[[ -z "$idx" ]] && continue
+		cur_ext="$(get_extension "$f" 2>/dev/null)" || cur_ext="${f##*.}"
+		[[ "$cur_ext" == "$new_ext" ]] && continue
+		stem="${f%.*}"
+		newf="${stem}.${new_ext}"
+		\mv "$f" "$newf"
+		printf '%s -> %s\n' "$f" "$newf"
+		(( renamed++ )) || true
+	done
+	if (( renamed == 0 )); then
+		printf 'No nt-indexed files with a different extension found to update.\n'
+	fi
+}
+
 # Scans cwd and renames nt-indexed files to use the specified delimiter
 # between the index and title portions (e.g. '001_title.md' → '001-title.md').
 # Skips files with non-text extensions.
@@ -1064,15 +1095,16 @@ while [ "$#" -gt 0 ]; do
 		util)
 			shift
 			if [[ "$#" -eq 0 ]]; then
-				nt_err "usage: nt util month | nt util delim <delimiter>"
+				nt_err "usage: nt util month | nt util delim <delimiter> | nt util ext <extension>"
 				exit 2
 			fi
 			case "$1" in
 				month)  cmd_util_month; break ;;
 				delim)  shift; cmd_util_delim "$@"; break ;;
+				ext)    shift; cmd_util_ext "$@"; break ;;
 				*)
 					nt_err "Unknown util subcommand: $1"
-					nt_err "usage: nt util month | nt util delim <delimiter>"
+					nt_err "usage: nt util month | nt util delim <delimiter> | nt util ext <extension>"
 					exit 2 ;;
 			esac
 			;;
