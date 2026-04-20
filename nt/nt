@@ -267,7 +267,6 @@ find_doc_by_index() {
 	if [[ ${#docs[@]} -gt 1 ]]; then
 		if [[ -t 2 ]]; then
 			printf 'Multiple files with index %s:\n' "$normalized" >&2
-			local i
 			for (( i = 1; i <= ${#docs[@]}; i++ )); do
 				printf '  %d) %s\n' "$i" "${docs[$i]}" >&2
 			done
@@ -287,6 +286,26 @@ find_doc_by_index() {
 		return 0
 	fi
 	printf '%s' "${docs[1]}"
+}
+
+# Returns 0 if at least one file with the given index exists; 1 otherwise.
+# Unlike find_doc_by_index, never prompts and never errors.
+index_has_doc() {
+	local idx="$1"
+	local -a parts
+	parts=( "${(@s:.:)idx}" )
+	local i
+	for (( i = 1; i <= ${#parts[@]}; i++ )); do
+		parts[$i]="$(printf '%03d' "$(( 10#${parts[$i]} ))")"
+	done
+	local normalized="${(j:.:)parts}"
+	local -a candidates
+	candidates=( ${normalized}*(N.) )
+	local f
+	for f in "${candidates[@]}"; do
+		[[ "$(extract_index "$f")" == "$normalized" ]] && return 0
+	done
+	return 1
 }
 
 # Validates an index (simple integer or hierarchical dot-separated).
@@ -792,7 +811,7 @@ cmd_reindex() {
 	fi
 
 	# Verify at least the first source document exists
-	find_doc_by_index "$norm_ss" >/dev/null || exit 2
+	index_has_doc "$norm_ss" || exit 2
 
 	# Build parallel source/target index lists
 	local -a ri_src_idxs ri_tgt_idxs
@@ -806,11 +825,11 @@ cmd_reindex() {
 	done
 
 	# Collision check: target occupied by a file not in the source set
+	local _ri_chk_doc='' _ri_chk_idx='' _ri_is_src=0 _ri_s=''
 	for (( _ri_n = 1; _ri_n <= ${#ri_src_idxs[@]}; _ri_n++ )); do
 		_ri_si="${ri_src_idxs[$_ri_n]}"
 		_ri_ti="${ri_tgt_idxs[$_ri_n]}"
-		find_doc_by_index "$_ri_si" >/dev/null 2>&1 || continue
-		local _ri_chk_doc _ri_chk_idx _ri_is_src _ri_s
+		index_has_doc "$_ri_si" || continue
 		if _ri_chk_doc="$(find_doc_by_index "$_ri_ti" 2>/dev/null)"; then
 			_ri_chk_idx="$(extract_index "$_ri_chk_doc")"
 			_ri_is_src=0
@@ -832,16 +851,19 @@ cmd_reindex() {
 		for (( _ri_n = 1; _ri_n <= ${#ri_src_idxs[@]}; _ri_n++ )); do ri_seq+=( "$_ri_n" ); done
 	fi
 
-	local _ri_doc _ri_file_idx _ri_new_doc
+	local -a _ri_messages=()
+	local _ri_doc='' _ri_file_idx='' _ri_new_doc=''
 	for _ri_n in "${ri_seq[@]}"; do
 		_ri_si="${ri_src_idxs[$_ri_n]}"
 		_ri_ti="${ri_tgt_idxs[$_ri_n]}"
-		_ri_doc="$(find_doc_by_index "$_ri_si" 2>/dev/null)" || continue
+		index_has_doc "$_ri_si" || continue
+		_ri_doc="$(find_doc_by_index "$_ri_si")" || continue
 		_ri_file_idx="$(extract_index "$_ri_doc")"
 		_ri_new_doc="${_ri_ti}${_ri_doc#${_ri_file_idx}}"
 		\mv "${_ri_doc}" "${_ri_new_doc}" \
-			&& printf '%s -> %s\n' "${_ri_doc}" "${_ri_new_doc}"
+			&& _ri_messages+=( "${_ri_doc} -> ${_ri_new_doc}" )
 	done
+	printf '%s\n' "${_ri_messages[@]}"
 }
 
 cmd_activity() {

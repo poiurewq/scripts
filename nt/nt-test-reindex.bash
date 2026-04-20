@@ -203,6 +203,24 @@ test_reindex_range_mixed_forms_fails() {
     nt_test__assert_exit 2 "$NT_SCRIPT" ri 1-3 5
 }
 
+# Regression: range reindex used 2>/dev/null on find_doc_by_index, making
+# [[ -t 2 ]] false and causing multi-match sources to silently skip instead
+# of surfacing the ambiguity.
+test_reindex_range_multi_match_source_not_silent() {
+    nt_test__create_file "003-a.md"
+    nt_test__create_file "003-b.md"
+    nt_test__assert_output_contains "Multiple files" "$NT_SCRIPT" ri 3-3 7-7
+}
+
+test_reindex_range_multi_match_source_continues_other_sources() {
+    nt_test__create_file "003-a.md"
+    nt_test__create_file "003-b.md"
+    nt_test__create_file "005-x.md"
+    "$NT_SCRIPT" ri 3-5 7-9 >/dev/null 2>&1 || true
+    nt_test__assert_file_exists "$NT_TEST_DIR/009-x.md" \
+        "005 should be reindexed despite multi-match on 003"
+}
+
 #####################################################################
 # Test registry
 #####################################################################
@@ -237,4 +255,6 @@ NT_TESTS_REINDEX=(
     test_reindex_range_different_parent_fails
     test_reindex_range_different_parent_message
     test_reindex_range_mixed_forms_fails
+    test_reindex_range_multi_match_source_not_silent
+    test_reindex_range_multi_match_source_continues_other_sources
 )
