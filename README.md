@@ -1,5 +1,5 @@
-q's scripts: these are helpful for me. maybe they'll be helpful for you, too :)
+q's scripts: these are helpful for me. maybe they'll be helpful for you, too.
 
-you can install each script via `brew tap poiurewq/tap` followed by `brew install <script>` 
+you can install each script via `brew install poiurewq/tap/<script>` or 
 
-or simply `brew install poiurewq/tap/<script>`
+`brew tap poiurewq/tap` followed by `brew install <script>` 
