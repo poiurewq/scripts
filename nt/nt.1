@@ -36,7 +36,10 @@
 .Cm rl Ar title
 .br
 .Nm
-.Bro Cm rn | Cm renumber Brc Ar n Ar m
+.Bro Cm ri | Cm reindex Brc Ar n Ar m
+.br
+.Nm
+.Bro Cm ri | Cm reindex Brc Ar n Ns Cm - Ns Ar m Ar a Ns Cm - Ns Ar b
 .br
 .Nm
 .Bro Cm a | Cm activity Brc
@@ -200,19 +203,34 @@ without opening the document.
 Rename the last indexed document to
 .Ar title
 without opening the document.
-.It Bro Cm rn | Cm renumber Brc Ar n Ar m
-Starting from document index
-.Ar n ,
-renumber the consecutive run of documents so that
+.It Bro Cm ri | Cm reindex Brc Ar n Ar m
+Reindex the document at index
 .Ar n
-becomes
-.Ar m ,
-.Ar n Ns +1
-becomes
-.Ar m Ns +1 ,
-and so on, until the end of the consecutive sequence.
+to use index
+.Ar m
+instead, preserving the delimiter, title, and extension.
+The index depth may change
+.Pq e.g., moving Pa 003-note.md to index Ar 1.5 .
+Fails if no document exists at
+.Ar n
+or if
+.Ar m
+is already occupied.
+.It Bro Cm ri | Cm reindex Brc Ar n Ns Cm - Ns Ar m Ar a Ns Cm - Ns Ar b
+Reindex the documents in the source range
+.Ar n Ns - Ns Ar m
+to the target range
+.Ar a Ns - Ns Ar b
+one-to-one:
+.Ar n Ns -> Ns Ar a ,
+.Ar n Ns +1 Ns -> Ns Ar a Ns +1 ,
+and so on.
+Both range endpoints must be at the same index depth and share the same parent index
+.Pq e.g., Ql 3.3-3.7 No is valid; Ql 3.3-4.7 No is not .
+Both ranges must span the same number of indices.
 Documents are renamed in the correct order to avoid collisions.
-Fails if any target index is already occupied by a document outside the source range.
+Source positions with no document are silently skipped.
+Fails if any target index is occupied by a document not in the source range.
 .It Bro Cm a | Cm activity Brc
 Show an activity summary of indexed documents grouped by last-modified month.
 Searches the current directory only.
@@ -380,9 +398,17 @@ Rename the last note:
 .Pp
 .Dl nt rl brainstorm
 .Pp
+Reindex a single document to a new index (depth may change):
+.Pp
+.Dl nt ri 3 10
+.Pp
 Shift notes 3\(en5 so they start at 10 instead:
 .Pp
-.Dl nt rn 3 10
+.Dl nt ri 3-5 10-12
+.Pp
+Move a sub-range to a different parent:
+.Pp
+.Dl nt ri 1-3 3.5-3.7
 .Ss Using a template
 Create a template file (e.g.
 .Pa nt_template.md )

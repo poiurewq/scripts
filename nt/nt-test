@@ -230,7 +230,7 @@ source "$_test_dir/nt-test-new.bash"
 source "$_test_dir/nt-test-last.bash"
 source "$_test_dir/nt-test-open.bash"
 source "$_test_dir/nt-test-rename.bash"
-source "$_test_dir/nt-test-renumber.bash"
+source "$_test_dir/nt-test-reindex.bash"
 source "$_test_dir/nt-test-activity.bash"
 source "$_test_dir/nt-test-misc.bash"
 source "$_test_dir/nt-test-hierarchical.bash"
@@ -244,7 +244,7 @@ ALL_TESTS=(
     "${NT_TESTS_LAST[@]}"
     "${NT_TESTS_OPEN[@]}"
     "${NT_TESTS_RENAME[@]}"
-    "${NT_TESTS_RENUMBER[@]}"
+    "${NT_TESTS_REINDEX[@]}"
     "${NT_TESTS_ACTIVITY[@]}"
     "${NT_TESTS_MISC[@]}"
     "${NT_TESTS_HIERARCHICAL[@]}"
@@ -264,7 +264,7 @@ if [ "${1:-}" != "" ]; then
             last)          SELECTED_TESTS+=("${NT_TESTS_LAST[@]}") ;;
             open)          SELECTED_TESTS+=("${NT_TESTS_OPEN[@]}") ;;
             rename)        SELECTED_TESTS+=("${NT_TESTS_RENAME[@]}") ;;
-            renumber)      SELECTED_TESTS+=("${NT_TESTS_RENUMBER[@]}") ;;
+            reindex)       SELECTED_TESTS+=("${NT_TESTS_REINDEX[@]}") ;;
             activity)      SELECTED_TESTS+=("${NT_TESTS_ACTIVITY[@]}") ;;
             misc)          SELECTED_TESTS+=("${NT_TESTS_MISC[@]}") ;;
             hierarchical)  SELECTED_TESTS+=("${NT_TESTS_HIERARCHICAL[@]}") ;;
@@ -279,7 +279,7 @@ if [ "${1:-}" != "" ]; then
                 done
                 if [ "$found" -eq 0 ]; then
                     printf 'Unknown test or group: %s\n' "$arg" >&2
-                    printf 'Groups: new, last, open, rename, renumber, activity, misc, hierarchical\n' >&2
+                    printf 'Groups: new, last, open, rename, reindex, activity, misc, hierarchical\n' >&2
                     exit 1
                 fi
                 ;;

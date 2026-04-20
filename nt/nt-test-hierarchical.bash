@@ -181,9 +181,9 @@ test_hier_rename_last_with_hierarchical() {
 
 test_hier_renumber_hierarchical_single() {
     nt_test__create_file "004.001-note.md"
-    "$NT_SCRIPT" rn 4.1 4.5 >/dev/null 2>&1
+    "$NT_SCRIPT" ri 4.1 4.5 >/dev/null 2>&1
     nt_test__assert_file_exists "$NT_TEST_DIR/004.005-note.md" \
-        "rn 4.1 4.5 should move 004.001 to 004.005"
+        "ri 4.1 4.5 should move 004.001 to 004.005"
     nt_test__assert_file_not_exists "$NT_TEST_DIR/004.001-note.md" \
         "original 004.001 should be gone"
 }
@@ -192,28 +192,23 @@ test_hier_renumber_hierarchical_run() {
     nt_test__create_file "004.001-a.md"
     nt_test__create_file "004.002-b.md"
     nt_test__create_file "004.003-c.md"
-    "$NT_SCRIPT" rn 4.1 4.5 >/dev/null 2>&1
+    "$NT_SCRIPT" ri 4.1-4.3 4.5-4.7 >/dev/null 2>&1
     nt_test__assert_file_exists "$NT_TEST_DIR/004.005-a.md" "004.001 -> 004.005"
     nt_test__assert_file_exists "$NT_TEST_DIR/004.006-b.md" "004.002 -> 004.006"
     nt_test__assert_file_exists "$NT_TEST_DIR/004.007-c.md" "004.003 -> 004.007"
     nt_test__assert_file_not_exists "$NT_TEST_DIR/004.001-a.md" "004.001 gone"
 }
 
-test_hier_renumber_depth_mismatch_fails() {
-    nt_test__create_file "004.001-note.md"
-    nt_test__assert_exit 2 "$NT_SCRIPT" rn 4.1 5
-}
-
 test_hier_renumber_collision_hierarchical() {
     nt_test__create_file "004.001-a.md"
     nt_test__create_file "004.005-occupied.md"
-    nt_test__assert_exit 2 "$NT_SCRIPT" rn 4.1 4.5
+    nt_test__assert_exit 2 "$NT_SCRIPT" ri 4.1 4.5
 }
 
 test_hier_renumber_flat_still_works() {
     nt_test__create_file "003-a.md"
     nt_test__create_file "004-b.md"
-    "$NT_SCRIPT" rn 3 7 >/dev/null 2>&1
+    "$NT_SCRIPT" ri 3-4 7-8 >/dev/null 2>&1
     nt_test__assert_file_exists "$NT_TEST_DIR/007-a.md" "003 -> 007"
     nt_test__assert_file_exists "$NT_TEST_DIR/008-b.md" "004 -> 008"
 }
@@ -667,7 +662,6 @@ NT_TESTS_HIERARCHICAL=(
     test_hier_rename_last_with_hierarchical
     test_hier_renumber_hierarchical_single
     test_hier_renumber_hierarchical_run
-    test_hier_renumber_depth_mismatch_fails
     test_hier_renumber_collision_hierarchical
     test_hier_renumber_flat_still_works
     test_hier_last_nth_hierarchical
