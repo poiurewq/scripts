@@ -1,0 +1,1253 @@
+#!/usr/bin/env zsh
+
+QLAUDE_VERSION="0.1.0"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 1: Account infrastructure
+# ══════════════════════════════════════════════════════════════════════════════
+
+# _QLAUDE_DIRS: alias → base dir (collapses old ACCOUNTS + claude_base into one map)
+# _QLAUDE_ALL:  ordered list of primary account names for "all" iteration
+# Script default: only 'default' → ~/.claude is hardcoded.
+# All other accounts must be added via 'qlaude config add-dir'.
+# When ~/.config/qlaude/config.zsh exists, it fully replaces these defaults.
+typeset -gA _QLAUDE_DIRS=(
+    [default]="$HOME/.claude"
+)
+_QLAUDE_ALL=(default)
+
+KNOWN_COMMANDS=(conv skills agents plugins touch launch config help h)
+
+account_label() {
+    if [[ "$1" == "default" ]]; then
+        echo "default account"
+    else
+        echo "account '$1'"
+    fi
+}
+
+# Emit the projects/ dir(s) for the given account (_all_ or a specific alias)
+_qlaude_all_project_dirs() {
+    local account="$1"
+    local acct base
+    if [[ "$account" == "_all_" ]]; then
+        for acct in "${_QLAUDE_ALL[@]}"; do
+            base="${_QLAUDE_DIRS[$acct]}"
+            [[ -n "$base" && -d "$base/projects" ]] && echo "$base/projects"
+        done
+    else
+        base="${_QLAUDE_DIRS[$account]}"
+        [[ -n "$base" && -d "$base/projects" ]] && echo "$base/projects"
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 2: Conv shared helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Echo tab-separated: customTitle\tinput\toutput\tcache_create\tcache_read\ttotal
+_conv_extract_stats() {
+  jq -rn --slurpfile d "$1" '
+    $d | {
+      customTitle:  (map(select(.customTitle != null) | .customTitle) | first // null),
+      input:        (map(select(.type=="assistant") | .message.usage.input_tokens                // 0) | add // 0),
+      output:       (map(select(.type=="assistant") | .message.usage.output_tokens               // 0) | add // 0),
+      cache_create: (map(select(.type=="assistant") | .message.usage.cache_creation_input_tokens // 0) | add // 0),
+      cache_read:   (map(select(.type=="assistant") | .message.usage.cache_read_input_tokens     // 0) | add // 0)
+    }
+    | .total = (.input + .output + .cache_create + .cache_read)
+    | "\(.customTitle)\t\(.input)\t\(.output)\t\(.cache_create)\t\(.cache_read)\t\(.total)"
+  ' 2>/dev/null
+}
+
+# Echo human-readable token count: 1.2M / 45K / 999
+_conv_human_tokens() {
+  local n="$1"
+  if (( n >= 1000000 )); then
+    awk "BEGIN { printf \"%.1fM\", $n/1000000 }"
+  elif (( n >= 1000 )); then
+    awk "BEGIN { printf \"%.0fK\", $n/1000 }"
+  else
+    printf '%s' "$n"
+  fi
+}
+
+# Echo "filled<TAB>empty" bar strings; caller: IFS=$'\t' read -r filled empty <<< "$(...)"
+# Segments: ▓=input, █=output, ▓=cache_create, ▒=cache_read, ░=empty
+_conv_render_bar() {
+  local input="$1" output="$2" cc="$3" cr="$4" total="$5" max_tokens="$6" bar_max="$7"
+  local bar_total wt_input wt_output wt_cc wt_cr wt_total
+  local in_len out_len cc_len cr_len empty_len
+  (( bar_max < 0 )) && bar_max=0
+
+  if [[ "$_CONV_SCALE" == "log" ]]; then
+    bar_total=$(awk -v t="$total" -v m="$max_tokens" -v b="$bar_max" \
+      'BEGIN { if (t<=0) { print 0; exit } r=log(t+1)/log(m+1); if(r>1)r=1; printf "%d", r*b }')
+  else
+    bar_total=$(( total * bar_max / max_tokens ))
+  fi
+  (( bar_total > bar_max )) && bar_total=$bar_max
+
+  wt_input=$(( input * _CONV_W_INPUT ))
+  wt_output=$(( output * _CONV_W_OUTPUT ))
+  wt_cc=$(( cc * _CONV_W_CC ))
+  wt_cr=$(( cr * _CONV_W_CR ))
+  wt_total=$(( wt_input + wt_output + wt_cc + wt_cr ))
+
+  if (( wt_total == 0 )); then
+    in_len=0; out_len=0; cc_len=0; cr_len=0
+  else
+    in_len=$(( wt_input  * bar_total / wt_total ))
+    out_len=$(( wt_output * bar_total / wt_total ))
+    cc_len=$(( wt_cc     * bar_total / wt_total ))
+    cr_len=$(( bar_total - in_len - out_len - cc_len ))
+    (( cr_len < 0 )) && cr_len=0
+  fi
+  empty_len=$(( bar_max - bar_total ))
+
+  printf '%s\t%s' \
+    "$(printf '%*s' "$in_len"    '' | tr ' ' '▓')$(printf '%*s' "$out_len" '' | tr ' ' '█')$(printf '%*s' "$cc_len" '' | tr ' ' '▓')$(printf '%*s' "$cr_len" '' | tr ' ' '▒')" \
+    "$(printf '%*s' "$empty_len" '' | tr ' ' '░')"
+}
+
+# Echo decoded project path from encoded directory basename
+_conv_decode_project() {
+  local raw_dir="$1" project
+  project=$(printf '%s' "$raw_dir" | sed 's/--/\/./' | tr '-' '/')
+  printf '%s' "${project#/Users/*/}"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 3: Config subsystem  (~/.config/qlaude/config.zsh)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Conv display defaults (may be overridden by config)
+_CONV_MAX_TOKENS=20000000
+_CONV_SCALE=linear
+_CONV_TOKENS=actual  # actual | scaled (cost-weighted)
+_CONV_NORM=fixed     # fixed | dynamic (bar ceiling: max_tokens vs longest in view)
+_CONV_W_CR=10        # cache_read    = 1.0×
+_CONV_W_CC=125       # cache_create  = 12.5×
+_CONV_W_INPUT=100    # input         = 10.0×
+_CONV_W_OUTPUT=500   # output        = 50.0×
+_CONV_LIVE_MODE=override  # override | scroll
+
+# Config location (XDG-compliant; note: moved from conv/ to qlaude/)
+_QLAUDE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/qlaude"
+_QLAUDE_CONFIG_FILE="$_QLAUDE_CONFIG_DIR/config.zsh"
+
+# Source user config — may override _QLAUDE_DIRS, _QLAUDE_ALL, and _CONV_* vars
+[[ -r "$_QLAUDE_CONFIG_FILE" ]] && source "$_QLAUDE_CONFIG_FILE"
+
+# Write full current state to config file
+_qlaude_config_write() {
+    mkdir -p "$_QLAUDE_CONFIG_DIR" || { echo "qlaude config: cannot create $_QLAUDE_CONFIG_DIR" >&2; return 1; }
+    local alias
+    {
+        printf '# Auto-generated by qlaude config. Edit via qlaude config commands or by hand.\n'
+        printf '# When present, this file fully replaces script defaults for accounts and display settings.\n\n'
+        printf 'typeset -gA _QLAUDE_DIRS=(\n'
+        # Write primary accounts first (in _QLAUDE_ALL order), then secondary aliases
+        for alias in "${_QLAUDE_ALL[@]}"; do
+            [[ -n "${_QLAUDE_DIRS[$alias]:-}" ]] && \
+                printf '    [%s]="%s"\n' "$alias" "${_QLAUDE_DIRS[$alias]//$HOME/\$HOME}"
+        done
+        for alias in "${(k)_QLAUDE_DIRS[@]}"; do
+            [[ " ${_QLAUDE_ALL[*]} " == *" $alias "* ]] && continue
+            printf '    [%s]="%s"\n' "$alias" "${_QLAUDE_DIRS[$alias]//$HOME/\$HOME}"
+        done
+        printf ')\n'
+        printf '_QLAUDE_ALL=(%s)\n\n' "${_QLAUDE_ALL[*]}"
+        printf '_CONV_MAX_TOKENS=%s\n' "$_CONV_MAX_TOKENS"
+        printf '_CONV_SCALE=%s\n' "$_CONV_SCALE"
+        printf '_CONV_TOKENS=%s\n' "$_CONV_TOKENS"
+        printf '_CONV_NORM=%s\n' "$_CONV_NORM"
+        printf '_CONV_W_INPUT=%s\n' "$_CONV_W_INPUT"
+        printf '_CONV_W_OUTPUT=%s\n' "$_CONV_W_OUTPUT"
+        printf '_CONV_W_CC=%s\n' "$_CONV_W_CC"
+        printf '_CONV_W_CR=%s\n' "$_CONV_W_CR"
+        printf '_CONV_LIVE_MODE=%s\n' "$_CONV_LIVE_MODE"
+    } > "$_QLAUDE_CONFIG_FILE"
+}
+
+# Print all effective values
+_qlaude_config_list() {
+    local _tilde='~' alias
+    printf 'accounts:\n'
+    for alias in "${_QLAUDE_ALL[@]}"; do
+        printf '  %-14s %s\n' "$alias" "${_QLAUDE_DIRS[$alias]//$HOME/$_tilde}"
+    done
+    local secondary=()
+    for alias in "${(k)_QLAUDE_DIRS[@]}"; do
+        [[ " ${_QLAUDE_ALL[*]} " == *" $alias "* ]] && continue
+        secondary+=("${alias}→${_QLAUDE_DIRS[$alias]//$HOME/$_tilde}")
+    done
+    (( ${#secondary[@]} > 0 )) && printf '  aliases:       %s\n' "${secondary[*]}"
+    printf '\n'
+    printf 'max_tokens  %s\n' "$_CONV_MAX_TOKENS"
+    printf 'scale       %s\n' "$_CONV_SCALE"
+    printf 'tokens      %s\n' "$_CONV_TOKENS"
+    printf 'norm        %s\n' "$_CONV_NORM"
+    printf 'w_input     %s  (%.1f×)\n' "$_CONV_W_INPUT"  "$(( _CONV_W_INPUT  / 10.0 ))"
+    printf 'w_output    %s  (%.1f×)\n' "$_CONV_W_OUTPUT" "$(( _CONV_W_OUTPUT / 10.0 ))"
+    printf 'w_cc        %s  (%.1f×)\n' "$_CONV_W_CC"     "$(( _CONV_W_CC     / 10.0 ))"
+    printf 'w_cr        %s  (%.1f×)\n' "$_CONV_W_CR"     "$(( _CONV_W_CR     / 10.0 ))"
+    printf 'live_mode   %s\n' "$_CONV_LIVE_MODE"
+}
+
+# Map friendly key name → variable name (display settings only; dirs via add/remove-dir)
+_qlaude_config_key_to_var() {
+    case "$1" in
+        max_tokens) printf '_CONV_MAX_TOKENS' ;;
+        scale)      printf '_CONV_SCALE' ;;
+        tokens)     printf '_CONV_TOKENS' ;;
+        norm)       printf '_CONV_NORM' ;;
+        w_input)    printf '_CONV_W_INPUT' ;;
+        w_output)   printf '_CONV_W_OUTPUT' ;;
+        w_cc)       printf '_CONV_W_CC' ;;
+        w_cr)       printf '_CONV_W_CR' ;;
+        live_mode)  printf '_CONV_LIVE_MODE' ;;
+        *)          return 1 ;;
+    esac
+}
+
+_conv_tilde_expand() {
+    local p="$1"
+    p="${p/#\~/$HOME}"
+    printf '%s' "$p"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 4: qlaude config subcommand
+# ══════════════════════════════════════════════════════════════════════════════
+
+cmd_config() {
+    local varname key alias name dir a
+    case "${1:-}" in
+        '')
+            local _changed=0
+
+            _qcfg_save_and_exit() {
+                (( _changed )) && _qlaude_config_write && printf '\nsaved: %s\n' "$_QLAUDE_CONFIG_FILE"
+                exit 0
+            }
+            trap '_qcfg_save_and_exit' INT
+
+            _qcfg_draw() {
+                local _tilde='~' acct sec=()
+                printf '\nqlaude config  (file: %s)\n\n' "${_QLAUDE_CONFIG_FILE/$HOME/$_tilde}"
+                printf 'Accounts:\n'
+                for acct in "${_QLAUDE_ALL[@]}"; do
+                    printf '  %-14s %s\n' "$acct" "${_QLAUDE_DIRS[$acct]//$HOME/$_tilde}"
+                done
+                for acct in "${(k)_QLAUDE_DIRS[@]}"; do
+                    [[ " ${_QLAUDE_ALL[*]} " == *" $acct "* ]] && continue
+                    sec+=("${acct}→${_QLAUDE_DIRS[$acct]//$HOME/$_tilde}")
+                done
+                (( ${#sec[@]} > 0 )) && printf '  aliases: %s\n' "${sec[*]}"
+                printf '\n  a) add account    r) remove account    l) add alias\n'
+                printf '\nDisplay settings:\n'
+                printf '  1) max_tokens  %s\n'           "$_CONV_MAX_TOKENS"
+                printf '  2) scale       %s\n'           "$_CONV_SCALE"
+                printf '  3) tokens      %s\n'           "$_CONV_TOKENS"
+                printf '  4) norm        %s\n'           "$_CONV_NORM"
+                printf '  5) w_input     %-6s (%.1f×)\n' "$_CONV_W_INPUT"  "$(( _CONV_W_INPUT  / 10.0 ))"
+                printf '  6) w_output    %-6s (%.1f×)\n' "$_CONV_W_OUTPUT" "$(( _CONV_W_OUTPUT / 10.0 ))"
+                printf '  7) w_cc        %-6s (%.1f×)\n' "$_CONV_W_CC"     "$(( _CONV_W_CC     / 10.0 ))"
+                printf '  8) w_cr        %-6s (%.1f×)\n' "$_CONV_W_CR"     "$(( _CONV_W_CR     / 10.0 ))"
+                printf '  9) live_mode   %s\n'           "$_CONV_LIVE_MODE"
+                printf '\n  s) save & quit    q) quit without saving\n\n'
+            }
+
+            _qcfg_set_scalar() {
+                local key="$1" varname="$2"
+                local val=''
+                vared -p "new value for $key: " val
+                if ! [[ "$val" =~ ^[0-9]+$ ]] || (( val == 0 )); then
+                    printf 'invalid: must be a positive integer\n' >&2; return 1
+                fi
+                eval "${varname}=${val}"
+                _changed=1
+            }
+
+            _qcfg_add_account() {
+                local name='' dir=''
+                vared -p 'account name: ' name
+                [[ -z "$name" ]] && return 1
+                vared -p 'base directory (~/ ok): ' dir
+                [[ -z "$dir" ]] && return 1
+                dir=$(_conv_tilde_expand "$dir")
+                [[ -d "$dir" ]] || printf 'warning: dir does not exist: %s\n' "$dir" >&2
+                _QLAUDE_DIRS[$name]="$dir"
+                [[ " ${_QLAUDE_ALL[*]} " == *" $name "* ]] || _QLAUDE_ALL+=("$name")
+                printf 'added %s → %s\n' "$name" "$dir"
+                _changed=1
+            }
+
+            _qcfg_remove_account() {
+                local acct name='' removed_dir removed_aliases=() new_all=()
+                printf 'accounts: %s\n' "${_QLAUDE_ALL[*]}"
+                vared -p 'remove which account: ' name
+                [[ -z "$name" ]] && return 1
+                if [[ -z "${_QLAUDE_DIRS[$name]:-}" ]]; then
+                    printf 'unknown account: %s\n' "$name" >&2; return 1
+                fi
+                removed_dir="${_QLAUDE_DIRS[$name]}"
+                for acct in "${(k)_QLAUDE_DIRS[@]}"; do
+                    if [[ "${_QLAUDE_DIRS[$acct]}" == "$removed_dir" ]]; then
+                        unset "_QLAUDE_DIRS[$acct]"
+                        removed_aliases+=("$acct")
+                    fi
+                done
+                for acct in "${_QLAUDE_ALL[@]}"; do
+                    [[ " ${removed_aliases[*]} " == *" $acct "* ]] || new_all+=("$acct")
+                done
+                _QLAUDE_ALL=("${new_all[@]}")
+                printf 'removed %s\n' "${removed_aliases[*]}"
+                _changed=1
+            }
+
+            _qcfg_add_alias() {
+                local alias='' name=''
+                vared -p 'alias: ' alias
+                [[ -z "$alias" ]] && return 1
+                vared -p 'existing account name: ' name
+                [[ -z "$name" ]] && return 1
+                if [[ -z "${_QLAUDE_DIRS[$name]:-}" ]]; then
+                    printf 'unknown account: %s\n' "$name" >&2; return 1
+                fi
+                _QLAUDE_DIRS[$alias]="${_QLAUDE_DIRS[$name]}"
+                printf 'added alias %s → %s\n' "$alias" "$name"
+                _changed=1
+            }
+
+            local sel
+            while true; do
+                _qcfg_draw
+                printf 'select: '
+                IFS= read -r sel
+                case "$sel" in
+                    a|A) _qcfg_add_account ;;
+                    r|R) _qcfg_remove_account ;;
+                    l|L) _qcfg_add_alias ;;
+                    1) _qcfg_set_scalar max_tokens _CONV_MAX_TOKENS ;;
+                    2)
+                        if [[ "$_CONV_SCALE" == "log" ]]; then _CONV_SCALE=linear; else _CONV_SCALE=log; fi
+                        _changed=1; printf 'scale toggled to %s\n' "$_CONV_SCALE"
+                        ;;
+                    3)
+                        if [[ "$_CONV_TOKENS" == "actual" ]]; then _CONV_TOKENS=scaled; else _CONV_TOKENS=actual; fi
+                        _changed=1; printf 'tokens toggled to %s\n' "$_CONV_TOKENS"
+                        ;;
+                    4)
+                        if [[ "$_CONV_NORM" == "fixed" ]]; then _CONV_NORM=dynamic; else _CONV_NORM=fixed; fi
+                        _changed=1; printf 'norm toggled to %s\n' "$_CONV_NORM"
+                        ;;
+                    5) _qcfg_set_scalar w_input    _CONV_W_INPUT ;;
+                    6) _qcfg_set_scalar w_output   _CONV_W_OUTPUT ;;
+                    7) _qcfg_set_scalar w_cc       _CONV_W_CC ;;
+                    8) _qcfg_set_scalar w_cr       _CONV_W_CR ;;
+                    9)
+                        if [[ "$_CONV_LIVE_MODE" == "override" ]]; then _CONV_LIVE_MODE=scroll; else _CONV_LIVE_MODE=override; fi
+                        _changed=1; printf 'live_mode toggled to %s\n' "$_CONV_LIVE_MODE"
+                        ;;
+                    s|S) break ;;
+                    q|Q) exit 0 ;;
+                    *) printf 'unknown selection: %s\n' "$sel" >&2 ;;
+                esac
+            done
+            _qcfg_save_and_exit
+            ;;
+
+        list)
+            _qlaude_config_list
+            ;;
+
+        path)
+            printf '%s\n' "$_QLAUDE_CONFIG_FILE"
+            ;;
+
+        get)
+            if [[ -z "${2:-}" ]]; then
+                echo "qlaude config get: missing key" >&2; return 1
+            fi
+            case "$2" in
+                accounts|dirs)
+                    for a in "${_QLAUDE_ALL[@]}"; do
+                        printf '%-14s %s\n' "$a" "${_QLAUDE_DIRS[$a]}"
+                    done
+                    ;;
+                *)
+                    varname=$(_qlaude_config_key_to_var "$2") || { echo "qlaude config: unknown key '$2'" >&2; return 1; }
+                    eval "printf '%s\n' \"\$$varname\""
+                    ;;
+            esac
+            ;;
+
+        set)
+            shift
+            if [[ -z "${1:-}" ]]; then
+                echo "qlaude config set: missing key" >&2; return 1
+            fi
+            key="$1"; shift
+            if [[ $# -eq 0 ]]; then
+                echo "qlaude config set: missing value for '$key'" >&2; return 1
+            fi
+            if [[ "$key" == "scale" ]]; then
+                if [[ "$1" != "log" && "$1" != "linear" ]]; then
+                    echo "qlaude config: 'scale' must be 'log' or 'linear', got: $1" >&2; return 1
+                fi
+                _CONV_SCALE="$1"
+            elif [[ "$key" == "tokens" ]]; then
+                if [[ "$1" != "actual" && "$1" != "scaled" ]]; then
+                    echo "qlaude config: 'tokens' must be 'actual' or 'scaled', got: $1" >&2; return 1
+                fi
+                _CONV_TOKENS="$1"
+            elif [[ "$key" == "norm" ]]; then
+                if [[ "$1" != "fixed" && "$1" != "dynamic" ]]; then
+                    echo "qlaude config: 'norm' must be 'fixed' or 'dynamic', got: $1" >&2; return 1
+                fi
+                _CONV_NORM="$1"
+            elif [[ "$key" == "live_mode" ]]; then
+                if [[ "$1" != "override" && "$1" != "scroll" ]]; then
+                    echo "qlaude config: 'live_mode' must be 'override' or 'scroll', got: $1" >&2; return 1
+                fi
+                _CONV_LIVE_MODE="$1"
+            else
+                varname=$(_qlaude_config_key_to_var "$key") || { echo "qlaude config: unknown key '$key'" >&2; return 1; }
+                if ! [[ "$1" =~ ^[0-9]+$ ]] || (( $1 == 0 )); then
+                    echo "qlaude config: '$key' must be a positive integer, got: $1" >&2; return 1
+                fi
+                eval "${varname}=${1}"
+            fi
+            _qlaude_config_write && printf 'saved: %s\n' "$_QLAUDE_CONFIG_FILE"
+            ;;
+
+        add-dir)
+            # qlaude config add-dir <name> <basedir>  — add a primary account entry
+            if [[ -z "${2:-}" || -z "${3:-}" ]]; then
+                echo "Usage: qlaude config add-dir <name> <basedir>" >&2; return 1
+            fi
+            name="$2"
+            dir=$(_conv_tilde_expand "$3")
+            [[ -d "$dir" ]] || printf 'warning: dir does not exist: %s\n' "$dir" >&2
+            _QLAUDE_DIRS[$name]="$dir"
+            if [[ ! " ${_QLAUDE_ALL[*]} " == *" $name "* ]]; then
+                _QLAUDE_ALL+=("$name")
+            fi
+            _qlaude_config_write && printf 'added %s → %s\nsaved: %s\n' "$name" "$dir" "$_QLAUDE_CONFIG_FILE"
+            ;;
+
+        add-alias)
+            # qlaude config add-alias <alias> <existing-name>  — secondary alias, not added to ALL
+            if [[ -z "${2:-}" || -z "${3:-}" ]]; then
+                echo "Usage: qlaude config add-alias <alias> <existing-name>" >&2; return 1
+            fi
+            alias="$2"; name="$3"
+            if [[ -z "${_QLAUDE_DIRS[$name]:-}" ]]; then
+                echo "qlaude config: unknown account '$name' — add it first with add-dir" >&2; return 1
+            fi
+            _QLAUDE_DIRS[$alias]="${_QLAUDE_DIRS[$name]}"
+            _qlaude_config_write && printf 'added alias %s → %s (%s)\nsaved: %s\n' \
+                "$alias" "$name" "${_QLAUDE_DIRS[$name]}" "$_QLAUDE_CONFIG_FILE"
+            ;;
+
+        remove-dir)
+            # qlaude config remove-dir <name>  — remove a primary account (and any aliases pointing to its dir)
+            if [[ -z "${2:-}" ]]; then
+                echo "Usage: qlaude config remove-dir <name>" >&2; return 1
+            fi
+            name="$2"
+            if [[ -z "${_QLAUDE_DIRS[$name]:-}" ]]; then
+                echo "qlaude config: unknown account '$name'" >&2; return 1
+            fi
+            local removed_dir="${_QLAUDE_DIRS[$name]}"
+            # Remove all aliases pointing to the same dir
+            local removed_aliases=()
+            for alias in "${(k)_QLAUDE_DIRS[@]}"; do
+                if [[ "${_QLAUDE_DIRS[$alias]}" == "$removed_dir" ]]; then
+                    unset "_QLAUDE_DIRS[$alias]"
+                    removed_aliases+=("$alias")
+                fi
+            done
+            # Remove from ALL
+            local new_all=()
+            for a in "${_QLAUDE_ALL[@]}"; do
+                [[ " ${removed_aliases[*]} " == *" $a "* ]] || new_all+=("$a")
+            done
+            _QLAUDE_ALL=("${new_all[@]}")
+            _qlaude_config_write && printf 'removed %s (dir: %s)\nsaved: %s\n' \
+                "${removed_aliases[*]}" "$removed_dir" "$_QLAUDE_CONFIG_FILE"
+            ;;
+
+        reset)
+            local _yes=0
+            [[ "${2:-}" == "--yes" ]] && _yes=1
+            if (( ! _yes )); then
+                printf 'Delete %s and restore defaults? [y/N] ' "$_QLAUDE_CONFIG_FILE"
+                IFS= read -r _ans
+                [[ "$_ans" == [yY] ]] || { echo "aborted"; return 0; }
+            fi
+            if [[ -f "$_QLAUDE_CONFIG_FILE" ]]; then
+                \rm "$_QLAUDE_CONFIG_FILE" && echo "deleted: $_QLAUDE_CONFIG_FILE"
+            else
+                echo "qlaude config reset: no config file found"
+            fi
+            ;;
+
+        *)
+            echo "qlaude config: unknown subcommand '$1'" >&2
+            echo "  try: list | get | set | add-dir | add-alias | remove-dir | path | reset" >&2
+            return 1
+            ;;
+    esac
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 5: Conv main logic
+# ══════════════════════════════════════════════════════════════════════════════
+
+cmd_conv() {
+  local n=0
+  local filter_start=0 filter_end=0
+  local range_start=0 range_end=0
+  local oneline=1
+
+  # Strip --detailed before any other processing
+  local _preargs=()
+  local _arg
+  for _arg in "$@"; do
+    [[ "$_arg" == "--detailed" ]] && oneline=0 || _preargs+=("$_arg")
+  done
+  set -- "${_preargs[@]}"
+
+  # No args → synopsis
+  if (( $# == 0 )); then
+    cat <<'EOF'
+Usage:
+  conv <N>                              show N most recent conversations
+  conv <A>-<B>                          show conversations ranked A through B by recency
+  conv just <N>                         show only the Nth most recent conversation
+  conv -<n> <unit>                      show all conversations in time range
+  conv -<n> <unit> through -<m> <unit>  show conversations across a span
+  conv -<n> <unit> [through ...] <N>    cap results at N
+  conv [range] [N] --detailed           full multi-line view with token breakdown
+  conv live                             watch most recent conversation live
+
+Bar (cost-weighted: output=50×, input=10×, cache_create=12.5×, cache_read=1×):
+  ▓▓▓█████▓▓▓▒▒▒▒▒░░░░░░░  45K
+  │  │    │  │    └─ ░ empty
+  │  │    │  └───────▒ cache_read
+  │  │    └──────────▓ cache_create
+  │  └───────────────█ output
+  └──────────────────▓ input
+  Bar length = raw token proportion; segment widths = relative cost proportion.
+
+Units: hour(s), day(s), week(s), month(s), year(s)
+  -0 week    this week (since Monday)
+  -1 week    last week
+  -0 month   this month, etc.
+
+Aliases (usable anywhere in range expressions):
+  today = -0 day,  yesterday = -1 day
+  this <unit> = -0 <unit>,  last <unit> = -1 <unit>
+
+Examples:
+  qlaude conv 10
+  qlaude conv 16-20
+  qlaude conv just 3
+  qlaude conv yesterday through today
+  qlaude conv last week through this week
+  qlaude conv -2 weeks through -3 days
+  qlaude conv -2 month through -0 month 10
+
+Display config (accounts/dirs: 'qlaude config'):
+  qlaude config list                     show all settings including accounts
+  qlaude config set max_tokens <n>       adjust bar scale ceiling (fixed norm only)
+  qlaude config set scale log|linear     bar scaling mode
+  qlaude config set tokens actual|scaled token count: raw vs cost-weighted
+  qlaude config set norm fixed|dynamic   bar ceiling: max_tokens vs longest in view
+  qlaude config set w_input|w_output|w_cc|w_cr <n>   cost weights (×10)
+  qlaude config set live_mode override|scroll        live bar update mode
+  qlaude config path                     print config file path
+  qlaude config reset [--yes]            restore defaults
+
+  Keys and valid values:
+    max_tokens  positive integer (e.g. 20000000)   — bar ceiling when norm=fixed
+    scale       log | linear                       — bar length scaling
+    tokens      actual | scaled                    — displayed count: raw vs cost-weighted
+    norm        fixed | dynamic                    — fixed ceiling (max_tokens) or longest-in-view
+    w_input     positive integer (×10, e.g. 100 = 10×)
+    w_output    positive integer (×10, e.g. 500 = 50×)
+    w_cc        positive integer (×10, e.g. 125 = 12.5×)
+    w_cr        positive integer (×10, e.g. 10 = 1×)
+    live_mode   override | scroll                  — live: overwrite line vs append new line
+  Config file: ~/.config/qlaude/config.zsh  (sourced as zsh; XDG_CONFIG_HOME respected)
+EOF
+    return 0
+  fi
+
+  # conv config redirect
+  if [[ "$1" == "config" ]]; then
+    echo "qlaude: 'conv config' has moved — use 'qlaude config' instead" >&2
+    return 1
+  fi
+
+  # Reverse-map a file path to its account alias
+  _conv_account_for_file() {
+    local file="$1" acct base
+    for acct in "${(k)_QLAUDE_DIRS[@]}"; do
+      base="${_QLAUDE_DIRS[$acct]}"
+      [[ "$file" == "$base/"* ]] && { printf '%s' "$acct"; return; }
+    done
+    printf 'default'
+  }
+
+  # Compute dirs from account
+  local _conv_dirs=()
+  local _d
+  while IFS= read -r _d; do _conv_dirs+=("$_d"); done < <(_qlaude_all_project_dirs "$_qlaude_account")
+
+  # ---------------------------------------------------------------------------
+  # Live mode
+  # ---------------------------------------------------------------------------
+  if [[ "$1" == "live" ]]; then
+
+    _live_find_newest() {
+      find "${_conv_dirs[@]}" -name "*.jsonl" ! -name "agent-*" 2>/dev/null \
+        | xargs stat -f "%m %N" 2>/dev/null \
+        | sort -rn \
+        | awk 'NR==1{print $2}'
+    }
+
+    _live_draw() {
+      local f="$1" redraw="$2"
+      local result custom_title input output cc cr total name uuid human
+      local raw_dir project ol_label ol_time ol_account ol_bar_max ol_filled ol_empty term_width
+
+      result=$(_conv_extract_stats "$f") || return
+      IFS=$'\t' read -r custom_title input output cc cr total <<< "$result"
+
+      uuid=$(basename "$f" .jsonl)
+      [[ "$custom_title" != "null" ]] && name="$custom_title" || name="$uuid"
+
+      raw_dir=$(basename "$(dirname "$f")")
+      project=$(_conv_decode_project "$raw_dir")
+
+      if [[ "$_CONV_TOKENS" == "scaled" ]]; then
+        human=$(_conv_human_tokens "$(( (input * _CONV_W_INPUT + output * _CONV_W_OUTPUT + cc * _CONV_W_CC + cr * _CONV_W_CR) / 10 ))")
+      else
+        human=$(_conv_human_tokens "$total")
+      fi
+      ol_account=$(_conv_account_for_file "$f")
+
+      ol_time=$(date +'%H:%M')
+      term_width=${COLUMNS:-80}
+      if [[ "$custom_title" != "null" ]]; then
+        ol_label=${name:0:20}
+      else
+        ol_label="${${project:t}:0:10}/${name%%-*}"
+      fi
+
+      ol_bar_max=$(( term_width - 43 ))
+      local _live_max_tokens; [[ "$_CONV_NORM" == "dynamic" ]] && _live_max_tokens=$total || _live_max_tokens=$_CONV_MAX_TOKENS
+      IFS=$'\t' read -r ol_filled ol_empty <<< "$(_conv_render_bar "$input" "$output" "$cc" "$cr" "$total" "$_live_max_tokens" "$ol_bar_max")"
+
+      (( redraw )) && printf '\033[1A\r\033[K'
+      printf '%-5s  %-5s  %-20s  %s%s  %s\n' \
+        "$ol_time" "${ol_account:0:5}" "$ol_label" "$ol_filled" "$ol_empty" "$human"
+    }
+
+    local current_file
+    current_file=$(_live_find_newest)
+    if [[ -z "$current_file" ]]; then
+      echo "conv live: no conversations found" >&2
+      return 1
+    fi
+
+    local _orig_stty
+    _orig_stty=$(stty -g 2>/dev/null)
+    stty -echo cbreak 2>/dev/null
+
+    # override: each update erases the previous line; scroll: each update is a new line
+    local _live_redraw
+    [[ "$_CONV_LIVE_MODE" == "scroll" ]] && _live_redraw=0 || _live_redraw=1
+
+    printf 'conv live  (q to exit)\n'
+    _live_draw "$current_file" 0
+
+    local _live_trigger _fswatch_bg _last_trigger _cur_trigger newest key _last_mtime _cur_mtime
+    if command -v fswatch &>/dev/null; then
+      _live_trigger=$(mktemp)
+      fswatch -r --event=Updated --event=Created "${_conv_dirs[@]}" 2>/dev/null \
+        | while IFS= read -r _; do touch "$_live_trigger"; done &
+      _fswatch_bg=$!
+      trap 'stty "$_orig_stty" 2>/dev/null; kill $_fswatch_bg 2>/dev/null; \rm -f "$_live_trigger"; exit 0' INT TERM
+
+      _last_trigger=$(stat -f "%m" "$_live_trigger" 2>/dev/null)
+      while true; do
+        IFS= read -r -t 0.2 -k 1 key 2>/dev/null
+        [[ "$key" == [qQ] ]] && break
+        _cur_trigger=$(stat -f "%m" "$_live_trigger" 2>/dev/null)
+        if [[ "$_cur_trigger" != "$_last_trigger" ]]; then
+          newest=$(_live_find_newest)
+          [[ -n "$newest" ]] && current_file="$newest"
+          _live_draw "$current_file" "$_live_redraw"
+          _last_trigger="$_cur_trigger"
+        fi
+      done
+
+      kill $_fswatch_bg 2>/dev/null; \rm -f "$_live_trigger"
+    else
+      trap 'stty "$_orig_stty" 2>/dev/null; exit 0' INT TERM
+
+      _last_mtime=$(stat -f "%m" "$current_file" 2>/dev/null)
+      while true; do
+        IFS= read -r -t 1 -k 1 key 2>/dev/null
+        [[ "$key" == [qQ] ]] && break
+        newest=$(_live_find_newest)
+        [[ -n "$newest" ]] && current_file="$newest"
+        _cur_mtime=$(stat -f "%m" "$current_file" 2>/dev/null)
+        if [[ "$_cur_mtime" != "$_last_mtime" ]]; then
+          _live_draw "$current_file" "$_live_redraw"
+          _last_mtime="$_cur_mtime"
+        fi
+      done
+    fi
+
+    stty "$_orig_stty" 2>/dev/null
+    return 0
+  fi
+
+  # ---------------------------------------------------------------------------
+  # Time range parsing helpers
+  # ---------------------------------------------------------------------------
+  _conv_midnight() {
+    local off="${1:-0}"
+    local m
+    m=$(date -j -v0H -v0M -v0S +'%s')
+    printf '%s' $(( m + off * 86400 ))
+  }
+  _conv_week_start() {
+    local off="${1:-0}"
+    local m dow
+    m=$(_conv_midnight 0)
+    dow=$(date -r "$m" +'%u')
+    printf '%s' $(( m - (dow - 1) * 86400 + off * 604800 ))
+  }
+  _conv_month_start() {
+    local off="${1:-0}"
+    local sign="${off}"
+    (( off >= 0 )) && sign="+${off}"
+    date -j -v1d -v0H -v0M -v0S -v"${sign}m" +'%s'
+  }
+  _conv_year_start() {
+    local off="${1:-0}"
+    local sign="${off}"
+    (( off >= 0 )) && sign="+${off}"
+    date -j -v1m -v1d -v0H -v0M -v0S -v"${sign}y" +'%s'
+  }
+  _conv_hour_start() {
+    local off="${1:-0}"
+    local now
+    now=$(date +'%s')
+    printf '%s' $(( now - now % 3600 + off * 3600 ))
+  }
+  _conv_period_end() {
+    local off="$1" unit="$2"
+    if (( off == 0 )); then date +'%s'; return; fi
+    local next=$(( off - 1 ))
+    case "$unit" in
+      hour|hours)   _conv_hour_start  "-$next" ;;
+      day|days)     _conv_midnight    "-$next" ;;
+      week|weeks)   _conv_week_start  "-$next" ;;
+      month|months) _conv_month_start "-$next" ;;
+      year|years)   _conv_year_start  "-$next" ;;
+    esac
+  }
+
+  local unit= offset=
+
+  # Expand word aliases
+  local _new_args=()
+  for _arg in "$@"; do
+    case "$_arg" in
+      today)     _new_args+=(-0 day) ;;
+      yesterday) _new_args+=(-1 day) ;;
+      this)      _new_args+=(-0) ;;
+      last)      _new_args+=(-1) ;;
+      *)         _new_args+=("$_arg") ;;
+    esac
+  done
+  set -- "${_new_args[@]}"
+
+  # Check for -<n> <unit> pattern
+  if [[ $# -ge 2 && "$1" =~ ^-[0-9]+$ ]]; then
+    offset="${1#-}"
+    unit="$2"
+    shift 2
+
+    case "$unit" in
+      hour|hours)
+        filter_start=$(_conv_hour_start "-$offset")
+        filter_end=$(_conv_period_end "$offset" "$unit")
+        ;;
+      day|days)
+        filter_start=$(_conv_midnight "-$offset")
+        filter_end=$(_conv_period_end "$offset" "$unit")
+        ;;
+      week|weeks)
+        filter_start=$(_conv_week_start "-$offset")
+        filter_end=$(_conv_period_end "$offset" "$unit")
+        ;;
+      month|months)
+        filter_start=$(_conv_month_start "-$offset")
+        filter_end=$(_conv_period_end "$offset" "$unit")
+        ;;
+      year|years)
+        filter_start=$(_conv_year_start "-$offset")
+        filter_end=$(_conv_period_end "$offset" "$unit")
+        ;;
+      *)
+        echo "conv: unknown unit '$unit'. Expected: hour(s), day(s), week(s), month(s), year(s)" >&2
+        return 1
+        ;;
+    esac
+
+    if [[ $# -ge 1 && "$1" == "through" ]]; then
+      shift
+      if [[ $# -lt 2 || ! "$1" =~ ^-[0-9]+$ ]]; then
+        echo "conv: expected -<n> <unit> (or 'today'/'yesterday') after 'through'" >&2; return 1
+      fi
+      local thru_offset="${1#-}"
+      local thru_unit="$2"
+      shift 2
+      filter_end=$(_conv_period_end "$thru_offset" "$thru_unit")
+      if (( filter_end <= filter_start )); then
+        echo "conv: 'through' end must be later than start" >&2; return 1
+      fi
+    fi
+
+    if [[ $# -ge 1 && "$1" =~ ^[0-9]+$ ]]; then
+      n="$1"; shift
+    fi
+  else
+    if [[ "$1" == "just" && $# -ge 2 && "$2" =~ ^[0-9]+$ ]]; then
+      range_start="$2"; range_end="$2"; shift 2
+    elif [[ "$1" =~ ^[0-9]+-[0-9]+$ ]]; then
+      range_start="${1%%-*}"; range_end="${1#*-}"; shift
+      if (( range_start < 1 || range_end < range_start )); then
+        echo "conv: invalid range – start must be >= 1 and end >= start" >&2; return 1
+      fi
+    elif [[ "$1" =~ ^[0-9]+$ ]]; then
+      n="$1"; shift
+    else
+      echo "conv: unrecognized argument '$1'" >&2
+      return 1
+    fi
+  fi
+
+  # Collect all non-agent JSONL files sorted by mtime, newest first
+  local files=()
+  local line mtime_pre f
+  while IFS= read -r line; do
+    mtime_pre=${line%% *}
+    f=${line#* }
+    [[ -f "$f" ]] && files+=("${mtime_pre}:${f}")
+  done < <(
+    find "${_conv_dirs[@]}" -name "*.jsonl" ! -name "agent-*" 2>/dev/null \
+      | xargs stat -f "%m %N" 2>/dev/null \
+      | sort -rn
+  )
+
+  if (( ${#files[@]} == 0 )); then
+    echo "conv: no conversations found" >&2
+    return 1
+  fi
+
+  local term_width=${COLUMNS:-80}
+  local max_bar=$(( term_width - 10 ))
+  (( max_bar < 20 )) && max_bar=20
+  (( max_bar > 72 )) && max_bar=72
+  local max_tokens=$_CONV_MAX_TOKENS
+
+  if (( ! oneline )); then
+    printf "  in=input(▓,%.4g×)  out=output(█,%.4g×)  cc=cache write(▓,%.4g×)  cr=cache read(▒,%.4g×)\n" \
+      "$(( _CONV_W_INPUT  / 10.0 ))" "$(( _CONV_W_OUTPUT / 10.0 ))" \
+      "$(( _CONV_W_CC     / 10.0 ))" "$(( _CONV_W_CR     / 10.0 ))"
+    echo
+  fi
+
+  # Hoist all loop-body locals to avoid zsh re-declaration-in-loop printing
+  local seen=0 shown=0 first=1
+  local entry mtime uuid ts result custom_title input output cc cr total name
+  local raw_dir project human filled empty
+  local ol_date ol_account ol_acct_detail ol_label ol_bar_max ol_filled ol_empty
+
+  # ── Collect phase ──────────────────────────────────────────────────────────
+  # Gather all entries that pass filters into _conv_data; track max total for
+  # dynamic normalization. Tab-separated: mtime\tf\tcustom_title\tinput\toutput\tcc\tcr\ttotal
+  local _conv_data=() _dynamic_max=0
+
+  for entry in "${files[@]}"; do
+    mtime=${entry%%:*}
+    f=${entry#*:}
+    uuid=$(basename "$f" .jsonl)
+
+    if (( filter_start > 0 )); then
+      (( mtime < filter_start )) && break
+      (( mtime < filter_end )) || continue
+    fi
+
+    result=$(_conv_extract_stats "$f") || continue
+
+    IFS=$'\t' read -r custom_title input output cc cr total <<< "$result"
+    (( total == 0 || output < 20 )) && continue
+
+    seen=$(( seen + 1 ))
+    if (( range_start > 0 )); then
+      (( seen > range_end )) && break
+      (( seen < range_start )) && continue
+    elif (( n > 0 && shown >= n )); then
+      break
+    fi
+
+    _conv_data+=("${mtime}	${f}	${custom_title}	${input}	${output}	${cc}	${cr}	${total}")
+    (( total > _dynamic_max )) && _dynamic_max=$total
+    shown=$(( shown + 1 ))
+  done
+
+  if [[ "$_CONV_NORM" == "dynamic" && _dynamic_max -gt 0 ]]; then
+    max_tokens=$_dynamic_max
+  fi
+
+  # ── Render phase ───────────────────────────────────────────────────────────
+  for entry in "${_conv_data[@]}"; do
+    IFS=$'\t' read -r mtime f custom_title input output cc cr total <<< "$entry"
+    uuid=$(basename "$f" .jsonl)
+    [[ "$custom_title" != "null" ]] && name="$custom_title" || name="$uuid"
+
+    raw_dir=$(basename "$(dirname "$f")")
+    project=$(_conv_decode_project "$raw_dir")
+    if [[ "$_CONV_TOKENS" == "scaled" ]]; then
+      human=$(_conv_human_tokens "$(( (input * _CONV_W_INPUT + output * _CONV_W_OUTPUT + cc * _CONV_W_CC + cr * _CONV_W_CR) / 10 ))")
+    else
+      human=$(_conv_human_tokens "$total")
+    fi
+
+    IFS=$'\t' read -r filled empty <<< "$(_conv_render_bar "$input" "$output" "$cc" "$cr" "$total" "$max_tokens" "$max_bar")"
+
+    if (( oneline )); then
+      ol_date=$(date -r "$mtime" "+%m-%d")
+      ol_account=$(_conv_account_for_file "$f")
+      if [[ "$custom_title" != "null" ]]; then
+        ol_label=${name:0:20}
+      else
+        ol_label="${${project:t}:0:10}/${name%%-*}"
+      fi
+      ol_bar_max=$(( term_width - 43 ))
+      (( ol_bar_max < 0 )) && ol_bar_max=0
+      IFS=$'\t' read -r ol_filled ol_empty <<< "$(_conv_render_bar "$input" "$output" "$cc" "$cr" "$total" "$max_tokens" "$ol_bar_max")"
+      printf '%-5s  %-5s  %-20s  %s%s  %s\n' \
+        "$ol_date" "${ol_account:0:5}" "$ol_label" "$ol_filled" "$ol_empty" "$human"
+    else
+      (( first )) || echo
+      first=0
+      ts=$(date -r "$mtime" "+%Y-%m-%d %H:%M")
+      ol_acct_detail=$(_conv_account_for_file "$f")
+      if [[ "$custom_title" != "null" ]]; then
+        printf '%s  %s  %s  %s  [%s]\n' "$ts" "$ol_acct_detail" "$project" "$name" "$uuid"
+      else
+        printf '%s  %s  %s  %s\n' "$ts" "$ol_acct_detail" "$project" "$name"
+      fi
+      printf '  in:%-7d out:%-7d cc:%-7d cr:%-7d\n' "$input" "$output" "$cc" "$cr"
+      printf '  %s%s  %s\n' "$filled" "$empty" "$human"
+    fi
+  done
+
+  if (( shown == 0 )); then
+    echo "conv: no matching conversations" >&2
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 6: Resource listing commands
+# ══════════════════════════════════════════════════════════════════════════════
+
+_qlaude_list_resource() {
+    local account="$1" subdir="$2" label="$3"
+    local acct base dir entries printed_any
+
+    if [[ "$account" == "_all_" ]]; then
+        printed_any=0
+        for acct in "${_QLAUDE_ALL[@]}"; do
+            base="${_QLAUDE_DIRS[$acct]}"
+            [[ -n "$base" ]] || continue
+            dir="$base/$subdir"
+            [[ -d "$dir" ]] || continue
+            entries=()
+            while IFS= read -r -d '' child; do
+                entries+=("$(basename "$child")")
+            done < <(find -L "$dir" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+            (( ${#entries[@]} == 0 )) && continue
+            printf '%s:\n' "$acct"
+            printf '  %s\n' "${entries[@]}"
+            printed_any=1
+        done
+        (( printed_any )) || echo "No $label found across all accounts."
+    else
+        base="${_QLAUDE_DIRS[$account]}"
+        if [[ -z "$base" ]]; then
+            echo "Unknown account: '$account'" >&2; return 1
+        fi
+        dir="$base/$subdir"
+        if [[ ! -d "$base" ]]; then
+            echo "Directory not found: $base" >&2; return 1
+        elif [[ ! -d "$dir" ]]; then
+            echo "No ${subdir}/ directory found under $base" >&2; return 1
+        fi
+        entries=()
+        while IFS= read -r -d '' child; do
+            entries+=("$(basename "$child")")
+        done < <(find -L "$dir" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+        if (( ${#entries[@]} == 0 )); then
+            echo "No ${label} found for $(account_label "$account")."
+            return
+        fi
+        printf '%s\n' "${entries[@]}"
+    fi
+}
+
+cmd_skills() { _qlaude_list_resource "$1" "skills" "skills"; }
+cmd_agents() { _qlaude_list_resource "$1" "agents" "agents"; }
+
+_qlaude_list_plugins() {
+    local account="$1"
+    local acct base file plugins printed_any
+
+    if [[ "$account" == "_all_" ]]; then
+        printed_any=0
+        for acct in "${_QLAUDE_ALL[@]}"; do
+            base="${_QLAUDE_DIRS[$acct]}"
+            [[ -n "$base" ]] || continue
+            file="$base/plugins/installed_plugins.json"
+            [[ -f "$file" ]] || continue
+            plugins=$(jq -r '.plugins | keys[] | split("@")[0]' "$file" 2>/dev/null | sort)
+            [[ -z "$plugins" ]] && continue
+            printf '%s:\n' "$acct"
+            printf '  %s\n' "${(f)plugins}"
+            printed_any=1
+        done
+        (( printed_any )) || echo "No installed plugins found across all accounts."
+    else
+        base="${_QLAUDE_DIRS[$account]}"
+        if [[ -z "$base" ]]; then
+            echo "Unknown account: '$account'" >&2; return 1
+        fi
+        file="$base/plugins/installed_plugins.json"
+        if [[ ! -d "$base" ]]; then
+            echo "Directory not found: $base" >&2; return 1
+        elif [[ ! -f "$file" ]]; then
+            echo "No installed_plugins.json found under $base/plugins/" >&2; return 1
+        fi
+        plugins=$(jq -r '.plugins | keys[] | split("@")[0]' "$file" 2>/dev/null | sort)
+        if [[ -z "$plugins" ]]; then
+            echo "No installed plugins found for $(account_label "$account")."
+            return
+        fi
+        echo "$plugins"
+    fi
+}
+
+cmd_plugins() { _qlaude_list_plugins "$1"; }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 7: Touch command
+# ══════════════════════════════════════════════════════════════════════════════
+
+_qlaude_touch_one() {
+    local base="${_QLAUDE_DIRS[$1]}"
+    CLAUDE_CONFIG_DIR="$base" \claude --no-session-persistence --tools "" --effort low --model haiku -p <<< 'just say the word hi back' > /dev/null
+}
+
+cmd_touch() {
+    local account="$1"
+    local acct
+    if [[ "$account" == "_all_" ]]; then
+        for acct in "${_QLAUDE_ALL[@]}"; do
+            echo "→ Touching $(account_label "$acct")..."
+            _qlaude_touch_one "$acct"
+        done
+    else
+        _qlaude_touch_one "$account"
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 8: Launch command
+# ══════════════════════════════════════════════════════════════════════════════
+
+cmd_launch() {
+    local account="$1"; shift
+    if [[ "$account" == "_all_" ]]; then
+        echo "qlaude: launch requires a specific account, e.g. qlaude sbq launch" >&2
+        exit 1
+    fi
+    local base="${_QLAUDE_DIRS[$account]}"
+    if [[ -z "$base" ]]; then
+        echo "qlaude: unknown account '$account'" >&2; exit 1
+    fi
+    CLAUDE_CONFIG_DIR="$base" \claude "$@"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 9: Help text
+# ══════════════════════════════════════════════════════════════════════════════
+
+cmd_synopsis() {
+    cat <<'EOF'
+qlaude - Claude session utilities
+
+Usage: qlaude [<account>] <command> [args...]
+
+Commands:
+  conv      Conversation viewer (token stats, time ranges, live mode)
+  skills    List skills
+  agents    List agents
+  plugins   List plugins
+  touch     Send keepalive
+  launch    Start a Claude session (requires account)
+  config    Manage accounts and display settings
+  help      Show detailed help
+
+Accounts: defined in 'qlaude config' (default: only ~/.claude)
+  Omit account to operate across all accounts.
+
+Run 'qlaude help' or 'qlaude conv' (no args) for detailed usage.
+EOF
+}
+
+cmd_help() {
+    cat <<'EOF'
+qlaude - Claude session utilities
+
+USAGE
+  qlaude [<account>] <command> [args...]
+  qlaude <account> launch [claude-args...]
+  qlaude help
+
+  Omit account to operate across ALL accounts.
+  Specific account scopes the command to that account only.
+
+ACCOUNTS  (managed via 'qlaude config'; only 'default → ~/.claude' is hardcoded)
+  Run 'qlaude config list' to see current accounts.
+  Run 'qlaude config add-dir <name> <basedir>' to add an account.
+
+COMMANDS
+  conv [conv-args...]
+      Conversation viewer. Shows token usage bar charts for recent sessions.
+      No args → detailed usage. Key subcommands:
+        qlaude conv 10                       10 most recent (all accounts)
+        qlaude sbq conv 10                   10 most recent (sbq only)
+        qlaude conv -2 weeks through today   time range
+        qlaude conv live                     live watcher
+
+  skills / agents / plugins
+      List resources under each account's skills/, agents/, or plugins/ directory.
+
+  touch
+      Send a minimal keepalive message to Claude for the account.
+      No account → touches all accounts.
+
+  launch [claude-args...]
+      Launch claude with CLAUDE_CONFIG_DIR set for the account.
+      Requires an explicit account. Examples:
+        qlaude sbq launch
+        qlaude sbq launch --resume
+
+  config [subcommand...]
+      Manage account dirs and display settings. Config file: ~/.config/qlaude/config.zsh
+        qlaude config list                         show all settings
+        qlaude config add-dir <name> <basedir>     add an account
+        qlaude config add-alias <alias> <name>     add a secondary alias
+        qlaude config remove-dir <name>            remove an account
+        qlaude config set <key> <val>              set a display value
+        qlaude config get <key>                    get a value
+        qlaude config path                         print config file path
+        qlaude config reset [--yes]                restore defaults
+      Keys and valid values:
+        max_tokens  positive integer (e.g. 20000000)  — bar ceiling when norm=fixed
+        scale       log | linear                       — bar length scaling
+        tokens      actual | scaled                    — displayed count: raw vs cost-weighted
+        norm        fixed | dynamic                    — fixed ceiling (max_tokens) or longest-in-view
+        w_input     positive integer (×10, e.g. 100 = 10×)
+        w_output    positive integer (×10, e.g. 500 = 50×)
+        w_cc        positive integer (×10, e.g. 125 = 12.5×)
+        w_cr        positive integer (×10, e.g. 10 = 1×)
+        live_mode   override | scroll  — live bar: overwrite line vs append new line
+
+  help
+      Show this help page.
+EOF
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section 10: Top-level dispatch
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Detect invocation as 'conv' (thin wrapper)
+if [[ "$(basename "$0")" == "conv" ]]; then
+    _qlaude_account="_all_"
+    cmd_conv "$@"
+    exit $?
+fi
+
+# No args → synopsis
+if [[ $# -eq 0 ]]; then
+    cmd_synopsis
+    exit 0
+fi
+
+# Help shortcuts (before account parsing)
+case "$1" in
+    h|help) cmd_help; exit 0 ;;
+esac
+
+# Parse optional account prefix
+_qlaude_account="_all_"
+if [[ -n "${_QLAUDE_DIRS[$1]:-}" ]]; then
+    if [[ $# -ge 2 ]]; then
+        case "$2" in
+            conv|skills|agents|plugins|touch|launch|h|help)
+                _qlaude_account="$1"
+                shift
+                ;;
+            *)
+                echo "qlaude: unknown command '$2'" >&2
+                echo "Run 'qlaude help' for available commands." >&2
+                exit 1
+                ;;
+        esac
+    else
+        echo "qlaude: missing command after account '$1'" >&2
+        echo "Run 'qlaude help' for available commands." >&2
+        exit 1
+    fi
+fi
+
+# Route to subcommand
+case "$1" in
+    conv)    shift; cmd_conv "$@" ;;
+    skills)  cmd_skills "$_qlaude_account" ;;
+    agents)  cmd_agents "$_qlaude_account" ;;
+    plugins) cmd_plugins "$_qlaude_account" ;;
+    touch)   cmd_touch "$_qlaude_account" ;;
+    launch)  shift; cmd_launch "$_qlaude_account" "$@" ;;
+    config)  shift; cmd_config "$@" ;;
+    h|help)  cmd_help ;;
+    *)
+        echo "qlaude: unknown command '$1'" >&2
+        echo "Run 'qlaude help' for available commands." >&2
+        exit 1
+        ;;
+esac

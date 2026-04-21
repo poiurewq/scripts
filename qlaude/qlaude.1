@@ -1,0 +1,365 @@
+.Dd April 21, 2026
+.Dt QLAUDE 1
+.Os "qlaude 0.1.0"
+.Sh NAME
+.Nm qlaude
+.Nd Claude session utilities
+.Sh SYNOPSIS
+.Nm
+.Op Ar account
+.Ar command Op Ar args No ...
+.Pp
+.Nm
+.Op Ar account
+.Cm conv Op Ar conv-args
+.br
+.Nm
+.Op Ar account
+.Bro Cm skills | Cm agents | Cm plugins | Cm touch Brc
+.br
+.Nm
+.Ar account
+.Cm launch Op Ar claude-args
+.br
+.Nm
+.Cm config Op Ar subcommand Op Ar args
+.br
+.Nm
+.Bro Cm help | Cm h Brc
+.Sh DESCRIPTION
+.Nm
+is a utility for managing and inspecting Claude Code sessions across one or
+more accounts.
+It provides a conversation viewer with cost-weighted token usage bar charts,
+resource listing
+.Pq skills, agents, plugins ,
+keepalive touches, account configuration management, and a launcher that
+sets
+.Ev CLAUDE_CONFIG_DIR
+to the correct base directory.
+.Pp
+Most commands accept an optional
+.Ar account
+prefix to scope the operation to a single Claude Code installation.
+When omitted, commands operate across
+.Em all
+configured accounts.
+The only hardcoded account is
+.Sq default
+pointing to
+.Pa ~/.claude .
+Additional accounts are registered with
+.Cm qlaude config add-dir .
+.Sh COMMANDS
+.Bl -tag -width indent
+.It Cm conv Op Ar conv-args
+Display token usage statistics for Claude Code conversations.
+Produces a one-line entry per conversation with a cost-weighted bar chart
+showing input, output, cache-create, and cache-read token segments.
+With no arguments, prints detailed usage information.
+See
+.Sx CONV COMMAND
+below for the full range syntax.
+.It Cm skills
+List subdirectories under each account's
+.Pa skills/
+directory.
+.It Cm agents
+List subdirectories under each account's
+.Pa agents/
+directory.
+.It Cm plugins
+List plugin names parsed from each account's
+.Pa plugins/installed_plugins.json .
+.It Cm touch
+Send a minimal keepalive message to Claude for each account.
+When an explicit account is given, touches only that account.
+.It Cm launch Op Ar claude-args
+Launch
+.Xr claude 1
+with
+.Ev CLAUDE_CONFIG_DIR
+set to the base directory of the specified account.
+An explicit account name is required.
+Remaining arguments are passed through to
+.Xr claude 1 .
+.It Cm config Op Ar subcommand Op Ar args
+Manage account directories and display settings.
+With no subcommand, opens an interactive configuration TUI.
+See
+.Sx CONFIG COMMAND
+below.
+.It Cm help
+Print detailed help and exit.
+.El
+.Sh CONV COMMAND
+.Nm
+.Op Ar account
+.Cm conv
+.Ar range-or-count Op Fl -detailed
+.Pp
+The
+.Cm conv
+command reads
+.Pa *.jsonl
+conversation files from each account's
+.Pa projects/
+tree.
+It parses token-usage fields from assistant messages and renders a bar chart.
+The bar length reflects the total token count; bar segment widths reflect the
+relative cost contribution of each token type
+.Pq output 50\(mu, input 10\(mu, cache-create 12.5\(mu, cache-read 1\(mu .
+.Pp
+Bar legend:
+.Bd -literal -offset indent
+\(br\(br\(br\(br\(br\(br   input
+\(sq\(sq\(sq\(sq   output
+\(br\(br\(br   cache-create
+\(sc\(sc\(sc   cache-read
+\(bu\(bu\(bu   empty
+.Ed
+.Pp
+The
+.Fl -detailed
+flag switches from one-line entries to a multi-line view with a per-type
+token breakdown.
+.Ss Range forms
+.Bl -tag -width indent
+.It Cm conv Ar N
+Show the
+.Ar N
+most recent conversations.
+.It Cm conv Ar A Ns - Ns Ar B
+Show conversations ranked
+.Ar A
+through
+.Ar B
+by recency.
+.It Cm conv just Ar N
+Show only the
+.Ar N Ns th
+most recent conversation.
+.It Cm conv Fl Ar n Ar unit Op Cm through Fl Ar m Ar unit Op Ar N
+Show conversations within a calendar period.
+.Ar unit
+is one of
+.Bro Cm hour(s) | Cm day(s) | Cm week(s) | Cm month(s) | Cm year(s) Brc .
+.Fl 0
+refers to the current period,
+.Fl 1
+to the previous one, and so on.
+The optional
+.Cm through
+clause extends the range to a second (more recent) period.
+The optional trailing
+.Ar N
+caps the result count.
+.It Cm conv live
+Enter live-watcher mode: display the most recently modified conversation and
+refresh automatically on each change.
+Press
+.Sy q
+to exit.
+Uses
+.Xr fswatch 1
+when available, polling otherwise.
+.El
+.Ss Aliases
+The following word aliases expand anywhere in a range expression:
+.Bl -tag -width "yesterday" -compact
+.It Cm today
+.Fl 0 Cm day
+.It Cm yesterday
+.Fl 1 Cm day
+.It Cm this
+.Fl 0
+.It Cm last
+.Fl 1
+.El
+.Ss Display configuration
+Conv display settings are managed via
+.Cm qlaude config .
+The following keys are relevant:
+.Bl -tag -width "max_tokens" -compact
+.It Cm max_tokens
+Bar ceiling in fixed-norm mode
+.Pq default 20000000 .
+.It Cm scale
+.Cm log No or Cm linear Pq default linear .
+.It Cm tokens
+.Cm actual No or Cm scaled Pq default actual — scaled applies cost weights to the displayed count .
+.It Cm norm
+.Cm fixed No or Cm dynamic Pq default fixed — dynamic sets ceiling to the longest conversation in view .
+.It Cm w_input , Cm w_output , Cm w_cc , Cm w_cr
+Cost weights ×10
+.Pq defaults: 100, 500, 125, 10 .
+.It Cm live_mode
+.Cm override No or Cm scroll — whether live refreshes overwrite the previous line or append .
+.El
+.Sh CONFIG COMMAND
+.Nm
+.Cm config Op Ar subcommand Op Ar args
+.Pp
+Without a subcommand, opens an interactive menu-driven TUI for editing
+accounts and display settings.
+.Ss Subcommands
+.Bl -tag -width indent
+.It Cm list
+Print all current settings, including account directories and display values.
+.It Cm path
+Print the path to the config file.
+.It Cm get Ar key
+Print the current value of
+.Ar key .
+For
+.Cm accounts No or Cm dirs ,
+prints all account name/path pairs.
+.It Cm set Ar key Ar value
+Set
+.Ar key
+to
+.Ar value
+and save the config file.
+.It Cm add-dir Ar name Ar basedir
+Register a new primary account named
+.Ar name
+with base directory
+.Ar basedir .
+.Ar basedir
+should be a Claude Code config directory
+.Pq contains projects/, skills/, etc .
+.It Cm add-alias Ar alias Ar name
+Create a secondary alias for an existing account.
+The alias is not added to the
+.Dq all accounts
+iteration list.
+.It Cm remove-dir Ar name
+Remove a primary account and all secondary aliases that point to the same
+directory.
+.It Cm reset Op Fl -yes
+Delete the config file and restore script defaults.
+Prompts for confirmation unless
+.Fl -yes
+is given.
+.El
+.Ss Config keys
+.Bl -tag -width "max_tokens"
+.It Cm max_tokens
+Positive integer.
+Bar length ceiling when
+.Cm norm
+is
+.Cm fixed .
+.It Cm scale
+.Cm log No | Cm linear .
+Bar length scaling mode.
+Log compresses large conversations so smaller ones are still visible.
+.It Cm tokens
+.Cm actual No | Cm scaled .
+Whether the displayed count is the raw token total or the cost-weighted total.
+.It Cm norm
+.Cm fixed No | Cm dynamic .
+Fixed uses
+.Cm max_tokens
+as the bar ceiling for all conversations in a view.
+Dynamic scales to the largest conversation in the current result set.
+.It Cm w_input , Cm w_output , Cm w_cc , Cm w_cr
+Positive integer, representing the cost weight ×10.
+Larger values make that token type take proportionally more bar space.
+.It Cm live_mode
+.Cm override No | Cm scroll .
+In
+.Cm override
+mode
+.Pq default ,
+each live refresh overwrites the previous line.
+In
+.Cm scroll
+mode, each refresh appends a new line.
+.El
+.Sh EXAMPLES
+.Ss Browsing conversations
+Show the 10 most recent conversations across all accounts:
+.Dl $ qlaude conv 10
+.Pp
+Show conversations 16 through 20:
+.Dl $ qlaude conv 16-20
+.Pp
+Show only the 3rd most recent:
+.Dl $ qlaude conv just 3
+.Pp
+Show this week's conversations:
+.Dl $ qlaude conv -0 week
+.Pp
+Show last week through this week, capped at 20:
+.Dl $ qlaude conv last week through this week 20
+.Pp
+Show a detailed multi-line breakdown of the last 5:
+.Dl $ qlaude conv 5 --detailed
+.Pp
+Watch the most recent conversation live:
+.Dl $ qlaude conv live
+.Ss Scoping to an account
+Show skills for a specific account named
+.Sq sbq :
+.Dl $ qlaude sbq skills
+.Pp
+Launch Claude for that account:
+.Dl $ qlaude sbq launch --resume
+.Pp
+Touch all accounts:
+.Dl $ qlaude touch
+.Ss Managing accounts
+Add a second Claude Code account:
+.Dl $ qlaude config add-dir sbq ~/.claude-sbq
+.Pp
+Add a short alias for an existing account:
+.Dl $ qlaude config add-alias s sbq
+.Pp
+Show all configured accounts and display settings:
+.Dl $ qlaude config list
+.Pp
+Remove an account (and all its aliases):
+.Dl $ qlaude config remove-dir sbq
+.Ss Tuning the bar display
+Use log scaling to make small conversations more visible:
+.Dl $ qlaude config set scale log
+.Pp
+Switch to dynamic normalization so the bar ceiling matches the longest result:
+.Dl $ qlaude config set norm dynamic
+.Sh ENVIRONMENT
+.Bl -tag -width indent
+.It Ev CLAUDE_CONFIG_DIR
+Set by
+.Cm launch
+to the account's base directory before invoking
+.Xr claude 1 .
+.It Ev XDG_CONFIG_HOME
+Base directory for the
+.Nm
+config file.
+Defaults to
+.Pa ~/.config .
+The config file is stored at
+.Pa ${XDG_CONFIG_HOME}/qlaude/config.zsh .
+.El
+.Sh FILES
+.Bl -tag -width indent
+.It Pa ${XDG_CONFIG_HOME:-~/.config}/qlaude/config.zsh
+Account directory map and display settings.
+Sourced as zsh on startup; auto-generated by
+.Cm qlaude config .
+When this file is present it fully replaces the script defaults.
+.It Pa <basedir>/projects/
+Claude Code conversation files
+.Pq *.jsonl ,
+one subdirectory per project.
+Scanned by
+.Cm conv .
+.It Pa <basedir>/skills/ , <basedir>/agents/ , <basedir>/plugins/
+Resource directories listed by the corresponding
+.Nm
+commands.
+.El
+.Sh AUTHORS
+.An poiurewq
