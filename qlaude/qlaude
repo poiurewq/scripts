@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 
-QLAUDE_VERSION="0.1.0"
+QLAUDE_VERSION="0.1.1"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Section 1: Account infrastructure
