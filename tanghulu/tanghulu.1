@@ -1,0 +1,227 @@
+.Dd April 22, 2026
+.Dt TANGHULU 1
+.Os "tanghulu 0.1.0"
+.Sh NAME
+.Nm tanghulu
+.Nd run a string of timed focus/rest sessions
+.Sh SYNOPSIS
+.Nm
+.Op Cm help
+.br
+.Nm
+.Ar block
+.br
+.Nm
+.Ar name
+.br
+.Nm
+.Cm add Ar name block
+.br
+.Nm
+.Cm redefine Ar name block
+.br
+.Nm
+.Cm rename Ar old new
+.br
+.Nm
+.Cm delete Ar name
+.br
+.Nm
+.Cm list Op Fl v
+.br
+.Nm
+.Cm config Op Cm sound Bro Cm on | Cm off Brc
+.Sh DESCRIPTION
+.Nm
+runs a sequence of timed segments back to back.
+At each transition it prints a message to the terminal,
+shows a macOS pop-up dialog, and plays an optional chime.
+.Pp
+It is named for
+.Em 糖葫芦
+.Pq tanghulu ,
+a Chinese snack of candied hawthorn fruits threaded on a bamboo stick
+— segments of sweetness strung together, one after another.
+.Pp
+A
+.Ar block
+is a compact expression that describes the sequence of timed segments to run.
+Blocks can be typed inline as an argument or saved under a name for reuse.
+.Ss Block grammar
+.Bl -tag -width indent
+.It Ar N
+A segment of
+.Ar N
+minutes with no label.
+.It Ar N Ns = Ns Ar LABEL
+A segment of
+.Ar N
+minutes labeled
+.Ar LABEL .
+The label appears in the countdown header, the transition message,
+and the Ctrl-C breakdown.
+.It KxITEM
+Repeat
+.Ar ITEM
+.Ar K
+times.
+.Ar ITEM
+may be a segment, a group, or a named reference.
+.It /ITEM,ITEM,.../
+A group — multiple items treated as a unit for repetition.
+For example,
+.Ql 4x/25=focus,5=break/
+repeats the focus/break pair four times.
+.It Ar NAME
+A reference to a saved block.
+References are
+.Em late-bound :
+the saved definition is read at run time, so editing a block with
+.Cm redefine
+takes effect the next time any block that references it runs.
+.It ITEM,ITEM,...
+A sequence: items separated by commas run one after another.
+.El
+.Pp
+.Ar N
+and
+.Ar K
+are positive integers.
+.Ar LABEL
+and
+.Ar NAME
+must match
+.Ql [A-Za-z_][A-Za-z0-9_-]*
+and must not be reserved keywords
+.Pq see
+.Sx SUBCOMMANDS .
+.Ss Subcommands
+.Bl -tag -width indent
+.It Ar block
+Parse
+.Ar block
+and run it immediately as an ad-hoc session.
+.It Ar name
+Look up the saved block
+.Ar name
+and run it.
+Equivalent to typing the block expression directly.
+.It Cm add Ar name block
+Save
+.Ar block
+under
+.Ar name .
+Fails if a block with that name already exists; use
+.Cm redefine
+to overwrite.
+The block is validated before saving.
+.It Cm redefine Ar name block
+Replace the definition of an existing named block.
+.It Cm rename Ar old new
+Rename a saved block from
+.Ar old
+to
+.Ar new .
+.It Cm delete Ar name
+Remove a saved block.
+.It Cm list Op Fl v
+List all saved block names, one per line.
+With
+.Fl v ,
+also print each block's definition.
+.It Cm config Op Cm sound Bro Cm on | Cm off Brc
+With no arguments, print the current configuration.
+With
+.Cm sound on
+or
+.Cm sound off ,
+enable or disable the transition chime.
+The chime is on by default.
+.It Cm help
+Show this man page.
+Falls back to a synopsis if the man page is not installed.
+.El
+.Sh RUNTIME BEHAVIOUR
+When a block is running,
+.Nm
+displays a live countdown on a single terminal line that updates every second:
+.Bd -literal -offset indent
+[focus] 24:37 remaining...
+.Ed
+.Pp
+At the end of each segment it clears the countdown and prints
+a transition message:
+.Bd -literal -offset indent
+25m of focus finished. 5m of break begins.
+.Ed
+.Pp
+It also raises a macOS System Events dialog with the same message
+.Pq fire-and-forget; does not block the countdown
+and plays
+.Pa /System/Library/Sounds/Glass.aiff
+if the chime is enabled.
+.Pp
+Pressing
+.Sy Ctrl-C
+at any point stops the session and prints a summary:
+.Bd -literal -offset indent
+tanghulu: stopped at segment 2 of 8; 30m 12s elapsed total
+by label:
+  focus: 25m 0s
+  break: 5m 12s
+.Ed
+.Sh ENVIRONMENT
+.Bl -tag -width indent
+.It Ev XDG_CONFIG_HOME
+Base directory for configuration and saved blocks.
+Defaults to
+.Pa ~/.config .
+.El
+.Sh FILES
+.Bl -tag -width indent
+.It Pa ${XDG_CONFIG_HOME}/tanghulu/blocks/<name>.block
+One file per saved block.
+Plain text: a header comment followed by the block expression on one line.
+.It Pa ${XDG_CONFIG_HOME}/tanghulu/config
+Key=value configuration file.
+Currently supports one key:
+.Cm sound
+.Pq Ql on No or Ql off , default Ql on .
+.El
+.Sh EXIT STATUS
+.Bl -tag -width indent
+.It 0
+No error.
+.It 1
+Usage or runtime error
+.Pq bad block expression, unknown name, etc. .
+.It 130
+Interrupted by
+.Sy Ctrl-C .
+.El
+.Sh EXAMPLES
+Run three unlabeled segments back to back:
+.Dl $ tanghulu 1,3,5
+.Pp
+One Pomodoro cycle — 25 minutes of focus followed by a 5-minute break:
+.Dl $ tanghulu 25=focus,5=break
+.Pp
+Four Pomodoro cycles in a row:
+.Dl $ tanghulu 4x/25=focus,5=break/
+.Pp
+Save a named block and run it by name:
+.Bd -literal -offset indent
+$ tanghulu add pomodoro '4x/25=focus,5=break/'
+$ tanghulu pomodoro
+.Ed
+.Pp
+Compose named blocks with inline expressions:
+.Dl $ tanghulu 2xpomodoro,15=long_break
+.Pp
+See all saved blocks with their definitions:
+.Dl $ tanghulu list -v
+.Pp
+Turn off the chime:
+.Dl $ tanghulu config sound off
+.Sh AUTHORS
+.An poiurewq
