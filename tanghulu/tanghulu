@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+# tanghulu — stay focused and rested by running a string of timed sessions
+# with inter-session reminders (terminal + pop-up + optional chime).
+#
+# Named for 糖葫芦, a Chinese snack of candied fruits threaded on a stick.
+
+set -u
+
+#####################################################################
+# Constants
+#####################################################################
+
+TANGHULU_VERSION="0.1.0"
+TG_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tanghulu"
+TG_BLOCKS_DIR="$TG_CONFIG_DIR/blocks"
+TG_CONFIG_FILE="$TG_CONFIG_DIR/config"
+
+TG_RESERVED='add|list|delete|rename|redefine|help|config|-h|--help|-v|--version'
+TG_NAME_RE='^[A-Za-z][A-Za-z0-9_-]*$'
+TG_SOUND_FILE='/System/Library/Sounds/Glass.aiff'
+
+read -r -d '' TG_SYNOPSIS << 'EOF' || true
+tanghulu — run a string of timed sessions.
+
+  tanghulu <block>                   run an ad-hoc block
+  tanghulu <name>                    run a saved block
+  tanghulu add <name> <block>        save a named block
+  tanghulu redefine <name> <block>   replace a saved block
+  tanghulu rename <old> <new>        rename a saved block
+  tanghulu delete <name>             remove a saved block
+  tanghulu list [-v]                 list saved blocks (-v shows definitions)
+  tanghulu config [sound on|off]     show or toggle the transition chime
+  tanghulu help                      show full documentation
+
+Block grammar: N  N=LABEL  KxITEM  /ITEM,ITEM,.../  NAME  ITEM,ITEM,...
+EOF
+
+#####################################################################
+# Util
+#####################################################################
+
+tg_die() { printf 'tanghulu: %s\n' "$*" >&2; exit 1; }
+
+tg_is_reserved() { [[ "$1" =~ ^($TG_RESERVED)$ ]]; }
+
+tg_valid_name() {
+    [[ "$1" =~ $TG_NAME_RE ]] && ! tg_is_reserved "$1"
+}
+
+tg_ensure_dirs() { mkdir -p "$TG_BLOCKS_DIR"; }
+
+#####################################################################
+# Config (simple KEY=VALUE file)
+#####################################################################
+
+tg_config_get() {
+    local key=$1 default=${2-}
+    [[ -f $TG_CONFIG_FILE ]] || { printf '%s' "$default"; return; }
+    local v
+    v=$(grep -E "^$key=" "$TG_CONFIG_FILE" 2>/dev/null | tail -1 | cut -d= -f2-)
+    [[ -n $v ]] && printf '%s' "$v" || printf '%s' "$default"
+}
+
+tg_config_set() {
+    local key=$1 val=$2
+    tg_ensure_dirs
+    touch "$TG_CONFIG_FILE"
+    local tmp; tmp=$(mktemp)
+    grep -vE "^$key=" "$TG_CONFIG_FILE" > "$tmp" 2>/dev/null || true
+    printf '%s=%s\n' "$key" "$val" >> "$tmp"
+    mv "$tmp" "$TG_CONFIG_FILE"
+}
+
+tg_sound_on() {
+    [[ $(tg_config_get sound on) == on ]]
+}
+
+#####################################################################
+# Block storage — one file per named block
+#####################################################################
+
+tg_block_path() { printf '%s/%s.block' "$TG_BLOCKS_DIR" "$1"; }
+
+tg_block_exists() { [[ -f $(tg_block_path "$1") ]]; }
+
+tg_block_read() {
+    local p; p=$(tg_block_path "$1")
+    [[ -f $p ]] || tg_die "no such block: $1"
+    # Non-comment lines, stripped of newlines.
+    grep -v '^#' "$p" | tr -d '\n'
+}
+
+tg_block_write() {
+    local name=$1 def=$2
+    tg_ensure_dirs
+    {
+        printf '# tanghulu block: %s\n' "$name"
+        printf '# created: %s\n'       "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf '%s\n' "$def"
+    } > "$(tg_block_path "$name")"
+}
+
+tg_block_delete() {
+    local name=$1
+    tg_block_exists "$name" || tg_die "no such block: $name"
+    rm "$(tg_block_path "$name")"
+}
+
+tg_block_list() {
+    [[ -d $TG_BLOCKS_DIR ]] || return 0
+    shopt -s nullglob
+    local files=("$TG_BLOCKS_DIR"/*.block)
+    shopt -u nullglob
+    (( ${#files[@]} == 0 )) && return 0
+    local f
+    for f in "${files[@]}"; do
+        basename "$f" .block
+    done | sort
+}
+
+#####################################################################
+# Parser
+#
+# Grammar:
+#   block = item ("," item)*
+#   item  = [NUMBER "x"] atom
+#   atom  = seg | group | name
+#   seg   = NUMBER ["=" LABEL]
+#   group = "/" block "/"
+#   name  = IDENT          (looked up in blocks_dir; late-bound)
+#
+# NUMBER = [0-9]+
+# IDENT / LABEL = [A-Za-z_][A-Za-z0-9_-]*
+#####################################################################
+
+_tg_src=""
+_tg_pos=0
+_tg_segs=()            # output: "minutes:label" entries (label may be empty)
+_tg_stack_names=()     # cycle guard for named-block expansion
+_tg_RET=""             # return-string channel for parser funcs (avoids $() subshell)
+
+# NOTE: parser functions that mutate _tg_pos MUST NOT be invoked via $(...) —
+# command substitution runs in a subshell and discards position changes. They
+# return their consumed string through _tg_RET instead.
+
+_tg_eof() { (( _tg_pos >= ${#_tg_src} )); }
+
+_tg_error() {
+    local pointer; pointer=$(printf '%*s' "$_tg_pos" '')
+    tg_die "parse error at position $_tg_pos: $*
+  $_tg_src
+  ${pointer}^"
+}
+
+# Consume chars while regex matches; sets _tg_RET.
+_tg_consume_while() {
+    local pat=$1 start=$_tg_pos
+    while (( _tg_pos < ${#_tg_src} )) && [[ ${_tg_src:$_tg_pos:1} =~ $pat ]]; do
+        (( _tg_pos++ ))
+    done
+    _tg_RET="${_tg_src:$start:$((_tg_pos - start))}"
+}
+
+# Parse IDENT; sets _tg_RET.
+_tg_parse_ident() {
+    local first=${_tg_src:$_tg_pos:1}
+    [[ $first =~ ^[A-Za-z_]$ ]] || _tg_error "expected identifier"
+    local s=$_tg_pos
+    (( _tg_pos++ ))
+    _tg_consume_while '^[A-Za-z0-9_-]$'
+    _tg_RET="${_tg_src:$s:$((_tg_pos - s))}"
+}
+
+# block = item ("," item)*
+_tg_parse_block() {
+    _tg_parse_item
+    while (( _tg_pos < ${#_tg_src} )) && [[ ${_tg_src:$_tg_pos:1} == "," ]]; do
+        (( _tg_pos++ ))
+        _tg_parse_item
+    done
+}
+
+# item = [NUMBER "x"] atom   — repeat applied by duplicating produced segs
+_tg_parse_item() {
+    local count=1
+    local here=${_tg_src:$_tg_pos:1}
+    if [[ $here =~ ^[0-9]$ ]]; then
+        local save=$_tg_pos
+        _tg_consume_while '^[0-9]$'
+        local n=$_tg_RET
+        if [[ ${_tg_src:$_tg_pos:1} == "x" ]]; then
+            count=$n
+            (( _tg_pos++ ))
+        else
+            _tg_pos=$save    # rewind: bare number is a seg, not a repeat
+        fi
+    fi
+    local before=${#_tg_segs[@]}
+    _tg_parse_atom
+    local after=${#_tg_segs[@]}
+    local new=$((after - before))
+    if (( count > 1 && new > 0 )); then
+        local added=() i j
+        for (( i=before; i<after; i++ )); do added+=("${_tg_segs[$i]}"); done
+        for (( i=1; i<count; i++ )); do
+            for (( j=0; j<new; j++ )); do _tg_segs+=("${added[$j]}"); done
+        done
+    fi
+}
+
+# atom = seg | group | name
+_tg_parse_atom() {
+    local c=${_tg_src:$_tg_pos:1}
+    case "$c" in
+        '/')
+            (( _tg_pos++ ))
+            _tg_parse_block
+            [[ ${_tg_src:$_tg_pos:1} == "/" ]] || _tg_error "expected closing '/'"
+            (( _tg_pos++ ))
+            ;;
+        [0-9])
+            _tg_parse_seg
+            ;;
+        [A-Za-z_])
+            _tg_parse_name_ref
+            ;;
+        '')
+            _tg_error "unexpected end of input"
+            ;;
+        *)
+            _tg_error "unexpected '$c'"
+            ;;
+    esac
+}
+
+# seg = NUMBER ["=" LABEL]
+_tg_parse_seg() {
+    _tg_consume_while '^[0-9]$'
+    local n=$_tg_RET
+    [[ -n $n ]] || _tg_error "expected number"
+    (( n > 0 )) || _tg_error "minutes must be positive"
+    local label=""
+    if [[ ${_tg_src:$_tg_pos:1} == "=" ]]; then
+        (( _tg_pos++ ))
+        _tg_parse_ident
+        label=$_tg_RET
+    fi
+    _tg_segs+=("$n:$label")
+}
+
+# name reference: IDENT → look up saved block and splice in its segments
+_tg_parse_name_ref() {
+    _tg_parse_ident
+    local name=$_tg_RET
+    # Cycle check
+    local s
+    for s in "${_tg_stack_names[@]+"${_tg_stack_names[@]}"}"; do
+        [[ $s == "$name" ]] && tg_die "cycle detected in named block: $name"
+    done
+    tg_block_exists "$name" || tg_die "unknown name: $name"
+    local sub; sub=$(tg_block_read "$name")
+    sub="${sub// /}"
+    # Save/restore parser position + source.
+    local save_src=$_tg_src save_pos=$_tg_pos
+    _tg_src=$sub; _tg_pos=0
+    _tg_stack_names+=("$name")
+    _tg_parse_block
+    _tg_eof || _tg_error "unexpected trailing input in block '$name'"
+    # Pop stack
+    _tg_stack_names=("${_tg_stack_names[@]:0:$((${#_tg_stack_names[@]}-1))}")
+    _tg_src=$save_src; _tg_pos=$save_pos
+}
+
+# Public entry point — fills _tg_segs.
+tg_parse() {
+    _tg_src="${1// /}"     # strip whitespace
+    _tg_pos=0
+    _tg_segs=()
+    _tg_stack_names=()
+    [[ -n $_tg_src ]] || tg_die "empty block"
+    _tg_parse_block
+    _tg_eof || _tg_error "unexpected input"
+    (( ${#_tg_segs[@]} > 0 )) || tg_die "empty block"
+}
+
+#####################################################################
+# Runtime — countdown, messages, pop-up, sound, Ctrl-C accounting
+#####################################################################
+
+TG_ELAPSED_SEC=0
+TG_CURRENT_SEG=0
+TG_LABEL_KEYS=()
+TG_LABEL_SECS=()
+
+# Build the transition message at the end of segment i (0-based).
+tg_msg() {
+    local i=$1
+    local cur=${_tg_segs[$i]}
+    local cur_m=${cur%%:*} cur_l=${cur#*:}
+    local part1
+    if [[ -n $cur_l ]]; then
+        part1="${cur_m}m of ${cur_l} finished."
+    else
+        part1="${cur_m}m finished."
+    fi
+    local part2
+    local next=$((i+1))
+    if (( next >= ${#_tg_segs[@]} )); then
+        part2="all finished."
+    else
+        local nxt=${_tg_segs[$next]}
+        local nxt_m=${nxt%%:*} nxt_l=${nxt#*:}
+        if [[ -n $nxt_l ]]; then
+            part2="${nxt_m}m of ${nxt_l} begins."
+        else
+            part2="${nxt_m}m begins."
+        fi
+    fi
+    printf '%s %s' "$part1" "$part2"
+}
+
+# Fire-and-forget macOS dialog. Redirect to suppress "button returned:OK".
+tg_popup() {
+    local msg=$1
+    # Escape backslashes first, then double-quotes, for AppleScript literal.
+    local esc=${msg//\\/\\\\}
+    esc=${esc//\"/\\\"}
+    ( osascript -e "tell app \"System Events\" to display dialog \"$esc\" buttons {\"OK\"} default button \"OK\"" \
+        >/dev/null 2>&1 ) & disown
+}
+
+tg_ding() {
+    tg_sound_on || return 0
+    [[ -f $TG_SOUND_FILE ]] || return 0
+    ( afplay "$TG_SOUND_FILE" >/dev/null 2>&1 ) & disown
+}
+
+# Live 1Hz countdown on a single line. Labels are tracked for Ctrl-C breakdown.
+tg_countdown() {
+    local mins=$1 label=${2-}
+    local label_key=${label:-default}
+    local remaining=$((mins * 60))
+    local header=""
+    [[ -n $label ]] && header="[${label}] "
+    while (( remaining > 0 )); do
+        local mm=$((remaining / 60)) ss=$((remaining % 60))
+        printf '\r\033[K%s%02d:%02d remaining...' "$header" "$mm" "$ss"
+        sleep 1
+        (( remaining-- ))
+        (( TG_ELAPSED_SEC++ ))
+        local _idx=-1 _i
+        for (( _i=0; _i<${#TG_LABEL_KEYS[@]}; _i++ )); do
+            [[ ${TG_LABEL_KEYS[$_i]} == "$label_key" ]] && { _idx=$_i; break; }
+        done
+        if (( _idx < 0 )); then
+            TG_LABEL_KEYS+=("$label_key")
+            TG_LABEL_SECS+=(1)
+        else
+            (( TG_LABEL_SECS[_idx]++ ))
+        fi
+    done
+    printf '\r\033[K'
+}
+
+tg_on_interrupt() {
+    printf '\r\033[K'
+    local total=${#_tg_segs[@]}
+    local cur=$((TG_CURRENT_SEG + 1))
+    local mm=$((TG_ELAPSED_SEC / 60)) ss=$((TG_ELAPSED_SEC % 60))
+    printf 'tanghulu: stopped at segment %d of %d; %dm %ds elapsed total\n' \
+        "$cur" "$total" "$mm" "$ss"
+    if (( ${#TG_LABEL_KEYS[@]} > 0 )); then
+        printf 'by label:\n'
+        local _i
+        for (( _i=0; _i<${#TG_LABEL_KEYS[@]}; _i++ )); do
+            local s=${TG_LABEL_SECS[$_i]}
+            printf '  %s: %dm %ds\n' "${TG_LABEL_KEYS[$_i]}" "$((s/60))" "$((s%60))"
+        done
+    fi
+    exit 130
+}
+
+tg_run_parsed() {
+    trap tg_on_interrupt INT
+    local i total=${#_tg_segs[@]}
+    for (( i=0; i<total; i++ )); do
+        TG_CURRENT_SEG=$i
+        local seg=${_tg_segs[$i]}
+        local m=${seg%%:*} l=${seg#*:}
+        tg_countdown "$m" "$l"
+        local msg; msg=$(tg_msg "$i")
+        printf '%s\n' "$msg"
+        tg_popup "$msg"
+        tg_ding
+    done
+}
+
+#####################################################################
+# Subcommands
+#####################################################################
+
+tg_cmd_add() {
+    (( $# >= 2 )) || tg_die "usage: tanghulu add <name> <block>"
+    (( $# > 2 )) && tg_die "extra args — did you forget to quote the block? e.g. tanghulu add $1 '<block>'"
+    local name=$1 def=$2
+    tg_valid_name "$name" || tg_die "invalid name (must match [A-Za-z][A-Za-z0-9_-]* and not be a reserved keyword): $name"
+    tg_block_exists "$name" && tg_die "block '$name' already exists (use 'redefine' to change)"
+    tg_parse "$def"    # validate
+    tg_block_write "$name" "$def"
+    printf 'added: %s = %s\n' "$name" "$def"
+}
+
+tg_cmd_redefine() {
+    (( $# >= 2 )) || tg_die "usage: tanghulu redefine <name> <block>"
+    (( $# > 2 )) && tg_die "extra args — did you forget to quote the block?"
+    local name=$1 def=$2
+    tg_block_exists "$name" || tg_die "no such block: $name"
+    tg_parse "$def"
+    tg_block_write "$name" "$def"
+    printf 'redefined: %s = %s\n' "$name" "$def"
+}
+
+tg_cmd_delete() {
+    (( $# >= 1 )) || tg_die "usage: tanghulu delete <name>"
+    tg_block_delete "$1"
+    printf 'deleted: %s\n' "$1"
+}
+
+tg_cmd_rename() {
+    (( $# >= 2 )) || tg_die "usage: tanghulu rename <name> <newname>"
+    local old=$1 new=$2
+    tg_valid_name "$new" || tg_die "invalid new name: $new"
+    tg_block_exists "$old" || tg_die "no such block: $old"
+    tg_block_exists "$new" && tg_die "block '$new' already exists"
+    mv "$(tg_block_path "$old")" "$(tg_block_path "$new")"
+    printf 'renamed: %s -> %s\n' "$old" "$new"
+}
+
+tg_cmd_list() {
+    local verbose=0
+    [[ ${1-} == -v ]] && verbose=1
+    local names; names=$(tg_block_list)
+    [[ -z $names ]] && { printf '(no saved blocks)\n'; return; }
+    if (( verbose )); then
+        local n
+        while IFS= read -r n; do
+            printf '%s = %s\n' "$n" "$(tg_block_read "$n")"
+        done <<< "$names"
+    else
+        printf '%s\n' "$names"
+    fi
+}
+
+tg_cmd_config() {
+    local key=${1-} val=${2-}
+    case "$key" in
+        ''|sound)
+            if [[ -z $val ]]; then
+                printf 'sound=%s\n' "$(tg_config_get sound on)"
+                return
+            fi
+            [[ $val == on || $val == off ]] || tg_die "sound must be 'on' or 'off'"
+            tg_config_set sound "$val"
+            printf 'sound=%s\n' "$val"
+            ;;
+        *)
+            tg_die "unknown config key: $key"
+            ;;
+    esac
+}
+
+#####################################################################
+# Main
+#####################################################################
+
+main() {
+    tg_ensure_dirs
+    local cmd=${1-}
+    if [[ -z $cmd ]]; then
+        printf '\n%s\n\nRun "tanghulu help" for full documentation.\n\n' "$TG_SYNOPSIS"
+        exit 0
+    fi
+    shift
+
+    case "$cmd" in
+        help|-h|--help)
+            man tanghulu 2>/dev/null || {
+                local _self_dir; _self_dir="$(cd "$(dirname "$0")" && pwd)"
+                if [[ -f $_self_dir/tanghulu.1 ]]; then
+                    man "$_self_dir/tanghulu.1"
+                else
+                    printf "Man page not found. Install via 'brew install poiurewq/tools/tanghulu' for full documentation.\n" >&2
+                    printf '\n%s\n\n' "$TG_SYNOPSIS"
+                fi
+            }
+            ;;
+        -v|--version) printf 'tanghulu %s\n' "$TANGHULU_VERSION" ;;
+        add)          tg_cmd_add "$@" ;;
+        redefine)     tg_cmd_redefine "$@" ;;
+        delete)       tg_cmd_delete "$@" ;;
+        rename)       tg_cmd_rename "$@" ;;
+        list)         tg_cmd_list "$@" ;;
+        config)       tg_cmd_config "$@" ;;
+        *)
+            # Ad-hoc block expression, or a saved name (single-ident block).
+            tg_parse "$cmd"
+            tg_run_parsed
+            ;;
+    esac
+}
+
+main "$@"
