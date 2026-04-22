@@ -41,6 +41,66 @@ EOF
 
 tg_die() { printf 'tanghulu: %s\n' "$*" >&2; exit 1; }
 
+tg_version_gt() {
+    local a1 a2 a3 b1 b2 b3 old_ifs
+    old_ifs="$IFS"
+    IFS='.'; set -- $1 $2; IFS="$old_ifs"
+    a1=$1 a2=$2 a3=$3 b1=$4 b2=$5 b3=$6
+    [[ "$a1" -gt "$b1" ]] 2>/dev/null && return 0
+    [[ "$a1" -lt "$b1" ]] 2>/dev/null && return 1
+    [[ "$a2" -gt "$b2" ]] 2>/dev/null && return 0
+    [[ "$a2" -lt "$b2" ]] 2>/dev/null && return 1
+    [[ "$a3" -gt "$b3" ]] 2>/dev/null && return 0
+    return 1
+}
+
+# Background: fetch latest tanghulu tag from GitHub and write to cache.
+tg_upgrade_bg_fetch() {
+    local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/tanghulu"
+    local cache_file="$cache_dir/latest-version"
+    local latest
+    mkdir -p "$cache_dir" 2>/dev/null || return 1
+    latest=$(git ls-remote --tags https://github.com/poiurewq/scripts.git 'refs/tags/tanghulu-v*' 2>/dev/null \
+        | sed -n 's|.*refs/tags/tanghulu-v\([^{]*\)$|\1|p' \
+        | sort -t. -k1,1n -k2,2n -k3,3n \
+        | tail -1)
+    [[ -n "$latest" ]] && printf '%s\n' "$latest" > "$cache_file"
+}
+
+# Check cache for a newer version; print reminder if found.
+# Spawn background fetch if cache is stale (>24h) or missing.
+tg_upgrade_check() {
+    [[ -z "${TANGHULU_NO_UPDATE_CHECK:-}" ]] || return 0
+    [[ -t 2 ]] || return 0
+
+    local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/tanghulu"
+    local cache_file="$cache_dir/latest-version"
+    local latest mtime now age
+
+    if [[ -f "$cache_file" ]]; then
+        latest=$(head -1 "$cache_file" 2>/dev/null) || latest=""
+        if [[ -n "$latest" ]] && tg_version_gt "$latest" "$TANGHULU_VERSION"; then
+            printf '\nA newer release of tanghulu is available: %s \xe2\x86\x92 %s\n' "$TANGHULU_VERSION" "$latest" >&2
+            printf 'To upgrade: brew upgrade poiurewq/tap/tanghulu\n\n' >&2
+        fi
+    fi
+
+    local stale=0
+    if [[ ! -f "$cache_file" ]]; then
+        stale=1
+    else
+        now=$(date +%s)
+        mtime=$(stat -f %m "$cache_file" 2>/dev/null) || mtime=0
+        age=$(( now - mtime ))
+        [[ "$age" -ge 86400 ]] && stale=1
+    fi
+
+    if [[ "$stale" = 1 ]]; then
+        ( tg_upgrade_bg_fetch ) &>/dev/null &
+        disown 2>/dev/null
+    fi
+}
+
 tg_is_reserved() { [[ "$1" =~ ^($TG_RESERVED)$ ]]; }
 
 tg_valid_name() {
@@ -480,7 +540,6 @@ main() {
         printf '\n%s\n\nRun "tanghulu help" for full documentation.\n\n' "$TG_SYNOPSIS"
         exit 0
     fi
-    shift
 
     case "$cmd" in
         help|-h|--help)
@@ -493,16 +552,25 @@ main() {
                     printf '\n%s\n\n' "$TG_SYNOPSIS"
                 fi
             }
+            return
             ;;
-        -v|--version) printf 'tanghulu %s\n' "$TANGHULU_VERSION" ;;
-        add)          tg_cmd_add "$@" ;;
-        redefine)     tg_cmd_redefine "$@" ;;
-        delete)       tg_cmd_delete "$@" ;;
-        rename)       tg_cmd_rename "$@" ;;
-        list)         tg_cmd_list "$@" ;;
-        config)       tg_cmd_config "$@" ;;
+        -v|--version)
+            printf 'tanghulu %s\n' "$TANGHULU_VERSION"
+            return
+            ;;
+    esac
+    shift
+
+    tg_upgrade_check
+
+    case "$cmd" in
+        add)      tg_cmd_add "$@" ;;
+        redefine) tg_cmd_redefine "$@" ;;
+        delete)   tg_cmd_delete "$@" ;;
+        rename)   tg_cmd_rename "$@" ;;
+        list)     tg_cmd_list "$@" ;;
+        config)   tg_cmd_config "$@" ;;
         *)
-            # Ad-hoc block expression, or a saved name (single-ident block).
             tg_parse "$cmd"
             tg_run_parsed
             ;;
