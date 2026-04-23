@@ -23,7 +23,7 @@ _tanghulu() {
 
     case $cword in
         1)
-            COMPREPLY=( $(compgen -W "$subs ${names[*]}" -- "$cur") )
+            COMPREPLY=( $(compgen -W "${names[*]}" -- "$cur") )
             ;;
         2)
             case ${words[1]} in
