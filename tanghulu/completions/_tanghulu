@@ -12,6 +12,25 @@ _tanghulu_blocks() {
     _describe -t blocks 'saved block' names
 }
 
+_tanghulu_subs() {
+    local -a subs
+    subs=(
+        'add:save a named block'
+        'redefine:replace a saved block'
+        'rename:rename a saved block'
+        'delete:remove a saved block'
+        'list:list saved blocks'
+        'preview:show a named block'"'"'s steps and totals'
+        'config:show or toggle the transition chime'
+        'help:show the man page'
+        '--help:show the man page'
+        '-h:show the man page'
+        '--version:show version'
+        '-v:show version'
+    )
+    _describe -t subcommands 'subcommand' subs
+}
+
 _tanghulu() {
     local curcontext="$curcontext" state line
     typeset -A opt_args
@@ -22,23 +41,8 @@ _tanghulu() {
 
     case $state in
         cmd)
-            local -a subs
-            subs=(
-                'add:save a named block'
-                'redefine:replace a saved block'
-                'rename:rename a saved block'
-                'delete:remove a saved block'
-                'list:list saved blocks'
-                'preview:show a named block'"'"'s steps and totals'
-                'config:show or toggle the transition chime'
-                'help:show the man page'
-                '--help:show the man page'
-                '-h:show the man page'
-                '--version:show version'
-                '-v:show version'
-            )
             _alternative \
-                'subcommands:subcommand:_describe -t subcommands subcommand subs' \
+                'subcommands:subcommand:_tanghulu_subs' \
                 'blocks:block:_tanghulu_blocks'
             ;;
         args)
