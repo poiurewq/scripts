@@ -30,7 +30,7 @@
 .Cm list Op Fl v
 .br
 .Nm
-.Cm config Op Cm sound Bro Cm on | Cm off Brc
+.Cm config Op Cm sound | popup Bro Cm on | Cm off Brc
 .Sh DESCRIPTION
 .Nm
 runs a sequence of timed segments back to back.
@@ -60,6 +60,28 @@ minutes labeled
 .Ar LABEL .
 The label appears in the countdown header, the transition message,
 and the Ctrl-C breakdown.
+.It Ar N Ns \&.
+.It Ar N Ns \&. Ns = Ns Ar LABEL
+A segment with the
+.Sq \&.
+modifier: suppress the pop-up dialog and the transition chime for this
+segment, regardless of the
+.Cm popup
+and
+.Cm sound
+config settings.
+Terminal output is unaffected.
+.It Ar N Ns \&:
+.It Ar N Ns \&: Ns = Ns Ar LABEL
+A segment with the
+.Sq \&:
+modifier: always show the pop-up dialog for this segment,
+regardless of the
+.Cm popup
+config setting.
+Sound follows the
+.Cm sound
+config setting as normal.
 .It KxITEM
 Repeat
 .Ar ITEM
@@ -73,12 +95,20 @@ For example,
 .Ql 4x/25=focus,5=break/
 repeats the focus/break pair four times.
 .It Ar NAME
+.It Ar NAME Ns \&.
+.It Ar NAME Ns \&:
 A reference to a saved block.
 References are
 .Em late-bound :
 the saved definition is read at run time, so editing a block with
 .Cm redefine
 takes effect the next time any block that references it runs.
+A
+.Sq \&.
+or
+.Sq \&:
+modifier after the name applies to every segment the block expands to,
+overriding any per-segment modifiers within the saved definition.
 .It ITEM,ITEM,...
 A sequence: items separated by commas run one after another.
 .El
@@ -129,14 +159,25 @@ List all saved block names, one per line.
 With
 .Fl v ,
 also print each block's definition.
-.It Cm config Op Cm sound Bro Cm on | Cm off Brc
+.It Cm config Op Cm sound | popup Bro Cm on | Cm off Brc
 With no arguments, print the current configuration.
 With
 .Cm sound on
 or
 .Cm sound off ,
-enable or disable the transition chime.
-The chime is on by default.
+enable or disable the transition chime
+.Pq on by default .
+With
+.Cm popup on
+or
+.Cm popup off ,
+enable or disable the pop-up dialog for sessions that carry no per-segment modifier
+.Pq on by default .
+Segments marked with
+.Sq \&.
+always suppress the pop-up; segments marked with
+.Sq \&:
+always show it, regardless of this setting.
 .It Cm help
 Show this man page.
 Falls back to a synopsis if the man page is not installed.
@@ -184,8 +225,11 @@ One file per saved block.
 Plain text: a header comment followed by the block expression on one line.
 .It Pa ${XDG_CONFIG_HOME}/tanghulu/config
 Key=value configuration file.
-Currently supports one key:
+Supported keys:
 .Cm sound
+.Pq Ql on No or Ql off , default Ql on
+and
+.Cm popup
 .Pq Ql on No or Ql off , default Ql on .
 .El
 .Sh EXIT STATUS
@@ -221,7 +265,25 @@ Compose named blocks with inline expressions:
 See all saved blocks with their definitions:
 .Dl $ tanghulu list -v
 .Pp
+Run a 3-minute session without a pop-up or chime:
+.Dl $ tanghulu 3.
+.Pp
+Run 15 minutes labeled
+.Sq sesh
+with no pop-up or chime:
+.Dl $ tanghulu 15.=sesh
+.Pp
+Always show a pop-up after a 5-minute session regardless of the popup config:
+.Dl $ tanghulu 5:=sesh
+.Pp
+Expand a named block but suppress all its pop-ups:
+.Dl $ tanghulu primer.,15=sesh
+.Pp
 Turn off the chime:
 .Dl $ tanghulu config sound off
+.Pp
+Turn off pop-ups globally (can still be forced per-segment with
+.Sq \&: ) :
+.Dl $ tanghulu config popup off
 .Sh AUTHORS
 .An poiurewq
