@@ -15,7 +15,7 @@ TG_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tanghulu"
 TG_BLOCKS_DIR="$TG_CONFIG_DIR/blocks"
 TG_CONFIG_FILE="$TG_CONFIG_DIR/config"
 
-TG_RESERVED='add|list|delete|rename|redefine|help|config|-h|--help|-v|--version'
+TG_RESERVED='add|list|delete|rename|redefine|preview|help|config|-h|--help|-v|--version'
 TG_NAME_RE='^[A-Za-z][A-Za-z0-9_-]*$'
 TG_SOUND_FILE='/System/Library/Sounds/Glass.aiff'
 
@@ -29,6 +29,7 @@ tanghulu — run a string of timed sessions.
   tanghulu rename <old> <new>        rename a saved block
   tanghulu delete <name>             remove a saved block
   tanghulu list [-v]                 list saved blocks (-v shows definitions)
+  tanghulu preview <name>            show a named block's steps and totals
   tanghulu config [sound on|off]     show or toggle the transition chime
   tanghulu help                      show full documentation
 
@@ -398,7 +399,7 @@ tg_ding() {
 # Live 1Hz countdown on a single line. Labels are tracked for Ctrl-C breakdown.
 tg_countdown() {
     local mins=$1 label=${2-}
-    local label_key=${label:-default}
+    local label_key=${label:-(unlabeled)}
     local remaining=$((mins * 60))
     local header=""
     [[ -n $label ]] && header="[${label}] "
@@ -511,6 +512,70 @@ tg_cmd_list() {
     fi
 }
 
+tg_cmd_preview() {
+    (( $# >= 1 )) || tg_die "usage: tanghulu preview <name>"
+    local name=$1
+    tg_block_exists "$name" || tg_die "no such block: $name"
+    local def; def=$(tg_block_read "$name")
+    tg_parse "$def"
+
+    printf '%s  %s\n' "$name" "$def"
+
+    local i total=${#_tg_segs[@]}
+    # width for right-aligning step numbers
+    local step_w=${#total}
+    # width for right-aligning minutes
+    local max_m=0
+    for (( i=0; i<total; i++ )); do
+        local m=${_tg_segs[$i]%%:*}
+        (( m > max_m )) && max_m=$m
+    done
+    local min_w=${#max_m}
+
+    for (( i=0; i<total; i++ )); do
+        local seg=${_tg_segs[$i]}
+        local m=${seg%%:*} l=${seg#*:}
+        if [[ -n $l ]]; then
+            printf "  step %${step_w}d  %${min_w}dm  %s\n" "$((i+1))" "$m" "$l"
+        else
+            printf "  step %${step_w}d  %${min_w}dm\n" "$((i+1))" "$m"
+        fi
+    done
+
+    local total_mins=0
+    for (( i=0; i<total; i++ )); do
+        local m=${_tg_segs[$i]%%:*}
+        (( total_mins += m ))
+    done
+    printf '\ntotal: %dm\n' "$total_mins"
+
+    # Build label breakdown — only display if any segment has a label.
+    local label_keys=() label_mins=() has_labels=0
+    for (( i=0; i<total; i++ )); do
+        local seg=${_tg_segs[$i]}
+        local m=${seg%%:*} l=${seg#*:}
+        [[ -n $l ]] && has_labels=1
+        local key=${l:-(unlabeled)}
+        local idx=-1 j
+        for (( j=0; j<${#label_keys[@]}; j++ )); do
+            [[ ${label_keys[$j]} == "$key" ]] && { idx=$j; break; }
+        done
+        if (( idx < 0 )); then
+            label_keys+=("$key")
+            label_mins+=("$m")
+        else
+            (( label_mins[idx] += m ))
+        fi
+    done
+
+    if (( has_labels )); then
+        printf 'by label:\n'
+        for (( j=0; j<${#label_keys[@]}; j++ )); do
+            printf '  %s: %dm\n' "${label_keys[$j]}" "${label_mins[$j]}"
+        done
+    fi
+}
+
 tg_cmd_config() {
     local key=${1-} val=${2-}
     case "$key" in
@@ -569,6 +634,7 @@ main() {
         delete)   tg_cmd_delete "$@" ;;
         rename)   tg_cmd_rename "$@" ;;
         list)     tg_cmd_list "$@" ;;
+        preview)  tg_cmd_preview "$@" ;;
         config)   tg_cmd_config "$@" ;;
         *)
             tg_parse "$cmd"
