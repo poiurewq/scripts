@@ -19,7 +19,7 @@ _tanghulu() {
         done
     fi
 
-    local subs="add list delete rename redefine preview config help -h --help -v --version"
+    local subs="add a list l delete D rename rn redefine rd preview p config c help h -h --help -v --version"
 
     case $cword in
         1)
@@ -27,16 +27,16 @@ _tanghulu() {
             ;;
         2)
             case ${words[1]} in
-                delete|redefine|preview|rename)
+                delete|D|redefine|rd|preview|p|rename|rn)
                     COMPREPLY=( $(compgen -W "${names[*]}" -- "$cur") )
                     ;;
-                config)
+                config|c)
                     COMPREPLY=( $(compgen -W "sound" -- "$cur") )
                     ;;
             esac
             ;;
         3)
-            if [[ ${words[1]} == config && ${words[2]} == sound ]]; then
+            if [[ ${words[1]} == config || ${words[1]} == c ]] && [[ ${words[2]} == sound ]]; then
                 COMPREPLY=( $(compgen -W "on off" -- "$cur") )
             fi
             ;;

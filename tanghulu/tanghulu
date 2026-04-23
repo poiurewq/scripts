@@ -15,7 +15,7 @@ TG_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tanghulu"
 TG_BLOCKS_DIR="$TG_CONFIG_DIR/blocks"
 TG_CONFIG_FILE="$TG_CONFIG_DIR/config"
 
-TG_RESERVED='add|list|delete|rename|redefine|preview|help|config|-h|--help|-v|--version'
+TG_RESERVED='add|a|list|l|delete|D|rename|rn|redefine|rd|preview|p|help|h|config|c|-h|--help|-v|--version'
 TG_NAME_RE='^[A-Za-z][A-Za-z0-9_-]*$'
 TG_SOUND_FILE='/System/Library/Sounds/Glass.aiff'
 
@@ -24,14 +24,14 @@ tanghulu — run a string of timed sessions.
 
   tanghulu <block>                   run an ad-hoc block
   tanghulu <name>                    run a saved block
-  tanghulu add <name> <block>        save a named block
-  tanghulu redefine <name> <block>   replace a saved block
-  tanghulu rename <old> <new>        rename a saved block
-  tanghulu delete <name>             remove a saved block
-  tanghulu list [-v]                 list saved blocks (-v shows definitions)
-  tanghulu preview <name>            show a named block's steps and totals
-  tanghulu config [sound on|off]     show or toggle the transition chime
-  tanghulu help                      show full documentation
+  tanghulu add|a <name> <block>        save a named block
+  tanghulu redefine|rd <name> <block>  replace a saved block
+  tanghulu rename|rn <old> <new>       rename a saved block
+  tanghulu delete|D <name>             remove a saved block
+  tanghulu list|l [-v]                 list saved blocks (-v shows definitions)
+  tanghulu preview|p <name>            show a named block's steps and totals
+  tanghulu config|c [sound on|off]     show or toggle the transition chime
+  tanghulu help|h                      show full documentation
 
 Block grammar: N  N=LABEL  KxITEM  /ITEM,ITEM,.../  NAME  ITEM,ITEM,...
 EOF
@@ -607,7 +607,7 @@ main() {
     fi
 
     case "$cmd" in
-        help|-h|--help)
+        help|h|-h|--help)
             man tanghulu 2>/dev/null || {
                 local _self_dir; _self_dir="$(cd "$(dirname "$0")" && pwd)"
                 if [[ -f $_self_dir/tanghulu.1 ]]; then
@@ -629,13 +629,13 @@ main() {
     tg_upgrade_check
 
     case "$cmd" in
-        add)      tg_cmd_add "$@" ;;
-        redefine) tg_cmd_redefine "$@" ;;
-        delete)   tg_cmd_delete "$@" ;;
-        rename)   tg_cmd_rename "$@" ;;
-        list)     tg_cmd_list "$@" ;;
-        preview)  tg_cmd_preview "$@" ;;
-        config)   tg_cmd_config "$@" ;;
+        add|a)      tg_cmd_add "$@" ;;
+        redefine|rd) tg_cmd_redefine "$@" ;;
+        delete|D)   tg_cmd_delete "$@" ;;
+        rename|rn)  tg_cmd_rename "$@" ;;
+        list|l)     tg_cmd_list "$@" ;;
+        preview|p)  tg_cmd_preview "$@" ;;
+        config|c)   tg_cmd_config "$@" ;;
         *)
             tg_parse "$cmd"
             tg_run_parsed
