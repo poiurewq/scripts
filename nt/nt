@@ -15,6 +15,7 @@ uf=$(tput smul 2>/dev/null) || uf=''
 
 nt_template_name='nt_template'
 NT_VERSION="0.4.1"
+_nt_prefix=''
 
 # Regex patterns (stored in variables to prevent zsh backslash removal in =~)
 _nt_idx_pat='^([0-9]+(\.[0-9]+)*)([-_]|\.[^0-9]|$)'  # extract: index + boundary
@@ -86,6 +87,53 @@ nt_err() {
 # Utility functions
 #######################################################################
 
+nt_load_config() {
+	local config_file=".nt/config"
+	[[ -f "$config_file" ]] || return 0
+	local line key val
+	while IFS= read -r line; do
+		[[ "$line" =~ ^[[:space:]]*'#' ]] && continue
+		[[ "$line" =~ ^[[:space:]]*$ ]] && continue
+		[[ "$line" != *=* ]] && continue
+		key="${line%%=*}"
+		val="${line#*=}"
+		case "$key" in
+			prefix) _nt_prefix="$val" ;;
+		esac
+	done < "$config_file"
+}
+
+# Resolves the template file, migrating a legacy cwd nt_template.* to .nt/template.*
+# if no .nt/template.* exists yet. Sets _nt_template_file (empty = no template).
+# Returns 1 and prints an error if the template is ambiguous.
+_nt_template_file=''
+nt_resolve_template() {
+	_nt_template_file=''
+	local -a dotnt_templates cwd_templates
+	dotnt_templates=( .nt/template.*(N.) )
+	cwd_templates=( ${nt_template_name}.*(N.) )
+
+	if [[ ${#dotnt_templates[@]} -gt 1 ]]; then
+		nt_err "Too many template files in .nt/."
+		return 1
+	elif [[ ${#dotnt_templates[@]} -eq 1 ]]; then
+		_nt_template_file="${dotnt_templates[1]}"
+		return 0
+	fi
+
+	if [[ ${#cwd_templates[@]} -gt 1 ]]; then
+		nt_err "Too many nt template files in this folder."
+		return 1
+	elif [[ ${#cwd_templates[@]} -eq 1 ]]; then
+		local cwd_tmpl="${cwd_templates[1]}"
+		local ext="${cwd_tmpl##*.}"
+		mkdir -p .nt
+		\mv "$cwd_tmpl" ".nt/template.${ext}"
+		nt_err "Migrated ${cwd_tmpl} -> .nt/template.${ext}"
+		_nt_template_file=".nt/template.${ext}"
+	fi
+}
+
 nt_open() {
 	local app_or_cmd="$1"; shift
 	local -a file_list=("$@")
@@ -104,7 +152,8 @@ nt_open() {
 # e.g. "004.7-title.md" -> "004.7", "003-note.md" -> "003", "007.md" -> "007"
 extract_index() {
 	local f="$1"
-	if [[ "$f" =~ $_nt_idx_pat ]]; then
+	local stripped="${f#${_nt_prefix}}"
+	if [[ "$stripped" =~ $_nt_idx_pat ]]; then
 		printf '%s' "${match[1]}"
 	fi
 }
@@ -172,7 +221,11 @@ sort_docs_by_index() {
 # Returns 1 if no indexed documents exist.
 last_indexed_doc() {
 	local -a docs _lid_filtered
-	docs=( [[:digit:]]##*(N.) )
+	if [[ -n "$_nt_prefix" ]]; then
+		docs=( ${_nt_prefix}[[:digit:]]##*(N.) )
+	else
+		docs=( [[:digit:]]##*(N.) )
+	fi
 	_lid_filtered=()
 	local _lid_f
 	for _lid_f in "${docs[@]}"; do
@@ -249,7 +302,7 @@ find_doc_by_index() {
 	local normalized="${(j:.:)parts}"
 
 	local -a candidates
-	candidates=( ${normalized}*(N.) )
+	candidates=( ${_nt_prefix}${normalized}*(N.) )
 
 	local -a docs
 	local f file_idx
@@ -300,7 +353,7 @@ index_has_doc() {
 	done
 	local normalized="${(j:.:)parts}"
 	local -a candidates
-	candidates=( ${normalized}*(N.) )
+	candidates=( ${_nt_prefix}${normalized}*(N.) )
 	local f
 	for f in "${candidates[@]}"; do
 		[[ "$(extract_index "$f")" == "$normalized" ]] && return 0
@@ -408,6 +461,7 @@ cmd_help() {
 	printf '  nt R                open README.md\n'
 	printf '  nt C                open CLAUDE.md\n'
 	printf '  nt t                open template file\n'
+	printf '  nt config prefix S  set custom filename prefix (stored in .nt/config)\n'
 	printf '  nt v                print version (alias: version)\n'
 	printf '  nt util month       rename files: month names → 2-digit numbers\n'
 	printf '  nt util delim D     rename nt-indexed files to use delimiter D\n'
@@ -511,6 +565,7 @@ cmd_new() {
 		new_doc="${new_idx}"
 		new_title_raw=""
 	fi
+	new_doc="${_nt_prefix}${new_doc}"
 	(( _nt_consumed += _subopts_consumed )) || true
 
 	# Determine content source and extension
@@ -521,18 +576,12 @@ cmd_new() {
 		new_doc+=".${copy_ext}"
 		\cp "$copy_doc" "$new_doc"
 	else
-		local -a templates
-		templates=( ${nt_template_name}.*(N.) )
-		local template_count=${#templates[@]}
-		if [[ $template_count -eq 1 ]]; then
-			local template_file="${templates[1]}"
-			new_doc+=".${template_file##*.}"
+		nt_resolve_template || exit 5
+		if [[ -n "$_nt_template_file" ]]; then
+			new_doc+=".${_nt_template_file##*.}"
 			sed -e "s|%DATE|$(date '+%Y-%m-%d')|g" \
 				-e "s|%TITLE|${new_title_raw}|g" \
-				"$template_file" >> "$new_doc"
-		elif [[ $template_count -gt 1 ]]; then
-			printf "Too many nt template files in this folder.\n"
-			exit 5
+				"$_nt_template_file" >> "$new_doc"
 		else
 			local last_ext
 			if [[ -z "$last_doc" ]]; then
@@ -573,7 +622,11 @@ cmd_last() {
 		_nt_consumed=1
 		local nth="$1"
 		local -a all_docs _cl_filtered
-		all_docs=( [[:digit:]]##*(N.) )
+		if [[ -n "$_nt_prefix" ]]; then
+			all_docs=( ${_nt_prefix}[[:digit:]]##*(N.) )
+		else
+			all_docs=( [[:digit:]]##*(N.) )
+		fi
 		_cl_filtered=()
 		local _cl_f
 		for _cl_f in "${all_docs[@]}"; do
@@ -642,9 +695,9 @@ cmd_rename() {
 	try_doc_ext="$(get_extension "$try_doc" 2>/dev/null)" || try_doc_ext="${try_doc##*.}"
 	try_delim="$(get_delimiter "$try_doc")"
 	if [ -z "$try_delim" ]; then
-		new_doc="${try_idx}-${new_title}.${try_doc_ext}"
+		new_doc="${_nt_prefix}${try_idx}-${new_title}.${try_doc_ext}"
 	else
-		new_doc="${try_idx}${try_delim}${new_title}.${try_doc_ext}"
+		new_doc="${_nt_prefix}${try_idx}${try_delim}${new_title}.${try_doc_ext}"
 	fi
 	\mv "${try_doc}" "${new_doc}" \
 		&& printf '%s renamed to %s\n' "${try_doc}" "${new_doc}"
@@ -673,9 +726,9 @@ cmd_rename_last() {
 	last_delim="$(get_delimiter "$last_doc")"
 	last_ext="$(get_extension "$last_doc" 2>/dev/null)" || last_ext="${last_doc##*.}"
 	if [ -z "$last_delim" ]; then
-		new_doc="${last_idx}-${new_title}.${last_ext}"
+		new_doc="${_nt_prefix}${last_idx}-${new_title}.${last_ext}"
 	else
-		new_doc="${last_idx}${last_delim}${new_title}.${last_ext}"
+		new_doc="${_nt_prefix}${last_idx}${last_delim}${new_title}.${last_ext}"
 	fi
 	\mv "${last_doc}" "${new_doc}" \
 		&& printf '%s renamed to %s\n' "${last_doc}" "${new_doc}"
@@ -726,7 +779,7 @@ cmd_reindex() {
 		fi
 		local ri_file_idx
 		ri_file_idx="$(extract_index "$ri_doc")"
-		local ri_new_doc="${ri_norm_new}${ri_doc#${ri_file_idx}}"
+		local ri_new_doc="${_nt_prefix}${ri_norm_new}${ri_doc#${_nt_prefix}${ri_file_idx}}"
 		\mv "${ri_doc}" "${ri_new_doc}" \
 			&& printf '%s reindexed to %s\n' "${ri_doc}" "${ri_new_doc}"
 		return
@@ -859,7 +912,7 @@ cmd_reindex() {
 		index_has_doc "$_ri_si" || continue
 		_ri_doc="$(find_doc_by_index "$_ri_si")" || continue
 		_ri_file_idx="$(extract_index "$_ri_doc")"
-		_ri_new_doc="${_ri_ti}${_ri_doc#${_ri_file_idx}}"
+		_ri_new_doc="${_nt_prefix}${_ri_ti}${_ri_doc#${_nt_prefix}${_ri_file_idx}}"
 		\mv "${_ri_doc}" "${_ri_new_doc}" \
 			&& _ri_messages+=( "${_ri_doc} -> ${_ri_new_doc}" )
 	done
@@ -869,9 +922,17 @@ cmd_reindex() {
 cmd_activity() {
 	local -a nt_files _act_filtered
 	if [ "$1" = "ar" ]; then
-		nt_files=( **/[[:digit:]]##*(N.) )
+		if [[ -n "$_nt_prefix" ]]; then
+			nt_files=( **/${_nt_prefix}[[:digit:]]##*(N.) )
+		else
+			nt_files=( **/[[:digit:]]##*(N.) )
+		fi
 	else
-		nt_files=( [[:digit:]]##*(N.) )
+		if [[ -n "$_nt_prefix" ]]; then
+			nt_files=( ${_nt_prefix}[[:digit:]]##*(N.) )
+		else
+			nt_files=( [[:digit:]]##*(N.) )
+		fi
 	fi
 	_act_filtered=()
 	local _act_f
@@ -911,7 +972,11 @@ cmd_subtree() {
 	local _st_depth=${#_st_parts[@]}
 
 	local -a _st_all_docs _st_matches _st_filtered
-	_st_all_docs=( [[:digit:]]##*(N.) )
+	if [[ -n "$_nt_prefix" ]]; then
+		_st_all_docs=( ${_nt_prefix}[[:digit:]]##*(N.) )
+	else
+		_st_all_docs=( [[:digit:]]##*(N.) )
+	fi
 	_st_filtered=()
 	local _st_f _st_idx
 	for _st_f in "${_st_all_docs[@]}"; do
@@ -964,18 +1029,43 @@ cmd_claude() {
 }
 
 cmd_template() {
-	local -a templates
-	templates=( ${nt_template_name}.*(N.) )
-	local template_count=${#templates[@]}
-	if [[ $template_count -eq 1 ]]; then
-		files_to_open+=( "${templates[1]}" )
-	elif [[ $template_count -gt 1 ]]; then
-		printf "Too many nt template files in this folder.\n"
-		exit 5
+	nt_resolve_template || exit 5
+	if [[ -n "$_nt_template_file" ]]; then
+		files_to_open+=( "$_nt_template_file" )
 	else
-		touch "${nt_template_name}.md"
-		files_to_open+=( "${nt_template_name}.md" )
+		mkdir -p .nt
+		touch ".nt/template.md"
+		files_to_open+=( ".nt/template.md" )
 	fi
+}
+
+cmd_config() {
+	if [[ "$#" -lt 2 ]]; then
+		nt_err "usage: nt config prefix <string>"
+		exit 1
+	fi
+	case "$1" in
+		prefix)
+			local new_prefix="$2"
+			mkdir -p .nt
+			local config_file=".nt/config"
+			local tmp_file
+			tmp_file="$(mktemp)"
+			{
+				if [[ -f "$config_file" ]]; then
+					grep -v '^prefix=' "$config_file" || true
+				fi
+				printf 'prefix=%s\n' "$new_prefix"
+			} > "$tmp_file"
+			\mv "$tmp_file" "$config_file"
+			printf 'config: prefix=%s\n' "$new_prefix"
+			;;
+		*)
+			nt_err "Unknown config key: $1"
+			nt_err "usage: nt config prefix <string>"
+			exit 2
+			;;
+	esac
 }
 
 # Scans cwd and renames files containing month names to their 2-digit numeric
@@ -1033,7 +1123,11 @@ cmd_util_ext() {
 	local new_ext="$1"
 
 	local -a all_docs
-	all_docs=( [[:digit:]]##*(N.) )
+	if [[ -n "$_nt_prefix" ]]; then
+		all_docs=( ${_nt_prefix}[[:digit:]]##*(N.) )
+	else
+		all_docs=( [[:digit:]]##*(N.) )
+	fi
 
 	local f idx cur_ext stem newf renamed=0
 	for f in "${all_docs[@]}"; do
@@ -1064,7 +1158,11 @@ cmd_util_delim() {
 	local new_delim="$1"
 
 	local -a all_docs
-	all_docs=( [[:digit:]]##*(N.) )
+	if [[ -n "$_nt_prefix" ]]; then
+		all_docs=( ${_nt_prefix}[[:digit:]]##*(N.) )
+	else
+		all_docs=( [[:digit:]]##*(N.) )
+	fi
 
 	local f idx cur_delim rest newf renamed=0
 	for f in "${all_docs[@]}"; do
@@ -1074,8 +1172,8 @@ cmd_util_delim() {
 		cur_delim="$(get_delimiter "$f")"
 		[[ -z "$cur_delim" ]] && continue
 		[[ "$cur_delim" == "$new_delim" ]] && continue
-		rest="${f#${idx}${cur_delim}}"
-		newf="${idx}${new_delim}${rest}"
+		rest="${f#${_nt_prefix}${idx}${cur_delim}}"
+		newf="${_nt_prefix}${idx}${new_delim}${rest}"
 		\mv "$f" "$newf"
 		printf '%s -> %s\n' "$f" "$newf"
 		(( renamed++ )) || true
@@ -1095,6 +1193,7 @@ if [ "$#" -eq 0 ]; then
 fi
 
 nt_platform_detect
+nt_load_config
 typeset -aU files_to_open=()
 _nt_consumed=0
 _nt_greedy=0
@@ -1176,6 +1275,9 @@ while [ "$#" -gt 0 ]; do
 		ri|reindex|-ri|--reindex)
 			shift; cmd_reindex "$@"; break ;;
 
+		config)
+			shift; cmd_config "$@"; break ;;
+
 		util)
 			shift
 			if [[ "$#" -eq 0 ]]; then
@@ -1223,7 +1325,11 @@ while [ "$#" -gt 0 ]; do
 					exit 2
 				fi
 				local -a _range_all_docs _range_matches _range_filtered
-				_range_all_docs=( [[:digit:]]##*(N.) )
+				if [[ -n "$_nt_prefix" ]]; then
+					_range_all_docs=( ${_nt_prefix}[[:digit:]]##*(N.) )
+				else
+					_range_all_docs=( [[:digit:]]##*(N.) )
+				fi
 				_range_filtered=()
 				local _range_f _range_idx
 				for _range_f in "${_range_all_docs[@]}"; do

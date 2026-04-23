@@ -101,14 +101,14 @@ test_claude_hyphen_form() {
 
 test_template_opens() {
     nt_test__create_file "nt_template.md" "template"
-    nt_test__assert_output_contains "nt_template.md" \
+    nt_test__assert_output_contains ".nt/template.md" \
         env NT_EDITOR="echo" "$NT_SCRIPT" t
 }
 
 test_template_creates_if_missing() {
     env NT_EDITOR="true" "$NT_SCRIPT" t >/dev/null 2>&1
-    nt_test__assert_file_exists "$NT_TEST_DIR/nt_template.md" \
-        "t should create nt_template.md if missing"
+    nt_test__assert_file_exists "$NT_TEST_DIR/.nt/template.md" \
+        "t should create .nt/template.md if missing"
 }
 
 test_template_not_found_exits_zero() {
@@ -117,7 +117,7 @@ test_template_not_found_exits_zero() {
 
 test_template_hyphen_form() {
     nt_test__create_file "nt_template.md" "template"
-    nt_test__assert_output_contains "nt_template.md" \
+    nt_test__assert_output_contains ".nt/template.md" \
         env NT_EDITOR="echo" "$NT_SCRIPT" -t
 }
 
