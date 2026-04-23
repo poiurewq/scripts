@@ -1,0 +1,64 @@
+#compdef tanghulu
+
+_tanghulu_blocks() {
+    local blocks_dir="${XDG_CONFIG_HOME:-$HOME/.config}/tanghulu/blocks"
+    local -a names
+    local f
+    if [[ -d $blocks_dir ]]; then
+        for f in "$blocks_dir"/*.block(N); do
+            names+=("${f:t:r}")
+        done
+    fi
+    _describe -t blocks 'saved block' names
+}
+
+_tanghulu() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->cmd' \
+        '*:: :->args'
+
+    case $state in
+        cmd)
+            local -a subs
+            subs=(
+                'add:save a named block'
+                'redefine:replace a saved block'
+                'rename:rename a saved block'
+                'delete:remove a saved block'
+                'list:list saved blocks'
+                'preview:show a named block'"'"'s steps and totals'
+                'config:show or toggle the transition chime'
+                'help:show the man page'
+                '--help:show the man page'
+                '-h:show the man page'
+                '--version:show version'
+                '-v:show version'
+            )
+            _alternative \
+                'subcommands:subcommand:_describe -t subcommands subcommand subs' \
+                'blocks:block:_tanghulu_blocks'
+            ;;
+        args)
+            case $words[1] in
+                delete|redefine|preview)
+                    (( CURRENT == 2 )) && _tanghulu_blocks
+                    ;;
+                rename)
+                    (( CURRENT == 2 )) && _tanghulu_blocks
+                    ;;
+                config)
+                    if (( CURRENT == 2 )); then
+                        _values 'config key' 'sound[toggle transition chime]'
+                    elif (( CURRENT == 3 )) && [[ $words[2] == sound ]]; then
+                        _values 'sound state' 'on' 'off'
+                    fi
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_tanghulu "$@"
