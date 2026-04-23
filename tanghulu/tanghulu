@@ -30,10 +30,11 @@ tanghulu — run a string of timed sessions.
   tanghulu delete|D <name>             remove a saved block
   tanghulu list|l [-v]                 list saved blocks (-v shows definitions)
   tanghulu preview|p <name>            show a named block's steps and totals
-  tanghulu config|c [sound on|off]     show or toggle the transition chime
-  tanghulu help|h                      show full documentation
+  tanghulu config|c [sound|popup on|off]  show or toggle settings
+  tanghulu help|h                         show full documentation
 
-Block grammar: N  N=LABEL  KxITEM  /ITEM,ITEM,.../  NAME  ITEM,ITEM,...
+Block grammar: N[.|:]  N[.|:]=LABEL  KxITEM  /ITEM,ITEM,.../  NAME[.|:]  ITEM,...
+  . = no popup, no sound   : = always popup, sound follows config
 EOF
 
 #####################################################################
@@ -186,9 +187,12 @@ tg_block_list() {
 #   block = item ("," item)*
 #   item  = [NUMBER "x"] atom
 #   atom  = seg | group | name
-#   seg   = NUMBER ["=" LABEL]
+#   seg   = NUMBER ["." | ":"] ["=" LABEL]
 #   group = "/" block "/"
-#   name  = IDENT          (looked up in blocks_dir; late-bound)
+#   name  = IDENT ["." | ":"]  (looked up in blocks_dir; late-bound)
+#
+# Modifier: "." suppresses popup+sound; ":" forces popup (sound follows config)
+# Segments are stored as "minutes:label:modifier" (modifier is ".", ":", or "").
 #
 # NUMBER = [0-9]+
 # IDENT / LABEL = [A-Za-z_][A-Za-z0-9_-]*
@@ -294,25 +298,38 @@ _tg_parse_atom() {
     esac
 }
 
-# seg = NUMBER ["=" LABEL]
+# seg = NUMBER ["." | ":"] ["=" LABEL]
 _tg_parse_seg() {
     _tg_consume_while '^[0-9]$'
     local n=$_tg_RET
     [[ -n $n ]] || _tg_error "expected number"
     (( n > 0 )) || _tg_error "minutes must be positive"
+    local modifier=""
+    local _nc=${_tg_src:$_tg_pos:1}
+    if [[ $_nc == "." || $_nc == ":" ]]; then
+        modifier=$_nc
+        (( _tg_pos++ ))
+    fi
     local label=""
     if [[ ${_tg_src:$_tg_pos:1} == "=" ]]; then
         (( _tg_pos++ ))
         _tg_parse_ident
         label=$_tg_RET
     fi
-    _tg_segs+=("$n:$label")
+    _tg_segs+=("$n:$label:$modifier")
 }
 
-# name reference: IDENT → look up saved block and splice in its segments
+# name reference: IDENT ["." | ":"] → look up saved block and splice in its segments
 _tg_parse_name_ref() {
     _tg_parse_ident
     local name=$_tg_RET
+    # Check for name-level modifier (consumed from outer source before context switch)
+    local modifier=""
+    local _nc=${_tg_src:$_tg_pos:1}
+    if [[ $_nc == "." || $_nc == ":" ]]; then
+        modifier=$_nc
+        (( _tg_pos++ ))
+    fi
     # Cycle check
     local s
     for s in "${_tg_stack_names[@]+"${_tg_stack_names[@]}"}"; do
@@ -323,6 +340,7 @@ _tg_parse_name_ref() {
     sub="${sub// /}"
     # Save/restore parser position + source.
     local save_src=$_tg_src save_pos=$_tg_pos
+    local before=${#_tg_segs[@]}
     _tg_src=$sub; _tg_pos=0
     _tg_stack_names+=("$name")
     _tg_parse_block
@@ -330,6 +348,17 @@ _tg_parse_name_ref() {
     # Pop stack
     _tg_stack_names=("${_tg_stack_names[@]:0:$((${#_tg_stack_names[@]}-1))}")
     _tg_src=$save_src; _tg_pos=$save_pos
+    # Apply name-level modifier to all newly-added segments (overrides per-seg modifiers)
+    if [[ -n $modifier ]]; then
+        local _idx
+        for (( _idx=before; _idx<${#_tg_segs[@]}; _idx++ )); do
+            local _s=${_tg_segs[$_idx]}
+            local _sm=${_s%%:*}
+            local _srest=${_s#*:}
+            local _sl=${_srest%%:*}
+            _tg_segs[$_idx]="${_sm}:${_sl}:${modifier}"
+        done
+    fi
 }
 
 # Public entry point — fills _tg_segs.
@@ -357,7 +386,8 @@ TG_LABEL_SECS=()
 tg_msg() {
     local i=$1
     local cur=${_tg_segs[$i]}
-    local cur_m=${cur%%:*} cur_l=${cur#*:}
+    local cur_m=${cur%%:*}
+    local cur_l=${cur#*:}; cur_l=${cur_l%%:*}
     local part1
     if [[ -n $cur_l ]]; then
         part1="${cur_m}m of ${cur_l} finished."
@@ -370,7 +400,8 @@ tg_msg() {
         part2="all finished."
     else
         local nxt=${_tg_segs[$next]}
-        local nxt_m=${nxt%%:*} nxt_l=${nxt#*:}
+        local nxt_m=${nxt%%:*}
+        local nxt_l=${nxt#*:}; nxt_l=${nxt_l%%:*}
         if [[ -n $nxt_l ]]; then
             part2="${nxt_m}m of ${nxt_l} begins."
         else
@@ -443,16 +474,30 @@ tg_on_interrupt() {
 
 tg_run_parsed() {
     trap tg_on_interrupt INT
+    local popup_cfg; popup_cfg=$(tg_config_get popup on)
     local i total=${#_tg_segs[@]}
     for (( i=0; i<total; i++ )); do
         TG_CURRENT_SEG=$i
         local seg=${_tg_segs[$i]}
-        local m=${seg%%:*} l=${seg#*:}
+        local m=${seg%%:*}
+        local rest=${seg#*:}
+        local l=${rest%%:*}
+        local flag=${rest#*:}
         tg_countdown "$m" "$l"
         local msg; msg=$(tg_msg "$i")
         printf '%s\n' "$msg"
-        tg_popup "$msg"
-        tg_ding
+        case "$flag" in
+            '.')
+                ;;
+            ':')
+                tg_popup "$msg"
+                tg_ding
+                ;;
+            *)
+                [[ $popup_cfg == on ]] && tg_popup "$msg"
+                tg_ding
+                ;;
+        esac
     done
 }
 
@@ -534,7 +579,8 @@ tg_cmd_preview() {
 
     for (( i=0; i<total; i++ )); do
         local seg=${_tg_segs[$i]}
-        local m=${seg%%:*} l=${seg#*:}
+        local m=${seg%%:*}
+        local l=${seg#*:}; l=${l%%:*}
         if [[ -n $l ]]; then
             printf "  step %${step_w}d  %${min_w}dm  %s\n" "$((i+1))" "$m" "$l"
         else
@@ -553,7 +599,8 @@ tg_cmd_preview() {
     local label_keys=() label_mins=() has_labels=0
     for (( i=0; i<total; i++ )); do
         local seg=${_tg_segs[$i]}
-        local m=${seg%%:*} l=${seg#*:}
+        local m=${seg%%:*}
+        local l=${seg#*:}; l=${l%%:*}
         [[ -n $l ]] && has_labels=1
         local key=${l:-(unlabeled)}
         local idx=-1 j
@@ -579,7 +626,11 @@ tg_cmd_preview() {
 tg_cmd_config() {
     local key=${1-} val=${2-}
     case "$key" in
-        ''|sound)
+        '')
+            printf 'sound=%s\n' "$(tg_config_get sound on)"
+            printf 'popup=%s\n' "$(tg_config_get popup on)"
+            ;;
+        sound)
             if [[ -z $val ]]; then
                 printf 'sound=%s\n' "$(tg_config_get sound on)"
                 return
@@ -587,6 +638,15 @@ tg_cmd_config() {
             [[ $val == on || $val == off ]] || tg_die "sound must be 'on' or 'off'"
             tg_config_set sound "$val"
             printf 'sound=%s\n' "$val"
+            ;;
+        popup)
+            if [[ -z $val ]]; then
+                printf 'popup=%s\n' "$(tg_config_get popup on)"
+                return
+            fi
+            [[ $val == on || $val == off ]] || tg_die "popup must be 'on' or 'off'"
+            tg_config_set popup "$val"
+            printf 'popup=%s\n' "$val"
             ;;
         *)
             tg_die "unknown config key: $key"
