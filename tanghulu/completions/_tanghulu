@@ -49,9 +49,7 @@ _tanghulu() {
 
     case $state in
         cmd)
-            _alternative \
-                'subcommands:subcommand:_tanghulu_subs' \
-                'blocks:block:_tanghulu_blocks'
+            _tanghulu_blocks
             ;;
         args)
             case $words[1] in
