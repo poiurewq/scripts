@@ -14,7 +14,7 @@ uf=$(tput smul 2>/dev/null) || uf=''
 #######################################################################
 
 nt_template_name='nt_template'
-NT_VERSION="0.4.1"
+NT_VERSION="0.5.0"
 _nt_prefix=''
 
 # Regex patterns (stored in variables to prevent zsh backslash removal in =~)
