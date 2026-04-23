@@ -16,13 +16,21 @@ _tanghulu_subs() {
     local -a subs
     subs=(
         'add:save a named block'
+        'a:save a named block'
         'redefine:replace a saved block'
+        'rd:replace a saved block'
         'rename:rename a saved block'
+        'rn:rename a saved block'
         'delete:remove a saved block'
+        'D:remove a saved block'
         'list:list saved blocks'
+        'l:list saved blocks'
         'preview:show a named block'"'"'s steps and totals'
+        'p:show a named block'"'"'s steps and totals'
         'config:show or toggle the transition chime'
+        'c:show or toggle the transition chime'
         'help:show the man page'
+        'h:show the man page'
         '--help:show the man page'
         '-h:show the man page'
         '--version:show version'
@@ -47,13 +55,13 @@ _tanghulu() {
             ;;
         args)
             case $words[1] in
-                delete|redefine|preview)
+                delete|D|redefine|rd|preview|p)
                     (( CURRENT == 2 )) && _tanghulu_blocks
                     ;;
-                rename)
+                rename|rn)
                     (( CURRENT == 2 )) && _tanghulu_blocks
                     ;;
-                config)
+                config|c)
                     if (( CURRENT == 2 )); then
                         _values 'config key' 'sound[toggle transition chime]'
                     elif (( CURRENT == 3 )) && [[ $words[2] == sound ]]; then
