@@ -1,6 +1,6 @@
-.Dd April 23, 2026
+.Dd April 24, 2026
 .Dt TANGHULU 1
-.Os "tanghulu 0.1.7"
+.Os "tanghulu 0.2.0"
 .Sh NAME
 .Nm tanghulu
 .Nd run a string of timed focus/rest sessions
@@ -183,15 +183,30 @@ Show this man page.
 Falls back to a synopsis if the man page is not installed.
 .El
 .Sh RUNTIME BEHAVIOUR
-When a block is running,
+When a block is running on an interactive terminal,
 .Nm
-displays a live countdown on a single terminal line that updates every second:
+displays a live three-line timeline that updates each second:
+a horizontal bar proportional to each segment's duration,
+a marker
+.Pq Sq \(ua
+that advances along the bar as time elapses,
+and a status line showing the current step, label, time remaining,
+total elapsed, total duration, and a hint about the
+.Sq a
+keybinding:
 .Bd -literal -offset indent
-[focus] 24:37 remaining...
+[#######x.....................]
+       ^
+step 1/2  [focus] 17:23 left | 7m elapsed | 30m total | 'a' to append
 .Ed
 .Pp
-At the end of each segment it clears the countdown and prints
-a transition message:
+When stdout or stdin is not a tty,
+.Nm
+falls back to a silent sleep loop with no draw
+.Pq script-friendly mode .
+.Pp
+At the end of each segment the timeline is cleared and a transition
+message is printed above the next segment's bar:
 .Bd -literal -offset indent
 25m of focus finished. 5m of break begins.
 .Ed
@@ -201,6 +216,25 @@ It also raises a macOS System Events dialog with the same message
 and plays
 .Pa /System/Library/Sounds/Glass.aiff
 if the chime is enabled.
+.Ss Appending segments mid-run
+While a block is running, press
+.Sy a
+to pause the countdown and append additional segments to the in-flight
+session.
+.Nm
+prompts:
+.Bd -literal -offset indent
+append block (blank to cancel):
+.Ed
+.Pp
+Type any block expression
+.Pq same grammar as on the command line
+and press
+.Sy Enter .
+The new segments are appended after all currently-queued segments and
+the timeline redraws to reflect the wider total.
+A blank line or a parse error cancels the append and resumes the original
+session without losing time.
 .Pp
 Pressing
 .Sy Ctrl-C
