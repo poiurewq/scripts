@@ -10,7 +10,7 @@ set -u
 # Constants
 #####################################################################
 
-TANGHULU_VERSION="0.1.7"
+TANGHULU_VERSION="0.2.0"
 TG_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tanghulu"
 TG_BLOCKS_DIR="$TG_CONFIG_DIR/blocks"
 TG_CONFIG_FILE="$TG_CONFIG_DIR/config"
@@ -381,6 +381,11 @@ TG_ELAPSED_SEC=0
 TG_CURRENT_SEG=0
 TG_LABEL_KEYS=()
 TG_LABEL_SECS=()
+TG_SAVED_STTY=""
+TG_SEG_START_EPOCH=0
+TG_FORCE_REDRAW=0
+TG_TIMELINE_ACTIVE=0
+_tg_try_segs=()
 
 # Build the transition message at the end of segment i (0-based).
 tg_msg() {
@@ -427,35 +432,295 @@ tg_ding() {
     ( afplay "$TG_SOUND_FILE" >/dev/null 2>&1 ) & disown
 }
 
-# Live 1Hz countdown on a single line. Labels are tracked for Ctrl-C breakdown.
-tg_countdown() {
-    local mins=$1 label=${2-}
-    local label_key=${label:-(unlabeled)}
-    local remaining=$((mins * 60))
-    local header=""
-    [[ -n $label ]] && header="[${label}] "
-    while (( remaining > 0 )); do
-        local mm=$((remaining / 60)) ss=$((remaining % 60))
-        printf '\r\033[K%s%02d:%02d remaining...' "$header" "$mm" "$ss"
-        sleep 1
-        (( remaining-- ))
-        (( TG_ELAPSED_SEC++ ))
-        local _idx=-1 _i
-        for (( _i=0; _i<${#TG_LABEL_KEYS[@]}; _i++ )); do
-            [[ ${TG_LABEL_KEYS[$_i]} == "$label_key" ]] && { _idx=$_i; break; }
-        done
-        if (( _idx < 0 )); then
-            TG_LABEL_KEYS+=("$label_key")
-            TG_LABEL_SECS+=(1)
+#####################################################################
+# Timeline rendering
+#
+# Layout (3 reserved lines, refreshed in place during a run):
+#   [██████▓░░░│░░░░│░░░░░░░│░░░░]
+#               ▲
+#   step 2/8  [focus] 12:47 left · 37m elapsed · 120m total · 'a' to append
+#
+# Cursor invariant maintained by tg_draw_timeline and tg_clear_timeline:
+# cursor sits at column 0 of the bar line both before and after each call.
+#####################################################################
+
+# Compute bar width from terminal columns (handles non-interactive shells
+# where COLUMNS may be 0; see workspace CLAUDE.md gotcha).
+tg_bar_width() {
+    local cols=$(( ${COLUMNS:-0} > 0 ? ${COLUMNS:-0} : 80 ))
+    local bw=$(( cols - 2 ))
+    (( bw < 20 )) && bw=20
+    printf '%d' "$bw"
+}
+
+# Render the bar (single line, no trailing newline) for the current _tg_segs.
+# Args: $1 = current seg idx (-1 for none / preview), $2 = sec into current seg.
+tg_render_bar() {
+    local cur_idx=${1:--1}
+    local cur_sec=${2:-0}
+    local bar_w; bar_w=$(tg_bar_width)
+    local n=${#_tg_segs[@]}
+
+    local i secs=() total_secs=0
+    for (( i=0; i<n; i++ )); do
+        local m=${_tg_segs[$i]%%:*}
+        secs[i]=$(( m * 60 ))
+        (( total_secs += secs[i] ))
+    done
+    (( total_secs > 0 )) || { printf '[]'; return; }
+
+    # boundaries[i] = exclusive end column of segment i (1..bar_w)
+    local cum=0 boundaries=()
+    for (( i=0; i<n; i++ )); do
+        (( cum += secs[i] ))
+        boundaries[i]=$(( cum * bar_w / total_secs ))
+    done
+
+    # Mark boundary cells (last cell of each segment except the final one).
+    local is_b=()
+    for (( i=0; i<bar_w; i++ )); do is_b[i]=0; done
+    for (( i=0; i<n-1; i++ )); do
+        local b=$(( boundaries[i] - 1 ))
+        (( b >= 0 && b < bar_w )) && is_b[b]=1
+    done
+
+    local marker_pos=-1
+    if (( cur_idx >= 0 )); then
+        local completed=$cur_sec
+        for (( i=0; i<cur_idx; i++ )); do (( completed += secs[i] )); done
+        marker_pos=$(( completed * bar_w / total_secs ))
+        (( marker_pos >= bar_w )) && marker_pos=$(( bar_w - 1 ))
+    fi
+
+    local out="[" c
+    for (( c=0; c<bar_w; c++ )); do
+        if (( is_b[c] )); then
+            out+="│"
+        elif (( marker_pos >= 0 && c < marker_pos )); then
+            out+="█"
+        elif (( marker_pos >= 0 && c == marker_pos )); then
+            out+="▓"
         else
-            (( TG_LABEL_SECS[_idx]++ ))
+            out+="░"
         fi
     done
-    printf '\r\033[K'
+    out+="]"
+    printf '%s' "$out"
+}
+
+# Marker line ('▲' positioned under the current cell). Empty if no marker.
+tg_render_marker() {
+    local cur_idx=$1 cur_sec=$2
+    (( cur_idx < 0 )) && return
+    local bar_w; bar_w=$(tg_bar_width)
+    local n=${#_tg_segs[@]}
+    local i secs=() total_secs=0
+    for (( i=0; i<n; i++ )); do
+        local m=${_tg_segs[$i]%%:*}
+        secs[i]=$(( m * 60 ))
+        (( total_secs += secs[i] ))
+    done
+    (( total_secs > 0 )) || return
+    local completed=$cur_sec
+    for (( i=0; i<cur_idx; i++ )); do (( completed += secs[i] )); done
+    local marker_pos=$(( completed * bar_w / total_secs ))
+    (( marker_pos >= bar_w )) && marker_pos=$(( bar_w - 1 ))
+    # column 1 (after '[') + marker_pos
+    printf '%*s▲' $(( marker_pos + 1 )) ''
+}
+
+# Status line: step N/T, label, time remaining in seg, totals, hint.
+tg_render_status() {
+    local cur_idx=$1 cur_sec=$2
+    local total=${#_tg_segs[@]}
+    local seg=${_tg_segs[$cur_idx]}
+    local m=${seg%%:*}
+    local rest=${seg#*:}
+    local l=${rest%%:*}
+    local seg_total=$(( m * 60 ))
+    local rem=$(( seg_total - cur_sec ))
+    (( rem < 0 )) && rem=0
+    local rmm=$(( rem / 60 )) rss=$(( rem % 60 ))
+    local elapsed_total=$(( TG_ELAPSED_SEC ))
+    local em=$(( elapsed_total / 60 ))
+    local total_mins=0 _i
+    for (( _i=0; _i<total; _i++ )); do
+        local mm=${_tg_segs[$_i]%%:*}
+        (( total_mins += mm ))
+    done
+    local label_part=""
+    [[ -n $l ]] && label_part="[$l] "
+    local s
+    s=$(printf "step %d/%d  %s%02d:%02d left · %dm elapsed · %dm total · 'a' to append" \
+        $((cur_idx+1)) "$total" "$label_part" "$rmm" "$rss" "$em" "$total_mins")
+    # Truncate to terminal width to avoid wraparound that breaks redraw.
+    local cols=$(( ${COLUMNS:-0} > 0 ? ${COLUMNS:-0} : 80 ))
+    if (( ${#s} > cols )); then
+        s="${s:0:$cols}"
+    fi
+    printf '%s' "$s"
+}
+
+# Draw the 3-line timeline in place. Cursor invariant: starts and ends at
+# column 0 of the bar line.
+tg_draw_timeline() {
+    local cur_idx=$1 cur_sec=$2
+    local bar marker status
+    bar=$(tg_render_bar "$cur_idx" "$cur_sec")
+    marker=$(tg_render_marker "$cur_idx" "$cur_sec")
+    status=$(tg_render_status "$cur_idx" "$cur_sec")
+    # \033[K after each line clears any leftover from a longer previous draw.
+    # Trailing \033[2A returns cursor to bar-line column 0 for the next refresh.
+    printf '\r%s\033[K\n%s\033[K\n%s\033[K\r\033[2A' "$bar" "$marker" "$status"
+    TG_TIMELINE_ACTIVE=1
+}
+
+# Wipe the 3 reserved lines; cursor ends at column 0 of the (now empty)
+# bar line. Caller may then printf normal output at that line.
+tg_clear_timeline() {
+    (( TG_TIMELINE_ACTIVE )) || return 0
+    printf '\r\033[K\n\033[K\n\033[K\033[2A'
+    TG_TIMELINE_ACTIVE=0
+}
+
+#####################################################################
+# Append-during-run
+#####################################################################
+
+# Subshell-isolated parse: on success, populates _tg_try_segs with the new
+# segments. Returns 1 on parse error (parser writes its message to stderr).
+tg_try_parse() {
+    local def=$1
+    _tg_try_segs=()
+    local tmp; tmp=$(mktemp) || return 1
+    if (
+        tg_parse "$def"
+        local s
+        for s in "${_tg_segs[@]}"; do printf '%s\n' "$s"; done > "$tmp"
+    ); then
+        local line
+        while IFS= read -r line; do
+            _tg_try_segs+=("$line")
+        done < "$tmp"
+        rm -f "$tmp"
+        return 0
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
+tg_label_acc() {
+    local key=$1 secs=$2
+    local _i _idx=-1
+    for (( _i=0; _i<${#TG_LABEL_KEYS[@]}; _i++ )); do
+        [[ ${TG_LABEL_KEYS[$_i]} == "$key" ]] && { _idx=$_i; break; }
+    done
+    if (( _idx < 0 )); then
+        TG_LABEL_KEYS+=("$key")
+        TG_LABEL_SECS+=("$secs")
+    else
+        (( TG_LABEL_SECS[_idx] += secs ))
+    fi
+}
+
+tg_restore_tty() {
+    if [[ -n $TG_SAVED_STTY ]]; then
+        stty "$TG_SAVED_STTY" 2>/dev/null
+        TG_SAVED_STTY=""
+    fi
+}
+
+# Handle the 'a' keypress: pause timer, prompt for a block, splice on success.
+tg_handle_append() {
+    local pause_start; pause_start=$(date +%s)
+    tg_clear_timeline
+    tg_restore_tty
+    printf "append block (blank to cancel): "
+    local new_def=""
+    IFS= read -r new_def || new_def=""
+    if [[ -n $new_def ]]; then
+        if tg_try_parse "$new_def"; then
+            local s
+            for s in "${_tg_try_segs[@]}"; do _tg_segs+=("$s"); done
+            printf 'appended: %s\n' "$new_def"
+        else
+            printf 'append failed; resuming\n'
+        fi
+    else
+        printf 'append canceled; resuming\n'
+    fi
+    [[ -n $TG_SAVED_STTY ]] || TG_SAVED_STTY=$(stty -g 2>/dev/null) || TG_SAVED_STTY=""
+    [[ -n $TG_SAVED_STTY ]] && stty -echo -icanon time 0 min 0 2>/dev/null || true
+    local pause_end; pause_end=$(date +%s)
+    local pause_dur=$(( pause_end - pause_start ))
+    TG_SEG_START_EPOCH=$(( TG_SEG_START_EPOCH + pause_dur ))
+    TG_FORCE_REDRAW=1
+}
+
+#####################################################################
+# Countdown
+#####################################################################
+
+# Wall-clock countdown for segment seg_idx. In tty mode, draws and refreshes
+# the timeline and polls for keypresses (currently 'a' = append). In non-tty
+# mode (pipe/redirect), falls back to a simple sleep loop with no draw.
+tg_countdown() {
+    local seg_idx=$1
+    local seg=${_tg_segs[$seg_idx]}
+    local mins=${seg%%:*}
+    local rest=${seg#*:}
+    local label=${rest%%:*}
+    local seg_total=$(( mins * 60 ))
+    local label_key=${label:-(unlabeled)}
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        local remaining=$seg_total
+        while (( remaining > 0 )); do
+            sleep 1
+            (( remaining-- ))
+            (( TG_ELAPSED_SEC++ ))
+            tg_label_acc "$label_key" 1
+        done
+        return
+    fi
+
+    TG_SEG_START_EPOCH=$(date +%s)
+    local last_in_seg=0
+    tg_draw_timeline "$seg_idx" 0
+
+    while :; do
+        local now; now=$(date +%s)
+        local elapsed_in_seg=$(( now - TG_SEG_START_EPOCH ))
+        (( elapsed_in_seg > seg_total )) && elapsed_in_seg=$seg_total
+        local delta=$(( elapsed_in_seg - last_in_seg ))
+        if (( delta > 0 )); then
+            (( TG_ELAPSED_SEC += delta ))
+            tg_label_acc "$label_key" "$delta"
+            last_in_seg=$elapsed_in_seg
+        fi
+        (( elapsed_in_seg >= seg_total )) && break
+
+        if (( TG_FORCE_REDRAW )); then
+            tg_clear_timeline
+            tg_draw_timeline "$seg_idx" "$elapsed_in_seg"
+            TG_FORCE_REDRAW=0
+        else
+            tg_draw_timeline "$seg_idx" "$elapsed_in_seg"
+        fi
+
+        local key=""
+        IFS= read -r -s -n 1 -t 1 key 2>/dev/null || true
+        if [[ $key == "a" ]]; then
+            tg_handle_append
+        fi
+    done
+    tg_clear_timeline
 }
 
 tg_on_interrupt() {
-    printf '\r\033[K'
+    tg_clear_timeline 2>/dev/null
+    tg_restore_tty
     local total=${#_tg_segs[@]}
     local cur=$((TG_CURRENT_SEG + 1))
     local mm=$((TG_ELAPSED_SEC / 60)) ss=$((TG_ELAPSED_SEC % 60))
@@ -473,17 +738,24 @@ tg_on_interrupt() {
 }
 
 tg_run_parsed() {
+    if [[ -t 0 && -t 1 ]]; then
+        TG_SAVED_STTY=$(stty -g 2>/dev/null) || TG_SAVED_STTY=""
+        if [[ -n $TG_SAVED_STTY ]]; then
+            stty -echo -icanon time 0 min 0 2>/dev/null || true
+            trap 'tg_restore_tty' EXIT
+            trap 'TG_FORCE_REDRAW=1' WINCH
+        fi
+    fi
     trap tg_on_interrupt INT
+
     local popup_cfg; popup_cfg=$(tg_config_get popup on)
-    local i total=${#_tg_segs[@]}
-    for (( i=0; i<total; i++ )); do
+    local i=0
+    while (( i < ${#_tg_segs[@]} )); do
         TG_CURRENT_SEG=$i
         local seg=${_tg_segs[$i]}
-        local m=${seg%%:*}
         local rest=${seg#*:}
-        local l=${rest%%:*}
         local flag=${rest#*:}
-        tg_countdown "$m" "$l"
+        tg_countdown "$i"
         local msg; msg=$(tg_msg "$i")
         printf '%s\n' "$msg"
         case "$flag" in
@@ -498,7 +770,9 @@ tg_run_parsed() {
                 tg_ding
                 ;;
         esac
+        (( i++ ))
     done
+    tg_restore_tty
 }
 
 #####################################################################
@@ -565,6 +839,7 @@ tg_cmd_preview() {
     tg_parse "$def"
 
     printf '%s  %s\n' "$name" "$def"
+    printf '\n%s\n\n' "$(tg_render_bar)"
 
     local i total=${#_tg_segs[@]}
     # width for right-aligning step numbers
