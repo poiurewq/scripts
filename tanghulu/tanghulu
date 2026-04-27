@@ -444,10 +444,19 @@ tg_ding() {
 # cursor sits at column 0 of the bar line both before and after each call.
 #####################################################################
 
-# Compute bar width from terminal columns (handles non-interactive shells
-# where COLUMNS may be 0; see workspace CLAUDE.md gotcha).
+# Query terminal width. bash does not set COLUMNS in non-interactive mode,
+# so use stty size (TIOCGWINSZ) which works from any tty context.
+tg_term_cols() {
+    local sz cols
+    sz=$(stty size 2>/dev/null)
+    cols=${sz##* }
+    (( cols > 0 )) || cols=80
+    printf '%d' "$cols"
+}
+
+# Compute bar width from terminal columns.
 tg_bar_width() {
-    local cols=$(( ${COLUMNS:-0} > 0 ? ${COLUMNS:-0} : 80 ))
+    local cols; cols=$(tg_term_cols)
     local bw=$(( cols - 2 ))
     (( bw < 20 )) && bw=20
     printf '%d' "$bw"
@@ -458,7 +467,7 @@ tg_bar_width() {
 tg_render_bar() {
     local cur_idx=${1:--1}
     local cur_sec=${2:-0}
-    local bar_w; bar_w=$(tg_bar_width)
+    local bar_w=${3:-$(tg_bar_width)}
     local n=${#_tg_segs[@]}
 
     local i secs=() total_secs=0
@@ -512,7 +521,7 @@ tg_render_bar() {
 tg_render_marker() {
     local cur_idx=$1 cur_sec=$2
     (( cur_idx < 0 )) && return
-    local bar_w; bar_w=$(tg_bar_width)
+    local bar_w=${3:-$(tg_bar_width)}
     local n=${#_tg_segs[@]}
     local i secs=() total_secs=0
     for (( i=0; i<n; i++ )); do
@@ -531,7 +540,8 @@ tg_render_marker() {
 
 # Status line: step N/T, label, time remaining in seg, totals, hint.
 tg_render_status() {
-    local cur_idx=$1 cur_sec=$2
+    local cur_idx=$1 cur_sec=$2 cols=${3:-0}
+    (( cols > 0 )) || cols=$(tg_term_cols)
     local total=${#_tg_segs[@]}
     local seg=${_tg_segs[$cur_idx]}
     local m=${seg%%:*}
@@ -554,7 +564,6 @@ tg_render_status() {
     s=$(printf "step %d/%d  %s%02d:%02d left · %dm elapsed · %dm total · 'a' to append" \
         $((cur_idx+1)) "$total" "$label_part" "$rmm" "$rss" "$em" "$total_mins")
     # Truncate to terminal width to avoid wraparound that breaks redraw.
-    local cols=$(( ${COLUMNS:-0} > 0 ? ${COLUMNS:-0} : 80 ))
     if (( ${#s} > cols )); then
         s="${s:0:$cols}"
     fi
@@ -566,9 +575,12 @@ tg_render_status() {
 tg_draw_timeline() {
     local cur_idx=$1 cur_sec=$2
     local bar marker status
-    bar=$(tg_render_bar "$cur_idx" "$cur_sec")
-    marker=$(tg_render_marker "$cur_idx" "$cur_sec")
-    status=$(tg_render_status "$cur_idx" "$cur_sec")
+    local cols; cols=$(tg_term_cols)
+    local bar_w=$(( cols - 2 ))
+    (( bar_w < 20 )) && bar_w=20
+    bar=$(tg_render_bar "$cur_idx" "$cur_sec" "$bar_w")
+    marker=$(tg_render_marker "$cur_idx" "$cur_sec" "$bar_w")
+    status=$(tg_render_status "$cur_idx" "$cur_sec" "$cols")
     # \033[K after each line clears any leftover from a longer previous draw.
     # Trailing \033[2A returns cursor to bar-line column 0 for the next refresh.
     printf '\r%s\033[K\n%s\033[K\n%s\033[K\r\033[2A' "$bar" "$marker" "$status"
