@@ -3488,7 +3488,11 @@ clk__view_render_bars() {
         if (bar_len < 1 && secs > 0) bar_len = 1
         bar = ""
         for (b = 0; b < bar_len; b++) bar = bar "█"
-        printf "%s  %s %dm\n", label, bar, int(mins)
+        if (int(mins) > 600) {
+            printf "%s  %s %.1fh\n", label, bar, mins / 60
+        } else {
+            printf "%s  %s %dm\n", label, bar, int(mins)
+        }
 
         vals[++n] = mins
         sum += mins
