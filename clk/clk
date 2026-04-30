@@ -20,7 +20,7 @@ CLK_FMT_RAW=0
 CLK_FMT_DONE_TAG_WIDTH=0
 CLK_TAB='	'
 CLK_LOG_VERSION_MARKER='#clk-v3'
-CLK_VERSION="0.4.9"
+CLK_VERSION="0.4.10"
 
 # Detect OS once; all platform differences are isolated in helper functions.
 CLK_OS="$(uname)"
