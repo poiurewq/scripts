@@ -136,7 +136,10 @@ is expected, the accepted forms are: a plain integer
 .Pq e.g. Ql 45m ,
 or
 .Ql XhYm
-.Pq e.g. Ql 1h30m .
+.Pq e.g. Ql 1h30m ,
+or
+.Ql Xh Ym
+.Pq e.g. Ql 1h 30m .
 The suffix letters are case-insensitive.
 .Pp
 User-facing output displays timestamps in a simplified form:
@@ -344,6 +347,7 @@ Set active time directly.
 .Ar duration
 may be an integer (minutes) or a string like
 .Dq 1h30m ,
+.Dq 1h 30m ,
 .Dq 2h ,
 or
 .Dq 45m .

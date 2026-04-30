@@ -90,7 +90,7 @@ Utilities:
 <unit>       = hour(s) | day(s) | week(s) | month(s) | year(s)
 <timestamp>  = HH:MM | HH:MM:SS | mm-dd | mm-dd HH:MM | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
                mm-dd and mm-dd HH:MM are interpreted as this year. Timestamps in the future are rejected.
-<duration>   = <minutes> | Xh | Ym | XhYm    (e.g., 90, 2h, 45m, 1h30m)
+<duration>   = <minutes> | Xh | Ym | XhYm | Xh Ym    (e.g., 90, 2h, 45m, 1h30m, 1h 30m)
 EOF
 
 #####################################################################
@@ -583,7 +583,7 @@ clk__validate_positive_int() {
 }
 
 # clk__parse_duration(str) → sets CLK_PARSED_DURATION_SECS
-# Accepts: plain integer (minutes), "Xh", "Ym", "XhYm" (case-insensitive).
+# Accepts: plain integer (minutes), "Xh", "Ym", "XhYm", "Xh Ym" (case-insensitive).
 # Dies on invalid input.
 CLK_PARSED_DURATION_SECS=0
 clk__parse_duration() {
@@ -593,9 +593,9 @@ clk__parse_duration() {
         CLK_PARSED_DURATION_SECS=$(( input * 60 ))
         return 0
     fi
-    # Duration string: Xh, Ym, XhYm (case-insensitive)
+    # Duration string: Xh, Ym, XhYm, "Xh Ym" (case-insensitive; spaces stripped)
     local lower
-    lower="$(printf '%s' "$input" | tr 'HM' 'hm')"
+    lower="$(printf '%s' "$input" | tr 'HM' 'hm' | tr -d ' ')"
     local hours=0 mins=0
     if printf '%s' "$lower" | grep -Eq '^[0-9]+h[0-9]+m$'; then
         hours="$(printf '%s' "$lower" | grep -o '^[0-9]*')"
@@ -605,7 +605,7 @@ clk__parse_duration() {
     elif printf '%s' "$lower" | grep -Eq '^[0-9]+m$'; then
         mins="$(printf '%s' "$lower" | tr -d 'm')"
     else
-        clk__die 1 "Invalid duration '$input'. Expected: minutes (e.g. 90), Xh, Ym, or XhYm (e.g. 1h30m)."
+        clk__die 1 "Invalid duration '$input'. Expected: minutes (e.g. 90), Xh, Ym, or XhYm (e.g. 1h30m, 1h 30m)."
     fi
     CLK_PARSED_DURATION_SECS=$(( hours * 3600 + mins * 60 ))
 }
@@ -2331,7 +2331,7 @@ clk_do_edit_interactive() {
                             tag)   prompt_label="New tag: " ;;
                             start) prompt_label="New start (HH:MM or yyyy-mm-ddTHH:MM): " ;;
                             end)   prompt_label="New end (HH:MM or yyyy-mm-ddTHH:MM): " ;;
-                            active) prompt_label="New active time (e.g. 90, 1h30m): " ;;
+                            active) prompt_label="New active time (e.g. 90, 1h30m, 1h 30m): " ;;
                             break) prompt_label="New break time (e.g. 15, 1h): " ;;
                             on)    prompt_label="New description: " ;;
                             pause) prompt_label="New pause time (HH:MM or 'clear'): " ;;
@@ -3488,7 +3488,7 @@ clk__view_render_bars() {
         if (bar_len < 1 && secs > 0) bar_len = 1
         bar = ""
         for (b = 0; b < bar_len; b++) bar = bar "█"
-        if (int(mins) > 600) {
+        if (int(mins) > 480) {
             printf "%s  %s %.1fh\n", label, bar, mins / 60
         } else {
             printf "%s  %s %dm\n", label, bar, int(mins)
