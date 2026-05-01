@@ -310,6 +310,41 @@ test_edit_start_date_only_timestamp() {
 }
 
 #####################################################################
+# Tests — clk edit start --adjust end
+#####################################################################
+
+test_edit_start_adjust_end_shifts_both() {
+    # Session: start=09:00, end=10:00, length=3600, break=0
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Move start to 09:30 --adjust end → delta=+30m, so end becomes 10:30; length unchanged
+    "$CLK_SCRIPT" edit -1 start 2026-01-01T09:30:00 --adjust end >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:30:00	2026-01-01T10:30:00	work	3600	0'
+}
+
+test_edit_start_adjust_end_negative_delta() {
+    # Move start earlier: delta=-30m, end shifts earlier too; length unchanged
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" edit -1 start 2026-01-01T08:30:00 --adjust end >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T08:30:00	2026-01-01T09:30:00	work	3600	0'
+}
+
+test_edit_start_adjust_end_with_break() {
+    # Session with break: ensure length_secs and break_secs are both preserved
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" edit -1 break 10 >/dev/null 2>&1
+    # Now: start=09:00, end=10:00, length=3000, break=600
+    "$CLK_SCRIPT" edit -1 start 2026-01-01T10:00:00 --adjust end >/dev/null 2>&1
+    # delta=+60m → end=11:00; length and break unchanged
+    clk_test__assert_log_line 1 '^done	2026-01-01T10:00:00	2026-01-01T11:00:00	work	3000	600'
+}
+
+test_edit_start_adjust_end_invalid_on_active() {
+    # --adjust end not valid on active sessions
+    "$CLK_SCRIPT" in work >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" edit 1 start 2026-01-01T09:00:00 --adjust end
+}
+
+#####################################################################
 # Tests — clk edit end --adjust
 #####################################################################
 
@@ -337,6 +372,21 @@ test_edit_end_adjust_break_negative() {
     "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
     # length=3600, break=0. If we move end to 09:30 --adjust break → break = -1800
     clk_test__assert_exit 1 "$CLK_SCRIPT" edit -1 end 2026-01-01T09:30:00 --adjust break
+}
+
+test_edit_end_adjust_start_shifts_both() {
+    # Session: start=09:00, end=10:00, length=3600, break=0
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    # Move end to 10:30 --adjust start → delta=+30m, start becomes 09:30; length unchanged
+    "$CLK_SCRIPT" edit -1 end 2026-01-01T10:30:00 --adjust start >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T09:30:00	2026-01-01T10:30:00	work	3600	0'
+}
+
+test_edit_end_adjust_start_negative_delta() {
+    # Move end earlier: delta=-30m, start shifts earlier; length unchanged
+    "$CLK_SCRIPT" add work for 60 at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" edit -1 end 2026-01-01T09:30:00 --adjust start >/dev/null 2>&1
+    clk_test__assert_log_line 1 '^done	2026-01-01T08:30:00	2026-01-01T09:30:00	work	3600	0'
 }
 
 #####################################################################
@@ -467,10 +517,18 @@ CLK_TESTS_EDIT=(
     test_edit_end_simplified_timestamp
     test_edit_start_date_only_timestamp
 
+    # edit start --adjust end
+    test_edit_start_adjust_end_shifts_both
+    test_edit_start_adjust_end_negative_delta
+    test_edit_start_adjust_end_with_break
+    test_edit_start_adjust_end_invalid_on_active
+
     # edit end --adjust
     test_edit_end_adjust_active_default
     test_edit_end_adjust_break
     test_edit_end_adjust_break_negative
+    test_edit_end_adjust_start_shifts_both
+    test_edit_end_adjust_start_negative_delta
 
     # edit active (new field)
     test_edit_active_adjust_start
