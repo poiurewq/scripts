@@ -54,10 +54,13 @@
 .Bro Cm edit | Cm e Brc
 .br
 .Nm
-.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm start | Cm pause | Cm on Brc Ar value
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm pause | Cm on Brc Ar value
 .br
 .Nm
-.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm end Ar timestamp Op Fl -adjust Bro Cm active | Cm break Brc
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm start Ar timestamp Op Fl -adjust Cm end
+.br
+.Nm
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm end Ar timestamp Op Fl -adjust Bro Cm active | Cm break | Cm start Brc
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm active | Cm break Brc Ar duration Op Fl -adjust Bro Cm start | Cm end | Cm break | Cm active Brc
@@ -330,10 +333,13 @@ should absorb the change.
 Requires a terminal.
 .It Cm edit Bro Fl Ar n | Ar n Brc Cm tag Ar new-tag
 Change the tag of the specified record.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm start Ar timestamp
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm start Ar timestamp Op Fl -adjust Cm end
 Change the start time.
-Recalculates length on completed records.
-.It Cm edit Bro Fl Ar n | Ar n Brc Cm end Ar timestamp Op Fl -adjust Cm active | Cm break
+On completed records, recalculates active time by default.
+With
+.Fl -adjust Cm end ,
+shifts the end time by the same delta so total session duration (active + break) is preserved.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm end Ar timestamp Op Fl -adjust Bro Cm active | Cm break | Cm start Brc
 Change the end time.
 Only valid on completed records.
 By default
@@ -342,6 +348,9 @@ recalculates active time.
 With
 .Fl -adjust Cm break ,
 keeps active time fixed and recalculates break time.
+With
+.Fl -adjust Cm start ,
+shifts the start time by the same delta so total session duration (active + break) is preserved.
 .It Cm edit Bro Fl Ar n | Ar n Brc Cm active Ar duration Fl -adjust Cm start | Cm end | Cm break
 Set active time directly.
 .Ar duration

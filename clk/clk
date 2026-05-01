@@ -61,8 +61,9 @@ Record management:
 
 Editing:
     edit | e                                              (interactive)
-    edit | e (-<n> | <n>) {tag|start|pause|on} <value>
-    edit | e (-<n> | <n>) {end} <timestamp> [--adjust active|break]
+    edit | e (-<n> | <n>) {tag|pause|on} <value>
+    edit | e (-<n> | <n>) {start} <timestamp> [--adjust end]
+    edit | e (-<n> | <n>) {end} <timestamp> [--adjust active|break|start]
     edit | e (-<n> | <n>) {active|break} <duration> [--adjust ...]
     edit | e (-<n> | <n>) delete
 
@@ -2180,14 +2181,26 @@ clk__tui_adjust_menu() {
     local field="$1" status="$2"
 
     case "$field" in
+        start)
+            printf '  Adjust: shift [e]nd too (preserve duration), or [k]eep end fixed (recalculate duration)? ' >/dev/tty
+            local key
+            key="$(clk__tui_read_key)"
+            printf '\n' >/dev/tty
+            case "$key" in
+                e) CLK_TUI_ADJUST="end" ;;
+                k) CLK_TUI_ADJUST="" ;;
+                *) return 1 ;;
+            esac
+            ;;
         end)
-            printf '  Adjust: [a]ctive time or [b]reak time? ' >/dev/tty
+            printf '  Adjust: [a]ctive time, [b]reak time, or shift [s]tart too (preserve duration)? ' >/dev/tty
             local key
             key="$(clk__tui_read_key)"
             printf '\n' >/dev/tty
             case "$key" in
                 a) CLK_TUI_ADJUST="active" ;;
                 b) CLK_TUI_ADJUST="break" ;;
+                s) CLK_TUI_ADJUST="start" ;;
                 *) return 1 ;;
             esac
             ;;
@@ -2340,9 +2353,10 @@ clk_do_edit_interactive() {
                         if clk__tui_prompt "$prompt_label"; then
                             edit_value="$CLK_TUI_INPUT"
 
-                            # Smart adjustment prompts for end, active, break
+                            # Smart adjustment prompts for start (done only), end, active, break
                             local needs_adjust=0
                             case "$edit_field" in
+                                start) [ "$rec_status" = "done" ] && needs_adjust=1 ;;
                                 end|active|break) needs_adjust=1 ;;
                             esac
 
@@ -2478,18 +2492,30 @@ clk_do_edit() {
             [ -n "$value" ] || clk__die 1 "Missing timestamp for 'edit ${signed_n} start <timestamp>'."
             clk__validate_timestamp "$value"
             value="$CLK_VALIDATED_TS"
-            local new_start_epoch
+            local new_start_epoch old_start_epoch
+            old_start_epoch="$(clk__to_epoch "$start_ts")"
             new_start_epoch="$(clk__to_epoch "$value")"
             if [ "$status" = "done" ]; then
-                local end_epoch
-                end_epoch="$(clk__to_epoch "$end_ts")"
-                if [ "$new_start_epoch" -gt "$end_epoch" ]; then
-                    clk__die 1 "Start time ${value} is after end time ${end_ts}."
+                if [ "${adjust_mode:-}" = "end" ]; then
+                    local delta=$(( new_start_epoch - old_start_epoch ))
+                    local old_end_epoch
+                    old_end_epoch="$(clk__to_epoch "$end_ts")"
+                    end_ts="$(clk__from_epoch "$(( old_end_epoch + delta ))")"
+                elif [ -z "${adjust_mode:-}" ]; then
+                    local end_epoch
+                    end_epoch="$(clk__to_epoch "$end_ts")"
+                    if [ "$new_start_epoch" -gt "$end_epoch" ]; then
+                        clk__die 1 "Start time ${value} is after end time ${end_ts}."
+                    fi
+                    length_secs=$(( end_epoch - new_start_epoch - break_secs ))
+                    if [ "$length_secs" -lt 0 ]; then
+                        clk__die 1 "Active time would be negative with start ${value} and break $(clk__fmt_duration "$break_secs")."
+                    fi
+                else
+                    clk__die 1 "Invalid --adjust '${adjust_mode}' for start. Expected: end."
                 fi
-                length_secs=$(( end_epoch - new_start_epoch - break_secs ))
-                if [ "$length_secs" -lt 0 ]; then
-                    clk__die 1 "Active time would be negative with start ${value} and break $(clk__fmt_duration "$break_secs")."
-                fi
+            elif [ -n "${adjust_mode:-}" ]; then
+                clk__die 1 "--adjust is not valid for start on an active session."
             fi
             clk__save_undo
             start_ts="$value"
@@ -2503,29 +2529,38 @@ clk_do_edit() {
             [ -n "$value" ] || clk__die 1 "Missing timestamp for 'edit ${signed_n} end <timestamp>'."
             clk__validate_timestamp "$value"
             value="$CLK_VALIDATED_TS"
-            local new_end_epoch start_epoch
+            local new_end_epoch old_end_epoch start_epoch
             new_end_epoch="$(clk__to_epoch "$value")"
+            old_end_epoch="$(clk__to_epoch "$end_ts")"
             start_epoch="$(clk__to_epoch "$start_ts")"
-            if [ "$new_end_epoch" -lt "$start_epoch" ]; then
-                clk__die 1 "End time ${value} is before start time ${start_ts}."
-            fi
-            local span=$(( new_end_epoch - start_epoch ))
             : "${adjust_mode:=active}"
             case "$adjust_mode" in
-                active)
-                    length_secs=$(( span - break_secs ))
-                    if [ "$length_secs" -lt 0 ]; then
-                        clk__die 1 "Active time would be negative with end ${value} and break $(clk__fmt_duration "$break_secs")."
-                    fi
+                start)
+                    local delta=$(( new_end_epoch - old_end_epoch ))
+                    start_ts="$(clk__from_epoch "$(( start_epoch + delta ))")"
                     ;;
-                break)
-                    break_secs=$(( span - length_secs ))
-                    if [ "$break_secs" -lt 0 ]; then
-                        clk__die 1 "Break time would be negative with end ${value} and active $(clk__fmt_duration "$length_secs")."
+                active|break)
+                    if [ "$new_end_epoch" -lt "$start_epoch" ]; then
+                        clk__die 1 "End time ${value} is before start time ${start_ts}."
                     fi
+                    local span=$(( new_end_epoch - start_epoch ))
+                    case "$adjust_mode" in
+                        active)
+                            length_secs=$(( span - break_secs ))
+                            if [ "$length_secs" -lt 0 ]; then
+                                clk__die 1 "Active time would be negative with end ${value} and break $(clk__fmt_duration "$break_secs")."
+                            fi
+                            ;;
+                        break)
+                            break_secs=$(( span - length_secs ))
+                            if [ "$break_secs" -lt 0 ]; then
+                                clk__die 1 "Break time would be negative with end ${value} and active $(clk__fmt_duration "$length_secs")."
+                            fi
+                            ;;
+                    esac
                     ;;
                 *)
-                    clk__die 1 "Invalid --adjust '${adjust_mode}' for end. Expected: active, break."
+                    clk__die 1 "Invalid --adjust '${adjust_mode}' for end. Expected: active, break, start."
                     ;;
             esac
             clk__save_undo
