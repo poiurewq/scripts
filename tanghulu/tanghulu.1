@@ -118,13 +118,20 @@ and
 .Ar K
 are positive integers.
 .Ar LABEL
-and
+must match
+.Ql [A-Za-z_][A-Za-z0-9_-]* .
 .Ar NAME
 must match
-.Ql [A-Za-z_][A-Za-z0-9_-]*
-and must not be reserved keywords
+.Ql [A-Za-z0-9_][A-Za-z0-9_-]*
+and must not be a reserved keyword
 .Pq see
 .Sx SUBCOMMANDS .
+A digit-leading
+.Ar NAME
+must contain at least one non-digit character and must not begin with a
+digit run immediately followed by
+.Sq x
+.Pq which would be parsed as a repeat count .
 .Ss Subcommands
 .Bl -tag -width indent
 .It Ar block

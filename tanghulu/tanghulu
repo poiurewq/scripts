@@ -16,7 +16,7 @@ TG_BLOCKS_DIR="$TG_CONFIG_DIR/blocks"
 TG_CONFIG_FILE="$TG_CONFIG_DIR/config"
 
 TG_RESERVED='add|a|list|l|delete|D|rename|rn|redefine|rd|preview|p|help|h|config|c|-h|--help|-v|--version'
-TG_NAME_RE='^[A-Za-z][A-Za-z0-9_-]*$'
+TG_NAME_RE='^[A-Za-z0-9][A-Za-z0-9_-]*$'
 TG_SOUND_FILE='/System/Library/Sounds/Glass.aiff'
 
 read -r -d '' TG_SYNOPSIS << 'EOF' || true
@@ -106,7 +106,13 @@ tg_upgrade_check() {
 tg_is_reserved() { [[ "$1" =~ ^($TG_RESERVED)$ ]]; }
 
 tg_valid_name() {
-    [[ "$1" =~ $TG_NAME_RE ]] && ! tg_is_reserved "$1"
+    [[ "$1" =~ $TG_NAME_RE ]] || return 1
+    tg_is_reserved "$1" && return 1
+    # Digit-leading names that clash with block grammar are unreachable as refs.
+    # Pure integers are parsed as segs; [0-9]+x prefix is consumed as repeat count.
+    [[ "$1" =~ ^[0-9]+$ ]] && return 1
+    [[ "$1" =~ ^[0-9]+x ]] && return 1
+    return 0
 }
 
 tg_ensure_dirs() { mkdir -p "$TG_BLOCKS_DIR"; }
@@ -236,6 +242,16 @@ _tg_parse_ident() {
     _tg_RET="${_tg_src:$s:$((_tg_pos - s))}"
 }
 
+# Like _tg_parse_ident but accepts a leading digit (for digit-leading block names).
+_tg_parse_name_ident() {
+    local first=${_tg_src:$_tg_pos:1}
+    [[ $first =~ ^[A-Za-z0-9_]$ ]] || _tg_error "expected identifier"
+    local s=$_tg_pos
+    (( _tg_pos++ ))
+    _tg_consume_while '^[A-Za-z0-9_-]$'
+    _tg_RET="${_tg_src:$s:$((_tg_pos - s))}"
+}
+
 # block = item ("," item)*
 _tg_parse_block() {
     _tg_parse_item
@@ -284,7 +300,16 @@ _tg_parse_atom() {
             (( _tg_pos++ ))
             ;;
         [0-9])
-            _tg_parse_seg
+            # Peek past leading digits: alpha/_/- after the run means a name ref.
+            local _save=$_tg_pos
+            _tg_consume_while '^[0-9]$'
+            local _peek=${_tg_src:$_tg_pos:1}
+            _tg_pos=$_save
+            if [[ $_peek =~ ^[A-Za-z_-]$ ]]; then
+                _tg_parse_name_ref
+            else
+                _tg_parse_seg
+            fi
             ;;
         [A-Za-z_])
             _tg_parse_name_ref
@@ -321,7 +346,7 @@ _tg_parse_seg() {
 
 # name reference: IDENT ["." | ":"] → look up saved block and splice in its segments
 _tg_parse_name_ref() {
-    _tg_parse_ident
+    _tg_parse_name_ident
     local name=$_tg_RET
     # Check for name-level modifier (consumed from outer source before context switch)
     local modifier=""
@@ -795,7 +820,7 @@ tg_cmd_add() {
     (( $# >= 2 )) || tg_die "usage: tanghulu add <name> <block>"
     (( $# > 2 )) && tg_die "extra args — did you forget to quote the block? e.g. tanghulu add $1 '<block>'"
     local name=$1 def=$2
-    tg_valid_name "$name" || tg_die "invalid name (must match [A-Za-z][A-Za-z0-9_-]* and not be a reserved keyword): $name"
+    tg_valid_name "$name" || tg_die "invalid name (must start with a letter or non-clashing digit, match [A-Za-z0-9][A-Za-z0-9_-]*, and not be a reserved keyword): $name"
     tg_block_exists "$name" && tg_die "block '$name' already exists (use 'redefine' to change)"
     tg_parse "$def"    # validate
     tg_block_write "$name" "$def"
