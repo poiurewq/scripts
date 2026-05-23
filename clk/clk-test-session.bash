@@ -488,6 +488,84 @@ test_lifecycle_concurrent_sessions() {
 }
 
 #####################################################################
+# clk cancel (integration)
+#####################################################################
+
+test_cancel_removes_active() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" cancel work >/dev/null 2>&1
+    local count
+    count="$(awk -F'\t' '/^[^#]/ && NF>0' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "0" "$count" "cancel removes active record"
+}
+
+test_cancel_implicit_tag() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" cancel
+}
+
+test_cancel_output() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    local out
+    out="$("$CLK_SCRIPT" cancel 2>&1)"
+    clk_test__assert_output_contains "Cancelled" printf '%s' "$out" &&
+    clk_test__assert_output_contains "work" printf '%s' "$out"
+}
+
+test_cancel_preserves_done_records() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" out work at 2026-01-01T10:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in work at 2026-01-01T11:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" cancel work >/dev/null 2>&1
+    local count
+    count="$(awk -F'\t' '$1=="done"' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$count" "cancel preserves done records"
+}
+
+test_cancel_no_active() {
+    clk_test__assert_exit 5 "$CLK_SCRIPT" cancel
+}
+
+test_cancel_wrong_tag() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 5 "$CLK_SCRIPT" cancel nope
+}
+
+test_cancel_ambiguous_requires_tag() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    clk_test__assert_exit 1 "$CLK_SCRIPT" cancel
+}
+
+test_cancel_selects_correct_tag() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" in play at 2026-01-01T09:30:00 >/dev/null 2>&1
+    "$CLK_SCRIPT" cancel play >/dev/null 2>&1
+    local count_active count_work
+    count_active="$(awk -F'\t' '$1=="active"' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    count_work="$(awk -F'\t' '$1=="active" && $4=="work"' "$CLK_TEST_DIR/clk/clk.tsv" | wc -l | tr -d ' ')"
+    clk_test__assert_equals "1" "$count_active" "cancel leaves one active session" &&
+    clk_test__assert_equals "1" "$count_work" "cancel removes the correct tag"
+}
+
+test_cancel_creates_undo() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    \rm -f "${CLK_TEST_DIR}/clk/clk.tsv.undo"
+    "$CLK_SCRIPT" cancel >/dev/null 2>&1
+    if [ ! -f "${CLK_TEST_DIR}/clk/clk.tsv.undo" ]; then
+        printf 'FAIL: cancel should create .undo\n'
+        CLK_TEST_FAIL=$(( CLK_TEST_FAIL + 1 ))
+        return 1
+    fi
+    CLK_TEST_PASS=$(( CLK_TEST_PASS + 1 ))
+}
+
+test_cancel_alias_c() {
+    "$CLK_SCRIPT" in work at 2026-01-01T09:00:00 >/dev/null 2>&1
+    clk_test__assert_exit 0 "$CLK_SCRIPT" c
+}
+
+#####################################################################
 # Test list
 #####################################################################
 
@@ -549,6 +627,18 @@ CLK_TESTS_SESSION=(
     test_show_dash_n_out_of_range
     test_show_n_out_of_range
     test_show_dash_1
+
+    # clk cancel (integration)
+    test_cancel_removes_active
+    test_cancel_implicit_tag
+    test_cancel_output
+    test_cancel_preserves_done_records
+    test_cancel_no_active
+    test_cancel_wrong_tag
+    test_cancel_ambiguous_requires_tag
+    test_cancel_selects_correct_tag
+    test_cancel_creates_undo
+    test_cancel_alias_c
 
     # core lifecycle (end-to-end)
     test_lifecycle_in_out_last

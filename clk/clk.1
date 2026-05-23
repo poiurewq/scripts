@@ -18,6 +18,9 @@
 .Cm out Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
+.Bro Cm cancel | Cm c Brc Op Ar tag
+.br
+.Nm
 .Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
@@ -214,6 +217,16 @@ it overrides any description set at clock-in.
 If the session is currently paused, the pause is finalized
 .Pq pause duration added to break time
 before computing the session length.
+.It Bro Cm cancel | Cm c Brc Op Ar tag
+Discard an active session entirely.
+No done record is written \(em the session is simply removed from the log.
+If exactly one session is active,
+.Ar tag
+may be omitted.
+If multiple sessions are active,
+.Ar tag
+is required.
+The operation is undoable.
 .It Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 End one session and start another atomically.
 The switch timestamp is both the end time of the old session and the
