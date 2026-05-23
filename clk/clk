@@ -45,6 +45,7 @@ Core workflow:
     in <tag> [minus <duration> | at <timestamp>] [on <description>]
     in-focus | I <tag> [minus <duration> | at <timestamp>] [on <description>]
     out [<tag>] [minus <duration> | at <timestamp>] [on <description>]
+    cancel | c [<tag>]
     switch <new-tag> [from <old-tag>] [minus <duration> | at <timestamp>] [on <description>]
     pause | p [<tag>] [minus <duration> | at <timestamp>]
     resume | r [<tag>] [minus <duration> | at <timestamp>]
@@ -1793,6 +1794,20 @@ clk_do_extend() {
     total_str="$(clk__fmt_duration "$new_length_secs")"
     printf '\nExtended session in\n  %s\n  by %s (new total: %s)\n  new end: %s\n\n' \
         "$tag" "$ext_str" "$total_str" "$(clk__fmt_ts_display "$new_end_ts")"
+}
+
+# --- clk_do_cancel ---
+# clk cancel [<tag>]
+# Discards an active session entirely — no done record is written.
+clk_do_cancel() {
+    local tag="${1:-}"
+    clk__require_active_tag "$tag"
+    local line_content formatted
+    line_content="$(clk__get_line "$CLK_ACTIVE_LINE")"
+    formatted="$(clk__fmt_record "$line_content")"
+    clk__save_undo
+    clk__delete_line "$CLK_ACTIVE_LINE"
+    printf '\nCancelled session:\n  %s\n\n' "$formatted"
 }
 
 # --- clk_do_remove ---
@@ -4104,6 +4119,17 @@ out)
     done
 
     clk_do_out "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
+    ;;
+
+cancel|c)
+    clk_subcmd="cancel"
+    shift
+    clk_tag=""
+    if [ $# -gt 0 ]; then
+        clk_tag="$1"; shift
+    fi
+    [ $# -eq 0 ] || clk__die 1 "Too many arguments. Usage: 'clk cancel [<tag>]'"
+    clk_do_cancel "$clk_tag"
     ;;
 
 status|s)
