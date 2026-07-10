@@ -1,6 +1,6 @@
-.Dd April 22, 2026
+.Dd July 10, 2026
 .Dt QLAUDE 1
-.Os "qlaude 0.1.1"
+.Os "qlaude 0.2.0"
 .Sh NAME
 .Nm qlaude
 .Nd Claude session utilities
@@ -163,6 +163,23 @@ to exit.
 Uses
 .Xr fswatch 1
 when available, polling otherwise.
+.It Cm conv turns Op Ar N
+Show a per-turn timing breakdown for a single conversation
+.Pq the Ar N Ns th most recent, default 1 .
+Each turn is bounded by genuine human messages
+.Pq excluding tool results, system reminders, and slash-command wrappers .
+For each turn two wall-clock durations are reported: the
+.Em user gap
+.Pq time from the agent finishing to the human's next message: read, type, and idle time
+and the
+.Em agent
+turn
+.Pq time the agent spent thinking and running tools .
+User gaps longer than
+.Cm idle_threshold
+seconds are flagged
+.Pq idle .
+A bar visualizes each agent turn relative to the longest in the conversation.
 .El
 .Ss Aliases
 The following word aliases expand anywhere in a range expression:
@@ -195,6 +212,12 @@ Cost weights ×10
 .Pq defaults: 100, 500, 125, 10 .
 .It Cm live_mode
 .Cm override No or Cm scroll — whether live refreshes overwrite the previous line or append .
+.It Cm idle_threshold
+Seconds; user gaps longer than this are flagged
+.Pq idle
+in
+.Cm conv turns
+.Pq default 300 .
 .El
 .Sh CONFIG COMMAND
 .Nm
@@ -276,6 +299,14 @@ each live refresh overwrites the previous line.
 In
 .Cm scroll
 mode, each refresh appends a new line.
+.It Cm idle_threshold
+Positive integer, in seconds
+.Pq default 300 .
+In
+.Cm conv turns ,
+a user gap longer than this is annotated
+.Pq idle
+to distinguish away-from-keyboard time from active think-and-type time.
 .El
 .Sh EXAMPLES
 .Ss Browsing conversations
@@ -299,6 +330,12 @@ Show a detailed multi-line breakdown of the last 5:
 .Pp
 Watch the most recent conversation live:
 .Dl $ qlaude conv live
+.Pp
+Show per-turn timing for the most recent conversation:
+.Dl $ qlaude conv turns
+.Pp
+Show per-turn timing for the 3rd most recent conversation:
+.Dl $ qlaude conv turns 3
 .Ss Scoping to an account
 Show skills for a specific account named
 .Sq sbq :
