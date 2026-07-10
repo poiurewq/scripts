@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 
-QLAUDE_VERSION="0.1.1"
+QLAUDE_VERSION="0.2.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Section 1: Account infrastructure
@@ -117,6 +117,119 @@ _conv_decode_project() {
   printf '%s' "${project#/Users/*/}"
 }
 
+# Echo human-readable duration from a whole number of seconds: 45s / 3m 20s / 2h 5m / 4d 1h
+# Negative input (used as a sentinel for "no preceding turn") renders as an em dash.
+_conv_human_duration() {
+  local s="$1"
+  if (( s < 0 )); then printf '—'
+  elif (( s < 60 )); then printf '%ds' "$s"
+  elif (( s < 3600 )); then printf '%dm %ds' $(( s / 60 )) $(( s % 60 ))
+  elif (( s < 86400 )); then printf '%dh %dm' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+  else printf '%dd %dh' $(( s / 86400 )) $(( (s % 86400) / 3600 ))
+  fi
+}
+
+# Render a per-turn timing table for a single conversation file.
+# A "turn" is bounded by genuine human messages: user-string lines that are
+# neither isMeta nor slash-command wrappers, and user-array lines that carry no
+# tool_result (i.e. not the harness feeding tool output back mid-turn).
+#   user gap    = wall-clock from the agent finishing its previous turn to the
+#                 human's next message (read + type + any away-from-keyboard time)
+#   agent turn  = wall-clock from the human message to the agent's last activity
+#                 (thinking + tool round-trips) before the next human message
+_conv_render_turns() {
+  local f="$1"
+  local raw_dir project uuid custom_title name stats
+
+  raw_dir=$(basename "$(dirname "$f")")
+  project=$(_conv_decode_project "$raw_dir")
+  uuid=$(basename "$f" .jsonl)
+  stats=$(_conv_extract_stats "$f")
+  custom_title=$(printf '%s' "$stats" | cut -f1)
+  [[ "$custom_title" != "null" && -n "$custom_title" ]] && name="$custom_title" || name="$uuid"
+
+  # Emit TSV: idx <TAB> humanEpochMs <TAB> userGapMs(-1 for first turn) <TAB> agentTurnMs
+  local turns
+  turns=$(jq -rn --slurpfile d "$f" '
+    def toms:
+      (.[0:19] + "Z" | fromdateiso8601) * 1000
+      + ((capture("\\.(?<f>[0-9]+)Z").f)? // "0" | (. + "000")[0:3] | tonumber);
+    def human:
+      .type == "user" and ((.isMeta // false) | not) and
+      ( (.message.content | type == "string" and (test("^<(command-name|command-message|local-command)") | not))
+        or (.message.content | type == "array" and (any(.[]; .type == "tool_result") | not)) );
+    # Three-way classification: a genuine human message, real agent activity
+    # (assistant lines + the tool_result round-trips that mark tool execution),
+    # or "skip" noise (isMeta reminders, command wrappers) that belongs to neither.
+    def kind:
+      if human then "human"
+      elif .type == "assistant" then "agent"
+      elif (.type == "user" and ((.isMeta // false) | not)
+            and (.message.content | type == "array")
+            and (.message.content | any(.[]; .type == "tool_result"))) then "agent"
+      else "skip" end;
+    ($d | map(select(.type == "user" or .type == "assistant"))
+        | map({ ts: (.timestamp | toms), kind: kind })
+        | map(select(.kind != "skip"))
+        | sort_by(.ts)) as $ev
+    | reduce $ev[] as $e ({turns: []};
+        if $e.kind == "human"
+        then (.turns[-1].agentEnd) as $p
+             | .turns += [{ h: $e.ts, uStart: $p, agentEnd: $e.ts }]
+        else if (.turns | length) > 0 then .turns[-1].agentEnd = $e.ts else . end
+        end)
+    | .turns | to_entries[]
+    | "\(.key + 1)\t\(.value.h)\t\(if .value.uStart then (.value.h - .value.uStart) else -1 end)\t\(.value.agentEnd - .value.h)"
+  ' 2>/dev/null)
+
+  if [[ -z "$turns" ]]; then
+    echo "conv turns: no genuine turns found in this conversation" >&2
+    return 1
+  fi
+
+  local ts0 hdr_date
+  ts0=$(printf '%s\n' "$turns" | head -1 | cut -f2)
+  hdr_date=$(date -r $(( ts0 / 1000 )) "+%Y-%m-%d %H:%M")
+  if [[ "$custom_title" != "null" && -n "$custom_title" ]]; then
+    printf '%s  %s  %s  [%s]\n\n' "$hdr_date" "$project" "$name" "$uuid"
+  else
+    printf '%s  %s  %s\n\n' "$hdr_date" "$project" "$uuid"
+  fi
+
+  local idle_thr=$(( _CONV_IDLE_THRESHOLD * 1000 ))
+  local idx hms udur adur maxa=0 sum_u=0 sum_a=0 nturns=0
+
+  # Pass 1: totals and max agent duration (for bar scaling)
+  while IFS=$'\t' read -r idx hms udur adur; do
+    (( adur > maxa )) && maxa=$adur
+    (( udur > 0 )) && sum_u=$(( sum_u + udur ))
+    sum_a=$(( sum_a + adur ))
+    nturns=$(( nturns + 1 ))
+  done <<< "$turns"
+
+  # Pass 2: render rows (bar length ∝ agent turn duration)
+  local barw=18 tlen bar ustr astr
+  printf '  %-3s  %-16s  %-11s\n' '#' 'user gap' 'agent'
+  while IFS=$'\t' read -r idx hms udur adur; do
+    if (( udur < 0 )); then
+      ustr='—'
+    elif (( udur > idle_thr )); then
+      ustr="$(_conv_human_duration $(( udur / 1000 ))) (idle)"
+    else
+      ustr=$(_conv_human_duration $(( udur / 1000 )))
+    fi
+    astr=$(_conv_human_duration $(( adur / 1000 )))
+    (( maxa > 0 )) && tlen=$(( adur * barw / maxa )) || tlen=0
+    (( tlen < 0 )) && tlen=0
+    bar=$(printf '%*s' "$tlen" '' | tr ' ' '▓')
+    printf '  %-3s  %-16s  %-11s  %s\n' "$idx" "$ustr" "$astr" "$bar"
+  done <<< "$turns"
+
+  printf '  %s\n' "$(printf '─%.0s' {1..50})"
+  printf '  turns: %d   agent total: %s   user total: %s\n' \
+    "$nturns" "$(_conv_human_duration $(( sum_a / 1000 )))" "$(_conv_human_duration $(( sum_u / 1000 )))"
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Section 3: Config subsystem  (~/.config/qlaude/config.zsh)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -132,6 +245,7 @@ _CONV_W_CC=125       # cache_create  = 12.5×
 _CONV_W_INPUT=100    # input         = 10.0×
 _CONV_W_OUTPUT=500   # output        = 50.0×
 _CONV_LIVE_MODE=override  # override | scroll
+_CONV_IDLE_THRESHOLD=300  # seconds; user gaps longer than this are flagged (idle) in 'conv turns'
 
 # Config location (XDG-compliant; note: moved from conv/ to qlaude/)
 _QLAUDE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/qlaude"
@@ -169,6 +283,7 @@ _qlaude_config_write() {
         printf '_CONV_W_CC=%s\n' "$_CONV_W_CC"
         printf '_CONV_W_CR=%s\n' "$_CONV_W_CR"
         printf '_CONV_LIVE_MODE=%s\n' "$_CONV_LIVE_MODE"
+        printf '_CONV_IDLE_THRESHOLD=%s\n' "$_CONV_IDLE_THRESHOLD"
     } > "$_QLAUDE_CONFIG_FILE"
 }
 
@@ -196,6 +311,7 @@ _qlaude_config_list() {
     printf '%-18s %s  (%.1f×)\n' 'w_cc'     "$_CONV_W_CC"     "$(( _CONV_W_CC     / 10.0 ))"
     printf '%-18s %s  (%.1f×)\n' 'w_cr'     "$_CONV_W_CR"     "$(( _CONV_W_CR     / 10.0 ))"
     printf '%-18s %s\n' 'live_mode'         "$_CONV_LIVE_MODE"
+    printf '%-18s %s\n' 'idle_threshold'    "$_CONV_IDLE_THRESHOLD"
 }
 
 # Map friendly key name → variable name (display settings only; dirs via add/remove-dir)
@@ -211,6 +327,7 @@ _qlaude_config_key_to_var() {
         w_cc)       printf '_CONV_W_CC' ;;
         w_cr)       printf '_CONV_W_CR' ;;
         live_mode)  printf '_CONV_LIVE_MODE' ;;
+        idle_threshold) printf '_CONV_IDLE_THRESHOLD' ;;
         *)          return 1 ;;
     esac
 }
@@ -261,6 +378,7 @@ cmd_config() {
                 printf '  7) w_cc        %-6s (%.1f×)\n' "$_CONV_W_CC"     "$(( _CONV_W_CC     / 10.0 ))"
                 printf '  8) w_cr        %-6s (%.1f×)\n' "$_CONV_W_CR"     "$(( _CONV_W_CR     / 10.0 ))"
                 printf '  9) live_mode   %s\n'           "$_CONV_LIVE_MODE"
+                printf ' 11) idle_threshold    %s\n'      "$_CONV_IDLE_THRESHOLD"
                 printf '\n  s) save & quit    q) quit without saving\n\n'
             }
 
@@ -357,6 +475,7 @@ cmd_config() {
                         if [[ "$_CONV_LIVE_MODE" == "override" ]]; then _CONV_LIVE_MODE=scroll; else _CONV_LIVE_MODE=override; fi
                         _changed=1; printf 'live_mode toggled to %s\n' "$_CONV_LIVE_MODE"
                         ;;
+                    11) _qcfg_set_scalar idle_threshold _CONV_IDLE_THRESHOLD ;;
                     s|S) break ;;
                     q|Q) exit 0 ;;
                     *) printf 'unknown selection: %s\n' "$sel" >&2 ;;
@@ -539,6 +658,7 @@ Usage:
   conv -<n> <unit> [through ...] <N>    cap results at N
   conv [range] [N] --detailed           full multi-line view with token breakdown
   conv live                             watch most recent conversation live
+  conv turns [N]                        per-turn timing for the Nth most recent conv (default 1)
 
 Bar (cost-weighted: output=50×, input=10×, cache_create=12.5×, cache_read=1×):
   ▓▓▓█████▓▓▓▒▒▒▒▒░░░░░░░  45K
@@ -562,6 +682,8 @@ Examples:
   qlaude conv 10
   qlaude conv 16-20
   qlaude conv just 3
+  qlaude conv turns          per-turn timing for the most recent conversation
+  qlaude conv turns 3        per-turn timing for the 3rd most recent conversation
   qlaude conv yesterday through today
   qlaude conv last week through this week
   qlaude conv -2 weeks through -3 days
@@ -576,6 +698,7 @@ Display config (accounts/dirs: 'qlaude config'):
   qlaude config set norm fixed|dynamic   bar ceiling: max_tokens vs longest in view
   qlaude config set w_input|w_output|w_cc|w_cr <n>   cost weights (×10)
   qlaude config set live_mode override|scroll        live bar update mode
+  qlaude config set idle_threshold <sec> flag user gaps longer than this in 'conv turns'
   qlaude config path                     print config file path
   qlaude config reset [--yes]            restore defaults
 
@@ -590,6 +713,7 @@ Display config (accounts/dirs: 'qlaude config'):
     w_cc        positive integer (×10, e.g. 125 = 12.5×)
     w_cr        positive integer (×10, e.g. 10 = 1×)
     live_mode   override | scroll                  — live: overwrite line vs append new line
+    idle_threshold    positive integer (seconds, e.g. 300) — flag longer user gaps in 'conv turns'
   Config file: ~/.config/qlaude/config.zsh  (sourced as zsh; XDG_CONFIG_HOME respected)
 EOF
     return 0
@@ -732,6 +856,44 @@ EOF
 
     stty "$_orig_stty" 2>/dev/null
     return 0
+  fi
+
+  # ---------------------------------------------------------------------------
+  # Turns mode — per-turn timing for a single conversation
+  # ---------------------------------------------------------------------------
+  if [[ "$1" == "turns" ]]; then
+    shift
+    [[ "$1" == "just" ]] && shift   # `turns just N` == `turns N`, mirrors list syntax
+    local turn_rank=1
+    if [[ -n "${1:-}" ]]; then
+      if [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 )); then
+        turn_rank="$1"
+      else
+        echo "conv turns: expected a positive integer rank, got '$1'" >&2; return 1
+      fi
+    fi
+
+    # Rank conversations by recency, skipping trivial ones so the rank matches
+    # `conv just N` (same output>=20 filter used by the list view).
+    local _tline _tm _tf _tres _to _tseen=0 _target=''
+    while IFS= read -r _tline; do
+      _tm=${_tline%% *}; _tf=${_tline#* }
+      [[ -f "$_tf" ]] || continue
+      _tres=$(_conv_extract_stats "$_tf") || continue
+      _to=$(printf '%s' "$_tres" | cut -f3)
+      (( _to < 20 )) && continue
+      _tseen=$(( _tseen + 1 ))
+      if (( _tseen == turn_rank )); then _target="$_tf"; break; fi
+    done < <(
+      find "${_conv_dirs[@]}" -name "*.jsonl" ! -name "agent-*" 2>/dev/null \
+        | xargs stat -f "%m %N" 2>/dev/null | sort -rn
+    )
+
+    if [[ -z "$_target" ]]; then
+      echo "conv turns: no conversation found at rank $turn_rank" >&2; return 1
+    fi
+    _conv_render_turns "$_target"
+    return $?
   fi
 
   # ---------------------------------------------------------------------------
@@ -1120,7 +1282,7 @@ cmd_launch() {
     if [[ -z "$base" ]]; then
         echo "qlaude: unknown account '$account'" >&2; exit 1
     fi
-    CLAUDE_CONFIG_DIR="$base" \claude "$@"
+    CLAUDE_CONFIG_DIR="$base" CLAUDE_CODE_NO_FLICKER=1 \claude "$@"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1174,6 +1336,7 @@ COMMANDS
         qlaude sbq conv 10                   10 most recent (sbq only)
         qlaude conv -2 weeks through today   time range
         qlaude conv live                     live watcher
+        qlaude conv turns [N]                per-turn timing (agent vs user)
 
   skills / agents / plugins
       List resources under each account's skills/, agents/, or plugins/ directory.
@@ -1209,6 +1372,7 @@ COMMANDS
         w_cc        positive integer (×10, e.g. 125 = 12.5×)
         w_cr        positive integer (×10, e.g. 10 = 1×)
         live_mode   override | scroll  — live bar: overwrite line vs append new line
+        idle_threshold    positive integer (seconds) — flag longer user gaps in 'conv turns'
 
   help
       Show this help page.
