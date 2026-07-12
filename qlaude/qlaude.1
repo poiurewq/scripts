@@ -175,11 +175,8 @@ and the
 .Em agent
 turn
 .Pq time the agent spent thinking and running tools .
-User gaps longer than
-.Cm idle_threshold
-seconds are flagged
-.Pq idle .
-A bar visualizes each agent turn relative to the longest in the conversation.
+A bar accompanies each duration, visualizing it relative to the longest user
+gap or agent turn in the conversation.
 .El
 .Ss Aliases
 The following word aliases expand anywhere in a range expression:
@@ -212,12 +209,6 @@ Cost weights ×10
 .Pq defaults: 100, 500, 125, 10 .
 .It Cm live_mode
 .Cm override No or Cm scroll — whether live refreshes overwrite the previous line or append .
-.It Cm idle_threshold
-Seconds; user gaps longer than this are flagged
-.Pq idle
-in
-.Cm conv turns
-.Pq default 300 .
 .El
 .Sh CONFIG COMMAND
 .Nm
@@ -299,14 +290,6 @@ each live refresh overwrites the previous line.
 In
 .Cm scroll
 mode, each refresh appends a new line.
-.It Cm idle_threshold
-Positive integer, in seconds
-.Pq default 300 .
-In
-.Cm conv turns ,
-a user gap longer than this is annotated
-.Pq idle
-to distinguish away-from-keyboard time from active think-and-type time.
 .El
 .Sh EXAMPLES
 .Ss Browsing conversations
