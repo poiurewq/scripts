@@ -1,37 +1,25 @@
 #!/usr/bin/env zsh
 set -e
 
-#######################################################################
-# Display formatting
-#######################################################################
 
 bf=$(tput bold 2>/dev/null) || bf=''
 nf=$(tput sgr0 2>/dev/null) || nf=''
 uf=$(tput smul 2>/dev/null) || uf=''
 
-#######################################################################
-# Constants
-#######################################################################
 
 nt_template_name='nt_template'
 NT_VERSION="0.5.0"
 _nt_prefix=''
 
-# Regex patterns (stored in variables to prevent zsh backslash removal in =~)
 _nt_idx_pat='^([0-9]+(\.[0-9]+)*)([-_]|\.[^0-9]|$)'  # extract: index + boundary
 _nt_idx_strict='^[0-9]+(\.[0-9]+)*$'        # validate/consume: full-string match
 _nt_range_pat='^[0-9]+(\.[0-9]+)*-[0-9]+(\.[0-9]+)*$'  # range token (hierarchical)
 _nt_digits='^[0-9]+$'                        # bare digits
 
-# Editor resolution order: NT_EDITOR > VISUAL > EDITOR > vim  (§3.4)
 nt_editor="${NT_EDITOR:-${VISUAL:-${EDITOR:-vim}}}"
 
-# Syntax references used in error messages
 nt_syn_r="${bf}rename${nf} ${uf}num${nf} ${uf}title${nf}"
 
-#######################################################################
-# Cross-platform abstraction (§2.5)
-#######################################################################
 
 NT_PLATFORM='other'
 
@@ -75,17 +63,11 @@ nt_stat_mtime_ym() {
 	esac
 }
 
-#######################################################################
-# Error helper (§2.6)
-#######################################################################
 
 nt_err() {
 	printf '%s\n' "$1" >&2
 }
 
-#######################################################################
-# Utility functions
-#######################################################################
 
 nt_load_config() {
 	local config_file=".nt/config"
@@ -103,9 +85,6 @@ nt_load_config() {
 	done < "$config_file"
 }
 
-# Resolves the template file, migrating a legacy cwd nt_template.* to .nt/template.*
-# if no .nt/template.* exists yet. Sets _nt_template_file (empty = no template).
-# Returns 1 and prints an error if the template is ambiguous.
 _nt_template_file=''
 nt_resolve_template() {
 	_nt_template_file=''
@@ -148,8 +127,6 @@ nt_open() {
 	fi
 }
 
-# Extracts the hierarchical index prefix from a filename.
-# e.g. "004.7-title.md" -> "004.7", "003-note.md" -> "003", "007.md" -> "007"
 extract_index() {
 	local f="$1"
 	local stripped="${f#${_nt_prefix}}"
@@ -158,8 +135,6 @@ extract_index() {
 	fi
 }
 
-# Compares two hierarchical indices component-by-component.
-# Prints: -1 (a < b), 0 (a == b), 1 (a > b)
 compare_indices() {
 	local a="$1" b="$2"
 	local -a ap bp
@@ -176,9 +151,6 @@ compare_indices() {
 	printf '0'
 }
 
-# Increments the last component of a hierarchical index.
-# Zero-pads all components to 3 digits.
-# e.g. "004.007" -> "004.008", "003" -> "004", "004.007.009" -> "004.007.010"
 increment_index() {
 	local idx="$1"
 	if [[ -z "$idx" ]]; then
@@ -195,10 +167,6 @@ increment_index() {
 	printf '%s' "${(j:.:)parts}"
 }
 
-# Sorts filenames by extracted index lexicographically.
-# With full zero-padding (all components 3 digits), lexicographic == numeric order.
-# Sorts by index string (not full filename) to avoid extension interference.
-# Reads filenames as arguments; prints sorted filenames one per line.
 sort_docs_by_index() {
 	[[ "$#" -eq 0 ]] && return 0
 	local -a pairs
@@ -216,9 +184,6 @@ sort_docs_by_index() {
 	done
 }
 
-# Returns the filename of the last indexed document (by index order).
-# With full zero-padding, lexicographic order on indices == hierarchical order.
-# Returns 1 if no indexed documents exist.
 last_indexed_doc() {
 	local -a docs _lid_filtered
 	if [[ -n "$_nt_prefix" ]]; then
@@ -240,15 +205,12 @@ last_indexed_doc() {
 	printf '%s' "$sorted_last"
 }
 
-# Returns the full hierarchical index string of the last indexed document.
-# Returns 1 if no indexed documents exist.
 last_index() {
 	local doc
 	doc="$(last_indexed_doc 2>/dev/null)" || return 1
 	extract_index "$doc"
 }
 
-# Returns the delimiter between the index and title portions of a filename.
 get_delimiter() {
 	local name="$1"
 	local idx
@@ -262,7 +224,6 @@ get_delimiter() {
 	fi
 }
 
-# Returns the file extension (after last dot, if non-numeric). Returns 1 if none.
 get_extension() {
 	local filename="$1"
 	local ext="${filename##*.}"
@@ -272,8 +233,6 @@ get_extension() {
 	printf '%s' "$ext"
 }
 
-# Returns 0 if the file's extension marks it as a non-text (media/binary) file
-# that should be excluded from nt note matching.
 nt_is_skip_ext() {
 	local f="$1"
 	local ext="${f##*.}"
@@ -289,8 +248,6 @@ nt_is_skip_ext() {
 	esac
 }
 
-# Returns the matching filename for a given index (simple or hierarchical).
-# Normalizes all components to 3 digits.
 find_doc_by_index() {
 	local idx="$1"
 	local -a parts
@@ -341,8 +298,6 @@ find_doc_by_index() {
 	printf '%s' "${docs[1]}"
 }
 
-# Returns 0 if at least one file with the given index exists; 1 otherwise.
-# Unlike find_doc_by_index, never prompts and never errors.
 index_has_doc() {
 	local idx="$1"
 	local -a parts
@@ -361,7 +316,6 @@ index_has_doc() {
 	return 1
 }
 
-# Validates an index (simple integer or hierarchical dot-separated).
 validate_index() {
 	local idx="$1"
 	if ! [[ "$idx" =~ $_nt_idx_strict ]]; then
@@ -383,20 +337,6 @@ validate_index() {
 	done
 }
 
-# Consumes arguments as a title. Behaviour depends on $_nt_greedy:
-#
-#   Greedy mode   ($_nt_greedy=1, set when command has no leading hyphen):
-#     Consume ALL arguments — no stopping at reserved words or numbers.
-#     Allows titles like "my new note 5" without quoting.
-#
-#   Non-greedy mode ($_nt_greedy=0, set when command has a leading hyphen):
-#     Stop at the first bare number, range token (N-M), or any arg that
-#     starts with '-'.  Those tokens belong to the next chained option.
-#
-# Sets globals:
-#   _consume_title_raw    — space-separated title
-#   _consume_title_result — hyphen-joined title
-#   _nt_consumed          — number of arguments consumed
 consume_title() {
 	_consume_title_raw=""
 	_consume_title_result=""
@@ -404,7 +344,6 @@ consume_title() {
 	local arg
 	for arg in "$@"; do
 		if [[ $_nt_greedy -eq 0 ]]; then
-			# Non-greedy stop condition: only hyphen-prefixed args
 			if [[ "$arg" == -* ]]; then
 				break
 			fi
@@ -419,7 +358,6 @@ consume_title() {
 	_consume_title_result="${_consume_title_raw// /-}"
 }
 
-# Composes a filename: build_filename <index> <delimiter> <title> <extension>
 build_filename() {
 	local index="$1" delimiter="$2" title="$3" extension="$4"
 	local result="$index"
@@ -435,9 +373,6 @@ build_filename() {
 	printf '%s' "$result"
 }
 
-#######################################################################
-# Subcommand functions
-#######################################################################
 
 cmd_help() {
 	printf '\n'
@@ -479,7 +414,6 @@ cmd_version() {
 }
 
 cmd_new() {
-	# Pre-parse i/index and c/copy sub-options before consume_title
 	local custom_idx="" copy_src=""
 	local -a remaining=()
 	while [[ "$#" -gt 0 ]]; do
@@ -506,16 +440,13 @@ cmd_new() {
 		esac
 	done
 
-	# Account for sub-option args consumed (i/index + val = 2, c/copy + val = 2)
 	local _subopts_consumed=0
 	[[ -n "$custom_idx" ]] && (( _subopts_consumed += 2 ))
 	[[ -n "$copy_src" ]]   && (( _subopts_consumed += 2 ))
 
-	# Validate custom index if specified
 	local new_idx
 	if [[ -n "$custom_idx" ]]; then
 		validate_index "$custom_idx" || exit 2
-		# Normalize all components to 3 digits
 		local -a ci_parts
 		ci_parts=( "${(@s:.:)custom_idx}" )
 		local _ci_i
@@ -523,7 +454,6 @@ cmd_new() {
 			ci_parts[$_ci_i]="$(printf '%03d' "$(( 10#${ci_parts[$_ci_i]} ))")"
 		done
 		new_idx="${(j:.:)ci_parts}"
-		# Check no existing doc at that index
 		if find_doc_by_index "$new_idx" >/dev/null 2>&1; then
 			nt_err "Document with index ${new_idx} already exists."
 			exit 2
@@ -538,7 +468,6 @@ cmd_new() {
 		fi
 	fi
 
-	# Resolve copy source if specified
 	local copy_doc=""
 	if [[ -n "$copy_src" ]]; then
 		validate_index "$copy_src" || exit 2
@@ -568,9 +497,7 @@ cmd_new() {
 	new_doc="${_nt_prefix}${new_doc}"
 	(( _nt_consumed += _subopts_consumed )) || true
 
-	# Determine content source and extension
 	if [[ -n "$copy_doc" ]]; then
-		# Copy mode: content and extension from source document
 		local copy_ext
 		copy_ext="$(get_extension "$copy_doc" 2>/dev/null)" || copy_ext="md"
 		new_doc+=".${copy_ext}"
@@ -606,7 +533,6 @@ cmd_last() {
 		exit 2
 	}
 
-	# In non-greedy mode, a leading-hyphen arg belongs to the next command.
 	if [[ "$#" -gt 0 ]] && [[ "$1" == -* ]] && [[ $_nt_greedy -eq 0 ]]; then
 		_nt_consumed=0
 		files_to_open+=( "$last_doc" )
@@ -614,11 +540,9 @@ cmd_last() {
 	fi
 
 	if [ "$#" -eq 0 ]; then
-		# No argument: open the last doc
 		_nt_consumed=0
 		files_to_open+=( "$last_doc" )
 	elif [[ "$1" =~ $_nt_digits ]]; then
-		# Positive integer N: open Nth-to-last
 		_nt_consumed=1
 		local nth="$1"
 		local -a all_docs _cl_filtered
@@ -656,7 +580,6 @@ cmd_last_index() {
 		nt_err "No indexed document found."
 		exit 2
 	}
-	# Strip leading zeros from each component for display
 	local -a parts
 	parts=( "${(@s:.:)idx}" )
 	local -a stripped
@@ -703,7 +626,6 @@ cmd_rename() {
 		&& printf '%s renamed to %s\n' "${try_doc}" "${new_doc}"
 }
 
-# Rename the last indexed document to the given title.
 cmd_rename_last() {
 	if [ "$#" -eq 0 ]; then
 		nt_err "usage: nt rl <title>"
@@ -751,7 +673,6 @@ cmd_reindex() {
 	fi
 
 	if [[ $ri1_range -eq 0 ]]; then
-		# ── Single-file form ─────────────────────────────────────────
 		validate_index "$ri_arg1" || exit 2
 		validate_index "$ri_arg2" || exit 2
 
@@ -785,7 +706,6 @@ cmd_reindex() {
 		return
 	fi
 
-	# ── Range form: ri A-B C-D ────────────────────────────────────
 	local src_start="${ri_arg1%%-*}" src_end="${ri_arg1##*-}"
 	local tgt_start="${ri_arg2%%-*}" tgt_end="${ri_arg2##*-}"
 
@@ -794,7 +714,6 @@ cmd_reindex() {
 	validate_index "$tgt_start" || exit 2
 	validate_index "$tgt_end"   || exit 2
 
-	# Normalize all four endpoints to 3-digit components
 	local -a ss_p se_p ts_p te_p
 	ss_p=( "${(@s:.:)src_start}" ); se_p=( "${(@s:.:)src_end}" )
 	ts_p=( "${(@s:.:)tgt_start}" ); te_p=( "${(@s:.:)tgt_end}" )
@@ -814,7 +733,6 @@ cmd_reindex() {
 	local norm_ss="${(j:.:)ss_p}" norm_se="${(j:.:)se_p}"
 	local norm_ts="${(j:.:)ts_p}" norm_te="${(j:.:)te_p}"
 
-	# Validate same depth within each range
 	if [[ ${#ss_p[@]} -ne ${#se_p[@]} ]]; then
 		nt_err "ri: source range endpoints must be at the same index depth"
 		exit 2
@@ -824,7 +742,6 @@ cmd_reindex() {
 		exit 2
 	fi
 
-	# Validate same parent prefix within each range (depth > 1)
 	if [[ ${#ss_p[@]} -gt 1 ]]; then
 		if [[ "${(j:.:)ss_p[1,-2]}" != "${(j:.:)se_p[1,-2]}" ]]; then
 			nt_err "ri: source range endpoints must share the same parent index"
@@ -863,10 +780,8 @@ cmd_reindex() {
 		printf 'Nothing to reindex.\n'; exit 0
 	fi
 
-	# Verify at least the first source document exists
 	index_has_doc "$norm_ss" || exit 2
 
-	# Build parallel source/target index lists
 	local -a ri_src_idxs ri_tgt_idxs
 	local _ri_n _ri_sa _ri_ta _ri_si _ri_ti
 	for (( _ri_n = 0; _ri_n <= src_span; _ri_n++ )); do
@@ -877,7 +792,6 @@ cmd_reindex() {
 		ri_tgt_idxs+=( "${(j:.:)_ri_ta}" )
 	done
 
-	# Collision check: target occupied by a file not in the source set
 	local _ri_chk_doc='' _ri_chk_idx='' _ri_is_src=0 _ri_s=''
 	for (( _ri_n = 1; _ri_n <= ${#ri_src_idxs[@]}; _ri_n++ )); do
 		_ri_si="${ri_src_idxs[$_ri_n]}"
@@ -896,7 +810,6 @@ cmd_reindex() {
 		fi
 	done
 
-	# Move order: backwards when target > source (avoids same-range self-overwrite)
 	local -a ri_seq
 	if [[ "$(compare_indices "$norm_ts" "$norm_ss")" == "1" ]]; then
 		for (( _ri_n = ${#ri_src_idxs[@]}; _ri_n >= 1; _ri_n-- )); do ri_seq+=( "$_ri_n" ); done
@@ -961,7 +874,6 @@ cmd_subtree() {
 		exit 2
 	fi
 	validate_index "$prefix" || exit 2
-	# Normalize prefix: all components to 3 digits
 	local -a _st_parts
 	_st_parts=( "${(@s:.:)prefix}" )
 	local _st_i
@@ -989,7 +901,6 @@ cmd_subtree() {
 		[[ -z "$_st_idx" ]] && continue
 		if [[ "$_st_idx" == ${_st_norm}.* ]]; then
 			if [[ "$mode" == "immediate" ]]; then
-				# Only include if exactly one level deeper
 				local -a _st_child_parts
 				_st_child_parts=( "${(@s:.:)_st_idx}" )
 				[[ ${#_st_child_parts[@]} -ne $(( _st_depth + 1 )) ]] && continue
@@ -1068,10 +979,6 @@ cmd_config() {
 	esac
 }
 
-# Scans cwd and renames files containing month names to their 2-digit numeric
-# equivalents. Handles full names (January → 01) and abbreviations (Jan → 01).
-# Uses word-boundary matching: month name must not be adjacent to other letters,
-# so "Mar" in "summary" is NOT replaced but "Mar" in "Mar2025" is.
 cmd_util_month() {
 	local -a all_files
 	all_files=( *(N.) )
@@ -1080,16 +987,12 @@ cmd_util_month() {
 		return 0
 	fi
 
-	# Full names first (longer → no partial match on abbreviations like "Mar" in "March").
 	local -a full_names full_nums abbr_names abbr_nums
 	full_names=( January February March April May June July August September October November December )
 	full_nums=(  01      02       03    04    05  06   07   08     09        10      11       12       )
 	abbr_names=( Jan Feb Mar Apr Jun Jul Aug Sep Oct Nov Dec )
 	abbr_nums=(  01  02  03  04  06  07  08  09  10  11  12 )
 
-	# Build a single sed script. Pattern (^|[^a-zA-Z])(NAME)([^a-zA-Z]|$) ensures
-	# the month name is not flanked by other letters. \1NUM\3 re-emits the boundary
-	# chars. The I flag makes matching case-insensitive (works on BSD and GNU sed).
 	local sed_expr="" i
 	for (( i = 1; i <= ${#full_names[@]}; i++ )); do
 		sed_expr+="s/(^|[^a-zA-Z])(${full_names[$i]})([^a-zA-Z]|\$)/\1${full_nums[$i]}\3/gI;"
@@ -1113,8 +1016,6 @@ cmd_util_month() {
 	fi
 }
 
-# Scans cwd and renames nt-indexed files, changing their final extension to
-# the specified value (e.g. '001-title.txt' → '001-title.md').
 cmd_util_ext() {
 	if [[ "$#" -eq 0 ]]; then
 		nt_err "usage: nt util ext <extension>"
@@ -1147,9 +1048,6 @@ cmd_util_ext() {
 	fi
 }
 
-# Scans cwd and renames nt-indexed files to use the specified delimiter
-# between the index and title portions (e.g. '001_title.md' → '001-title.md').
-# Skips files with non-text extensions.
 cmd_util_delim() {
 	if [[ "$#" -eq 0 ]]; then
 		nt_err "usage: nt util delim <delimiter>"
@@ -1183,9 +1081,6 @@ cmd_util_delim() {
 	fi
 }
 
-#######################################################################
-# Main entry point
-#######################################################################
 
 if [ "$#" -eq 0 ]; then
 	cmd_help
@@ -1199,8 +1094,6 @@ _nt_consumed=0
 _nt_greedy=0
 setopt extended_glob 2>/dev/null
 
-# Helper: shift past _nt_consumed args in the main arg list.
-# Used after title-consuming commands so the dispatcher loop can continue.
 _nt_shift_consumed() {
 	_nc=$_nt_consumed
 	while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
@@ -1209,10 +1102,6 @@ _nt_shift_consumed() {
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 
-		# ── Bare (greedy) forms ──────────────────────────────────────
-		# Consume ALL remaining args as the title.  No stopping at
-		# reserved words or numbers.  Chaining is not supported in
-		# bare mode; use the hyphen forms for that.
 
 		n|new)
 			shift; _nt_greedy=1; cmd_new "$@"
@@ -1241,10 +1130,6 @@ while [ "$#" -gt 0 ]; do
 			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
 			;;
 
-		# ── Hyphen-prefixed (non-greedy) forms ───────────────────────
-		# Stop title consumption at the first bare number, range, or
-		# any -flag arg.  Those tokens are left in $@ for the next
-		# iteration, enabling option chaining.
 
 		-n|--new)
 			shift; _nt_greedy=0; cmd_new "$@"
@@ -1270,7 +1155,6 @@ while [ "$#" -gt 0 ]; do
 			while [ "$_nc" -gt 0 ] && [ "$#" -gt 0 ]; do shift; _nc=$(( _nc - 1 )); done
 			;;
 
-		# ── Stateless commands (greedy/non-greedy irrelevant) ────────
 
 		ri|reindex|-ri|--reindex)
 			shift; cmd_reindex "$@"; break ;;
@@ -1311,10 +1195,6 @@ while [ "$#" -gt 0 ]; do
 		C|-C)     cmd_claude;   shift ;;
 		t|-t)     cmd_template; shift ;;
 
-		# ── Range (N-M) ──────────────────────────────────────────────
-		# Open all documents from index N to M, inclusive (hierarchical).
-		# Uses filter-based algorithm: collect all indexed files, keep those
-		# whose index falls between start and end by compare_indices.
 		[0123456789]*-[0123456789]*)
 			if [[ "$1" =~ $_nt_range_pat ]]; then
 				local _range_start="${1%%-*}" _range_end="${1##*-}"
@@ -1361,9 +1241,6 @@ while [ "$#" -gt 0 ]; do
 			fi
 			;;
 
-		# ── Subtree: NUM.. (all descendants) and NUM. (immediate children)
-		# NUM.. must be checked before NUM. since *.) would match both.
-		# Both must be checked before the generic numeric index case.
 		[0123456789]*..)
 			cmd_subtree "${1%..}" all; shift ;;
 		-[0123456789]*..)
@@ -1373,9 +1250,6 @@ while [ "$#" -gt 0 ]; do
 		-[0123456789]*.)
 			cmd_subtree "${${1#-}%.}" immediate; shift ;;
 
-		# ── Numeric index (simple or hierarchical) ───────────────────
-		# Bare form:    3, 007, 1.1, 004.7.10, etc.
-		# Hyphen form: -3, -007, -1.1, etc. (for use in chained commands)
 		[0123456789]*)
 			if [[ "$1" =~ $_nt_idx_strict ]]; then
 				cmd_open "$1"; shift

@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# tanghulu — stay focused and rested by running a string of timed sessions
-# with inter-session reminders (terminal + pop-up + optional chime).
-#
-# Named for 糖葫芦, a Chinese snack of candied fruits threaded on a stick.
 
 set -u
 
-#####################################################################
-# Constants
-#####################################################################
 
 TANGHULU_VERSION="0.1.10"
 TG_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tanghulu"
@@ -37,9 +30,6 @@ Block grammar: N[.|:]  N[.|:]=LABEL  KxITEM  /ITEM,ITEM,.../  NAME[.|:]  ITEM,..
   . = no popup, no sound   : = always popup, sound follows config
 EOF
 
-#####################################################################
-# Util
-#####################################################################
 
 tg_die() { printf 'tanghulu: %s\n' "$*" >&2; exit 1; }
 
@@ -56,7 +46,6 @@ tg_version_gt() {
     return 1
 }
 
-# Background: fetch latest tanghulu tag from GitHub and write to cache.
 tg_upgrade_bg_fetch() {
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/tanghulu"
     local cache_file="$cache_dir/latest-version"
@@ -69,8 +58,6 @@ tg_upgrade_bg_fetch() {
     [[ -n "$latest" ]] && printf '%s\n' "$latest" > "$cache_file"
 }
 
-# Check cache for a newer version; print reminder if found.
-# Spawn background fetch if cache is stale (>24h) or missing.
 tg_upgrade_check() {
     [[ -z "${TANGHULU_NO_UPDATE_CHECK:-}" ]] || return 0
     [[ -t 2 ]] || return 0
@@ -108,8 +95,6 @@ tg_is_reserved() { [[ "$1" =~ ^($TG_RESERVED)$ ]]; }
 tg_valid_name() {
     [[ "$1" =~ $TG_NAME_RE ]] || return 1
     tg_is_reserved "$1" && return 1
-    # Digit-leading names that clash with block grammar are unreachable as refs.
-    # Pure integers are parsed as segs; [0-9]+x prefix is consumed as repeat count.
     [[ "$1" =~ ^[0-9]+$ ]] && return 1
     [[ "$1" =~ ^[0-9]+x ]] && return 1
     return 0
@@ -117,9 +102,6 @@ tg_valid_name() {
 
 tg_ensure_dirs() { mkdir -p "$TG_BLOCKS_DIR"; }
 
-#####################################################################
-# Config (simple KEY=VALUE file)
-#####################################################################
 
 tg_config_get() {
     local key=$1 default=${2-}
@@ -143,9 +125,6 @@ tg_sound_on() {
     [[ $(tg_config_get sound on) == on ]]
 }
 
-#####################################################################
-# Block storage — one file per named block
-#####################################################################
 
 tg_block_path() { printf '%s/%s.block' "$TG_BLOCKS_DIR" "$1"; }
 
@@ -154,7 +133,6 @@ tg_block_exists() { [[ -f $(tg_block_path "$1") ]]; }
 tg_block_read() {
     local p; p=$(tg_block_path "$1")
     [[ -f $p ]] || tg_die "no such block: $1"
-    # Non-comment lines, stripped of newlines.
     grep -v '^#' "$p" | tr -d '\n'
 }
 
@@ -186,23 +164,6 @@ tg_block_list() {
     done | sort
 }
 
-#####################################################################
-# Parser
-#
-# Grammar:
-#   block = item ("," item)*
-#   item  = [NUMBER "x"] atom
-#   atom  = seg | group | name
-#   seg   = NUMBER ["." | ":"] ["=" LABEL]
-#   group = "/" block "/"
-#   name  = IDENT ["." | ":"]  (looked up in blocks_dir; late-bound)
-#
-# Modifier: "." suppresses popup+sound; ":" forces popup (sound follows config)
-# Segments are stored as "minutes:label:modifier" (modifier is ".", ":", or "").
-#
-# NUMBER = [0-9]+
-# IDENT / LABEL = [A-Za-z_][A-Za-z0-9_-]*
-#####################################################################
 
 _tg_src=""
 _tg_pos=0
@@ -210,9 +171,6 @@ _tg_segs=()            # output: "minutes:label" entries (label may be empty)
 _tg_stack_names=()     # cycle guard for named-block expansion
 _tg_RET=""             # return-string channel for parser funcs (avoids $() subshell)
 
-# NOTE: parser functions that mutate _tg_pos MUST NOT be invoked via $(...) —
-# command substitution runs in a subshell and discards position changes. They
-# return their consumed string through _tg_RET instead.
 
 _tg_eof() { (( _tg_pos >= ${#_tg_src} )); }
 
@@ -223,7 +181,6 @@ _tg_error() {
   ${pointer}^"
 }
 
-# Consume chars while regex matches; sets _tg_RET.
 _tg_consume_while() {
     local pat=$1 start=$_tg_pos
     while (( _tg_pos < ${#_tg_src} )) && [[ ${_tg_src:$_tg_pos:1} =~ $pat ]]; do
@@ -232,7 +189,6 @@ _tg_consume_while() {
     _tg_RET="${_tg_src:$start:$((_tg_pos - start))}"
 }
 
-# Parse IDENT; sets _tg_RET.
 _tg_parse_ident() {
     local first=${_tg_src:$_tg_pos:1}
     [[ $first =~ ^[A-Za-z_]$ ]] || _tg_error "expected identifier"
@@ -242,7 +198,6 @@ _tg_parse_ident() {
     _tg_RET="${_tg_src:$s:$((_tg_pos - s))}"
 }
 
-# Like _tg_parse_ident but accepts a leading digit (for digit-leading block names).
 _tg_parse_name_ident() {
     local first=${_tg_src:$_tg_pos:1}
     [[ $first =~ ^[A-Za-z0-9_]$ ]] || _tg_error "expected identifier"
@@ -252,7 +207,6 @@ _tg_parse_name_ident() {
     _tg_RET="${_tg_src:$s:$((_tg_pos - s))}"
 }
 
-# block = item ("," item)*
 _tg_parse_block() {
     _tg_parse_item
     while (( _tg_pos < ${#_tg_src} )) && [[ ${_tg_src:$_tg_pos:1} == "," ]]; do
@@ -261,7 +215,6 @@ _tg_parse_block() {
     done
 }
 
-# item = [NUMBER "x"] atom   — repeat applied by duplicating produced segs
 _tg_parse_item() {
     local count=1
     local here=${_tg_src:$_tg_pos:1}
@@ -289,7 +242,6 @@ _tg_parse_item() {
     fi
 }
 
-# atom = seg | group | name
 _tg_parse_atom() {
     local c=${_tg_src:$_tg_pos:1}
     case "$c" in
@@ -300,7 +252,6 @@ _tg_parse_atom() {
             (( _tg_pos++ ))
             ;;
         [0-9])
-            # Peek past leading digits: alpha/_/- after the run means a name ref.
             local _save=$_tg_pos
             _tg_consume_while '^[0-9]$'
             local _peek=${_tg_src:$_tg_pos:1}
@@ -323,7 +274,6 @@ _tg_parse_atom() {
     esac
 }
 
-# seg = NUMBER ["." | ":"] ["=" LABEL]
 _tg_parse_seg() {
     _tg_consume_while '^[0-9]$'
     local n=$_tg_RET
@@ -344,18 +294,15 @@ _tg_parse_seg() {
     _tg_segs+=("$n:$label:$modifier")
 }
 
-# name reference: IDENT ["." | ":"] → look up saved block and splice in its segments
 _tg_parse_name_ref() {
     _tg_parse_name_ident
     local name=$_tg_RET
-    # Check for name-level modifier (consumed from outer source before context switch)
     local modifier=""
     local _nc=${_tg_src:$_tg_pos:1}
     if [[ $_nc == "." || $_nc == ":" ]]; then
         modifier=$_nc
         (( _tg_pos++ ))
     fi
-    # Cycle check
     local s
     for s in "${_tg_stack_names[@]+"${_tg_stack_names[@]}"}"; do
         [[ $s == "$name" ]] && tg_die "cycle detected in named block: $name"
@@ -363,17 +310,14 @@ _tg_parse_name_ref() {
     tg_block_exists "$name" || tg_die "unknown name: $name"
     local sub; sub=$(tg_block_read "$name")
     sub="${sub// /}"
-    # Save/restore parser position + source.
     local save_src=$_tg_src save_pos=$_tg_pos
     local before=${#_tg_segs[@]}
     _tg_src=$sub; _tg_pos=0
     _tg_stack_names+=("$name")
     _tg_parse_block
     _tg_eof || _tg_error "unexpected trailing input in block '$name'"
-    # Pop stack
     _tg_stack_names=("${_tg_stack_names[@]:0:$((${#_tg_stack_names[@]}-1))}")
     _tg_src=$save_src; _tg_pos=$save_pos
-    # Apply name-level modifier to all newly-added segments (overrides per-seg modifiers)
     if [[ -n $modifier ]]; then
         local _idx
         for (( _idx=before; _idx<${#_tg_segs[@]}; _idx++ )); do
@@ -386,7 +330,6 @@ _tg_parse_name_ref() {
     fi
 }
 
-# Public entry point — fills _tg_segs.
 tg_parse() {
     _tg_src="${1// /}"     # strip whitespace
     _tg_pos=0
@@ -398,9 +341,6 @@ tg_parse() {
     (( ${#_tg_segs[@]} > 0 )) || tg_die "empty block"
 }
 
-#####################################################################
-# Runtime — countdown, messages, pop-up, sound, Ctrl-C accounting
-#####################################################################
 
 TG_ELAPSED_SEC=0
 TG_CURRENT_SEG=0
@@ -412,7 +352,6 @@ TG_FORCE_REDRAW=0
 TG_TIMELINE_ACTIVE=0
 _tg_try_segs=()
 
-# Build the transition message at the end of segment i (0-based).
 tg_msg() {
     local i=$1
     local cur=${_tg_segs[$i]}
@@ -441,10 +380,8 @@ tg_msg() {
     printf '%s %s' "$part1" "$part2"
 }
 
-# Fire-and-forget macOS dialog. Redirect to suppress "button returned:OK".
 tg_popup() {
     local msg=$1
-    # Escape backslashes first, then double-quotes, for AppleScript literal.
     local esc=${msg//\\/\\\\}
     esc=${esc//\"/\\\"}
     ( osascript -e "tell app \"System Events\" to display dialog \"$esc\" buttons {\"OK\"} default button \"OK\"" \
@@ -457,20 +394,7 @@ tg_ding() {
     ( afplay "$TG_SOUND_FILE" >/dev/null 2>&1 ) & disown
 }
 
-#####################################################################
-# Timeline rendering
-#
-# Layout (3 reserved lines, refreshed in place during a run):
-#   [██████▓░░░│░░░░│░░░░░░░│░░░░]
-#               ▲
-#   step 2/8  [focus] 12:47 left · 37m elapsed · 120m total · 'a' to append
-#
-# Cursor invariant maintained by tg_draw_timeline and tg_clear_timeline:
-# cursor sits at column 0 of the bar line both before and after each call.
-#####################################################################
 
-# Query terminal width. bash does not set COLUMNS in non-interactive mode,
-# so use stty size (TIOCGWINSZ) which works from any tty context.
 tg_term_cols() {
     local sz cols
     sz=$(stty size 2>/dev/null)
@@ -479,7 +403,6 @@ tg_term_cols() {
     printf '%d' "$cols"
 }
 
-# Compute bar width from terminal columns.
 tg_bar_width() {
     local cols; cols=$(tg_term_cols)
     local bw=$(( cols - 2 ))
@@ -487,8 +410,6 @@ tg_bar_width() {
     printf '%d' "$bw"
 }
 
-# Render the bar (single line, no trailing newline) for the current _tg_segs.
-# Args: $1 = current seg idx (-1 for none / preview), $2 = sec into current seg.
 tg_render_bar() {
     local cur_idx=${1:--1}
     local cur_sec=${2:-0}
@@ -503,14 +424,12 @@ tg_render_bar() {
     done
     (( total_secs > 0 )) || { printf '[]'; return; }
 
-    # boundaries[i] = exclusive end column of segment i (1..bar_w)
     local cum=0 boundaries=()
     for (( i=0; i<n; i++ )); do
         (( cum += secs[i] ))
         boundaries[i]=$(( cum * bar_w / total_secs ))
     done
 
-    # Mark boundary cells (last cell of each segment except the final one).
     local is_b=()
     for (( i=0; i<bar_w; i++ )); do is_b[i]=0; done
     for (( i=0; i<n-1; i++ )); do
@@ -542,7 +461,6 @@ tg_render_bar() {
     printf '%s' "$out"
 }
 
-# Marker line ('▲' positioned under the current cell). Empty if no marker.
 tg_render_marker() {
     local cur_idx=$1 cur_sec=$2
     (( cur_idx < 0 )) && return
@@ -559,11 +477,9 @@ tg_render_marker() {
     for (( i=0; i<cur_idx; i++ )); do (( completed += secs[i] )); done
     local marker_pos=$(( completed * bar_w / total_secs ))
     (( marker_pos >= bar_w )) && marker_pos=$(( bar_w - 1 ))
-    # column 1 (after '[') + marker_pos
     printf '%*s▲' $(( marker_pos + 1 )) ''
 }
 
-# Status line: step N/T, label, time remaining in seg, totals, hint.
 tg_render_status() {
     local cur_idx=$1 cur_sec=$2 cols=${3:-0}
     (( cols > 0 )) || cols=$(tg_term_cols)
@@ -588,15 +504,12 @@ tg_render_status() {
     local s
     s=$(printf "step %d/%d  %s%02d:%02d left · %dm elapsed · %dm total · 'a' to append" \
         $((cur_idx+1)) "$total" "$label_part" "$rmm" "$rss" "$em" "$total_mins")
-    # Truncate to terminal width to avoid wraparound that breaks redraw.
     if (( ${#s} > cols )); then
         s="${s:0:$cols}"
     fi
     printf '%s' "$s"
 }
 
-# Draw the 3-line timeline in place. Cursor invariant: starts and ends at
-# column 0 of the bar line.
 tg_draw_timeline() {
     local cur_idx=$1 cur_sec=$2
     local bar marker status
@@ -606,26 +519,17 @@ tg_draw_timeline() {
     bar=$(tg_render_bar "$cur_idx" "$cur_sec" "$bar_w")
     marker=$(tg_render_marker "$cur_idx" "$cur_sec" "$bar_w")
     status=$(tg_render_status "$cur_idx" "$cur_sec" "$cols")
-    # \033[K after each line clears any leftover from a longer previous draw.
-    # Trailing \033[2A returns cursor to bar-line column 0 for the next refresh.
     printf '\r%s\033[K\n%s\033[K\n%s\033[K\r\033[2A' "$bar" "$marker" "$status"
     TG_TIMELINE_ACTIVE=1
 }
 
-# Wipe the 3 reserved lines; cursor ends at column 0 of the (now empty)
-# bar line. Caller may then printf normal output at that line.
 tg_clear_timeline() {
     (( TG_TIMELINE_ACTIVE )) || return 0
     printf '\r\033[K\n\033[K\n\033[K\033[2A'
     TG_TIMELINE_ACTIVE=0
 }
 
-#####################################################################
-# Append-during-run
-#####################################################################
 
-# Subshell-isolated parse: on success, populates _tg_try_segs with the new
-# segments. Returns 1 on parse error (parser writes its message to stderr).
 tg_try_parse() {
     local def=$1
     _tg_try_segs=()
@@ -668,7 +572,6 @@ tg_restore_tty() {
     fi
 }
 
-# Handle the 'a' keypress: pause timer, prompt for a block, splice on success.
 tg_handle_append() {
     local pause_start; pause_start=$(date +%s)
     tg_clear_timeline
@@ -695,13 +598,7 @@ tg_handle_append() {
     TG_FORCE_REDRAW=1
 }
 
-#####################################################################
-# Countdown
-#####################################################################
 
-# Wall-clock countdown for segment seg_idx. In tty mode, draws and refreshes
-# the timeline and polls for keypresses (currently 'a' = append). In non-tty
-# mode (pipe/redirect), falls back to a simple sleep loop with no draw.
 tg_countdown() {
     local seg_idx=$1
     local seg=${_tg_segs[$seg_idx]}
@@ -812,9 +709,6 @@ tg_run_parsed() {
     tg_restore_tty
 }
 
-#####################################################################
-# Subcommands
-#####################################################################
 
 tg_cmd_add() {
     (( $# >= 2 )) || tg_die "usage: tanghulu add <name> <block>"
@@ -879,9 +773,7 @@ tg_cmd_preview() {
     printf '\n%s\n\n' "$(tg_render_bar)"
 
     local i total=${#_tg_segs[@]}
-    # width for right-aligning step numbers
     local step_w=${#total}
-    # width for right-aligning minutes
     local max_m=0
     for (( i=0; i<total; i++ )); do
         local m=${_tg_segs[$i]%%:*}
@@ -907,7 +799,6 @@ tg_cmd_preview() {
     done
     printf '\ntotal: %dm\n' "$total_mins"
 
-    # Build label breakdown — only display if any segment has a label.
     local label_keys=() label_mins=() has_labels=0
     for (( i=0; i<total; i++ )); do
         local seg=${_tg_segs[$i]}
@@ -966,9 +857,6 @@ tg_cmd_config() {
     esac
 }
 
-#####################################################################
-# Main
-#####################################################################
 
 main() {
     tg_ensure_dirs

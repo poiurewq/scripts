@@ -2,15 +2,7 @@
 
 QLAUDE_VERSION="0.2.1"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 1: Account infrastructure
-# ══════════════════════════════════════════════════════════════════════════════
 
-# _QLAUDE_DIRS: alias → base dir (collapses old ACCOUNTS + claude_base into one map)
-# _QLAUDE_ALL:  ordered list of primary account names for "all" iteration
-# Script default: only 'default' → ~/.claude is hardcoded.
-# All other accounts must be added via 'qlaude config add-dir'.
-# When ~/.config/qlaude/config.zsh exists, it fully replaces these defaults.
 typeset -gA _QLAUDE_DIRS=(
     [default]="$HOME/.claude"
 )
@@ -26,7 +18,6 @@ account_label() {
     fi
 }
 
-# Emit the projects/ dir(s) for the given account (_all_ or a specific alias)
 _qlaude_all_project_dirs() {
     local account="$1"
     local acct base
@@ -41,11 +32,7 @@ _qlaude_all_project_dirs() {
     fi
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 2: Conv shared helpers
-# ══════════════════════════════════════════════════════════════════════════════
 
-# Echo tab-separated: customTitle\tinput\toutput\tcache_create\tcache_read\ttotal
 _conv_extract_stats() {
   jq -rn --slurpfile d "$1" '
     $d | {
@@ -60,7 +47,6 @@ _conv_extract_stats() {
   ' 2>/dev/null
 }
 
-# Echo human-readable token count: 1.2M / 45K / 999
 _conv_human_tokens() {
   local n="$1"
   if (( n >= 1000000 )); then
@@ -72,8 +58,6 @@ _conv_human_tokens() {
   fi
 }
 
-# Echo "filled<TAB>empty" bar strings; caller: IFS=$'\t' read -r filled empty <<< "$(...)"
-# Segments: ▓=input, █=output, ▓=cache_create, ▒=cache_read, ░=empty
 _conv_render_bar() {
   local input="$1" output="$2" cc="$3" cr="$4" total="$5" max_tokens="$6" bar_max="$7"
   local bar_total wt_input wt_output wt_cc wt_cr wt_total
@@ -110,15 +94,12 @@ _conv_render_bar() {
     "$(printf '%*s' "$empty_len" '' | tr ' ' '░')"
 }
 
-# Echo decoded project path from encoded directory basename
 _conv_decode_project() {
   local raw_dir="$1" project
   project=$(printf '%s' "$raw_dir" | sed 's/--/\/./' | tr '-' '/')
   printf '%s' "${project#/Users/*/}"
 }
 
-# Echo human-readable duration from a whole number of seconds: 45s / 3m 20s / 2h 5m / 4d 1h
-# Negative input (used as a sentinel for "no preceding turn") renders as an em dash.
 _conv_human_duration() {
   local s="$1"
   if (( s < 0 )); then printf '—'
@@ -129,14 +110,6 @@ _conv_human_duration() {
   fi
 }
 
-# Render a per-turn timing table for a single conversation file.
-# A "turn" is bounded by genuine human messages: user-string lines that are
-# neither isMeta nor slash-command wrappers, and user-array lines that carry no
-# tool_result (i.e. not the harness feeding tool output back mid-turn).
-#   user gap    = wall-clock from the agent finishing its previous turn to the
-#                 human's next message (read + type + any away-from-keyboard time)
-#   agent turn  = wall-clock from the human message to the agent's last activity
-#                 (thinking + tool round-trips) before the next human message
 _conv_render_turns() {
   local f="$1"
   local raw_dir project uuid custom_title name stats
@@ -148,7 +121,6 @@ _conv_render_turns() {
   custom_title=$(printf '%s' "$stats" | cut -f1)
   [[ "$custom_title" != "null" && -n "$custom_title" ]] && name="$custom_title" || name="$uuid"
 
-  # Emit TSV: idx <TAB> humanEpochMs <TAB> userGapMs(-1 for first turn) <TAB> agentTurnMs
   local turns
   turns=$(jq -rn --slurpfile d "$f" '
     def toms:
@@ -158,9 +130,6 @@ _conv_render_turns() {
       .type == "user" and ((.isMeta // false) | not) and
       ( (.message.content | type == "string" and (test("^<(command-name|command-message|local-command)") | not))
         or (.message.content | type == "array" and (any(.[]; .type == "tool_result") | not)) );
-    # Three-way classification: a genuine human message, real agent activity
-    # (assistant lines + the tool_result round-trips that mark tool execution),
-    # or "skip" noise (isMeta reminders, command wrappers) that belongs to neither.
     def kind:
       if human then "human"
       elif .type == "assistant" then "agent"
@@ -198,7 +167,6 @@ _conv_render_turns() {
 
   local idx hms udur adur maxu=0 maxa=0 sum_u=0 sum_a=0 nturns=0
 
-  # Pass 1: totals and max user/agent durations (for bar scaling)
   while IFS=$'\t' read -r idx hms udur adur; do
     (( udur > maxu )) && maxu=$udur
     (( adur > maxa )) && maxa=$adur
@@ -207,7 +175,6 @@ _conv_render_turns() {
     nturns=$(( nturns + 1 ))
   done <<< "$turns"
 
-  # Pass 2: render rows (bar length ∝ user gap / agent turn duration)
   local barw=18 ulen tlen ubar bar ustr astr
   printf '  %-3s  %-11s  %-18s  %-11s  %s\n' '#' 'user gap' '' 'agent' ''
   while IFS=$'\t' read -r idx hms udur adur; do
@@ -235,11 +202,7 @@ _conv_render_turns() {
     "$nturns" "$(_conv_human_duration $(( sum_a / 1000 )))" "$(_conv_human_duration $(( sum_u / 1000 )))"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 3: Config subsystem  (~/.config/qlaude/config.zsh)
-# ══════════════════════════════════════════════════════════════════════════════
 
-# Conv display defaults (may be overridden by config)
 _CONV_MAX_TOKENS=4000000
 _CONV_MAX_SCALED_TOKENS=20000000
 _CONV_SCALE=linear
@@ -251,14 +214,11 @@ _CONV_W_INPUT=100    # input         = 10.0×
 _CONV_W_OUTPUT=500   # output        = 50.0×
 _CONV_LIVE_MODE=override  # override | scroll
 
-# Config location (XDG-compliant; note: moved from conv/ to qlaude/)
 _QLAUDE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/qlaude"
 _QLAUDE_CONFIG_FILE="$_QLAUDE_CONFIG_DIR/config.zsh"
 
-# Source user config — may override _QLAUDE_DIRS, _QLAUDE_ALL, and _CONV_* vars
 [[ -r "$_QLAUDE_CONFIG_FILE" ]] && source "$_QLAUDE_CONFIG_FILE"
 
-# Write full current state to config file
 _qlaude_config_write() {
     mkdir -p "$_QLAUDE_CONFIG_DIR" || { echo "qlaude config: cannot create $_QLAUDE_CONFIG_DIR" >&2; return 1; }
     local alias
@@ -266,7 +226,6 @@ _qlaude_config_write() {
         printf '# Auto-generated by qlaude config. Edit via qlaude config commands or by hand.\n'
         printf '# When present, this file fully replaces script defaults for accounts and display settings.\n\n'
         printf 'typeset -gA _QLAUDE_DIRS=(\n'
-        # Write primary accounts first (in _QLAUDE_ALL order), then secondary aliases
         for alias in "${_QLAUDE_ALL[@]}"; do
             [[ -n "${_QLAUDE_DIRS[$alias]:-}" ]] && \
                 printf '    [%s]="%s"\n' "$alias" "${_QLAUDE_DIRS[$alias]//$HOME/\$HOME}"
@@ -290,7 +249,6 @@ _qlaude_config_write() {
     } > "$_QLAUDE_CONFIG_FILE"
 }
 
-# Print all effective values
 _qlaude_config_list() {
     local _tilde='~' alias
     printf 'accounts:\n'
@@ -316,7 +274,6 @@ _qlaude_config_list() {
     printf '%-18s %s\n' 'live_mode'         "$_CONV_LIVE_MODE"
 }
 
-# Map friendly key name → variable name (display settings only; dirs via add/remove-dir)
 _qlaude_config_key_to_var() {
     case "$1" in
         max_tokens)        printf '_CONV_MAX_TOKENS' ;;
@@ -339,9 +296,6 @@ _conv_tilde_expand() {
     printf '%s' "$p"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 4: qlaude config subcommand
-# ══════════════════════════════════════════════════════════════════════════════
 
 cmd_config() {
     local varname key alias name dir a
@@ -548,7 +502,6 @@ cmd_config() {
             ;;
 
         add-dir)
-            # qlaude config add-dir <name> <basedir>  — add a primary account entry
             if [[ -z "${2:-}" || -z "${3:-}" ]]; then
                 echo "Usage: qlaude config add-dir <name> <basedir>" >&2; return 1
             fi
@@ -563,7 +516,6 @@ cmd_config() {
             ;;
 
         add-alias)
-            # qlaude config add-alias <alias> <existing-name>  — secondary alias, not added to ALL
             if [[ -z "${2:-}" || -z "${3:-}" ]]; then
                 echo "Usage: qlaude config add-alias <alias> <existing-name>" >&2; return 1
             fi
@@ -577,7 +529,6 @@ cmd_config() {
             ;;
 
         remove-dir)
-            # qlaude config remove-dir <name>  — remove a primary account (and any aliases pointing to its dir)
             if [[ -z "${2:-}" ]]; then
                 echo "Usage: qlaude config remove-dir <name>" >&2; return 1
             fi
@@ -586,7 +537,6 @@ cmd_config() {
                 echo "qlaude config: unknown account '$name'" >&2; return 1
             fi
             local removed_dir="${_QLAUDE_DIRS[$name]}"
-            # Remove all aliases pointing to the same dir
             local removed_aliases=()
             for alias in "${(k)_QLAUDE_DIRS[@]}"; do
                 if [[ "${_QLAUDE_DIRS[$alias]}" == "$removed_dir" ]]; then
@@ -594,7 +544,6 @@ cmd_config() {
                     removed_aliases+=("$alias")
                 fi
             done
-            # Remove from ALL
             local new_all=()
             for a in "${_QLAUDE_ALL[@]}"; do
                 [[ " ${removed_aliases[*]} " == *" $a "* ]] || new_all+=("$a")
@@ -627,9 +576,6 @@ cmd_config() {
     esac
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 5: Conv main logic
-# ══════════════════════════════════════════════════════════════════════════════
 
 cmd_conv() {
   local n=0
@@ -637,7 +583,6 @@ cmd_conv() {
   local range_start=0 range_end=0
   local oneline=1
 
-  # Strip --detailed before any other processing
   local _preargs=()
   local _arg
   for _arg in "$@"; do
@@ -645,7 +590,6 @@ cmd_conv() {
   done
   set -- "${_preargs[@]}"
 
-  # No args → synopsis
   if (( $# == 0 )); then
     cat <<'EOF'
 Usage:
@@ -716,13 +660,11 @@ EOF
     return 0
   fi
 
-  # conv config redirect
   if [[ "$1" == "config" ]]; then
     echo "qlaude: 'conv config' has moved — use 'qlaude config' instead" >&2
     return 1
   fi
 
-  # Reverse-map a file path to its account alias
   _conv_account_for_file() {
     local file="$1" acct base
     for acct in "${(k)_QLAUDE_DIRS[@]}"; do
@@ -732,14 +674,10 @@ EOF
     printf 'default'
   }
 
-  # Compute dirs from account
   local _conv_dirs=()
   local _d
   while IFS= read -r _d; do _conv_dirs+=("$_d"); done < <(_qlaude_all_project_dirs "$_qlaude_account")
 
-  # ---------------------------------------------------------------------------
-  # Live mode
-  # ---------------------------------------------------------------------------
   if [[ "$1" == "live" ]]; then
 
     _live_find_newest() {
@@ -805,7 +743,6 @@ EOF
     _orig_stty=$(stty -g 2>/dev/null)
     stty -echo cbreak 2>/dev/null
 
-    # override: each update erases the previous line; scroll: each update is a new line
     local _live_redraw
     [[ "$_CONV_LIVE_MODE" == "scroll" ]] && _live_redraw=0 || _live_redraw=1
 
@@ -855,9 +792,6 @@ EOF
     return 0
   fi
 
-  # ---------------------------------------------------------------------------
-  # Turns mode — per-turn timing for a single conversation
-  # ---------------------------------------------------------------------------
   if [[ "$1" == "turns" ]]; then
     shift
     [[ "$1" == "just" ]] && shift   # `turns just N` == `turns N`, mirrors list syntax
@@ -870,8 +804,6 @@ EOF
       fi
     fi
 
-    # Rank conversations by recency, skipping trivial ones so the rank matches
-    # `conv just N` (same output>=20 filter used by the list view).
     local _tline _tm _tf _tres _to _tseen=0 _target=''
     while IFS= read -r _tline; do
       _tm=${_tline%% *}; _tf=${_tline#* }
@@ -893,9 +825,6 @@ EOF
     return $?
   fi
 
-  # ---------------------------------------------------------------------------
-  # Time range parsing helpers
-  # ---------------------------------------------------------------------------
   _conv_midnight() {
     local off="${1:-0}"
     local m
@@ -942,7 +871,6 @@ EOF
 
   local unit= offset=
 
-  # Expand word aliases
   local _new_args=()
   for _arg in "$@"; do
     case "$_arg" in
@@ -955,7 +883,6 @@ EOF
   done
   set -- "${_new_args[@]}"
 
-  # Check for -<n> <unit> pattern
   if [[ $# -ge 2 && "$1" =~ ^-[0-9]+$ ]]; then
     offset="${1#-}"
     unit="$2"
@@ -1021,7 +948,6 @@ EOF
     fi
   fi
 
-  # Collect all non-agent JSONL files sorted by mtime, newest first
   local files=()
   local line mtime_pre f
   while IFS= read -r line; do
@@ -1053,15 +979,11 @@ EOF
     echo
   fi
 
-  # Hoist all loop-body locals to avoid zsh re-declaration-in-loop printing
   local seen=0 shown=0 first=1
   local entry mtime uuid ts result custom_title input output cc cr total name
   local raw_dir project human filled empty _eff_total _ct
   local ol_date ol_account ol_acct_detail ol_label ol_bar_max ol_filled ol_empty
 
-  # ── Collect phase ──────────────────────────────────────────────────────────
-  # Gather all entries that pass filters into _conv_data; track max total for
-  # dynamic normalization. Tab-separated: mtime\tf\tcustom_title\tinput\toutput\tcc\tcr\ttotal
   local _conv_data=() _dynamic_max=0
 
   for entry in "${files[@]}"; do
@@ -1101,7 +1023,6 @@ EOF
     max_tokens=$_dynamic_max
   fi
 
-  # ── Render phase ───────────────────────────────────────────────────────────
   for entry in "${_conv_data[@]}"; do
     IFS=$'\t' read -r mtime f custom_title input output cc cr total <<< "$entry"
     uuid=$(basename "$f" .jsonl)
@@ -1152,9 +1073,6 @@ EOF
   fi
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 6: Resource listing commands
-# ══════════════════════════════════════════════════════════════════════════════
 
 _qlaude_list_resource() {
     local account="$1" subdir="$2" label="$3"
@@ -1243,9 +1161,6 @@ _qlaude_list_plugins() {
 
 cmd_plugins() { _qlaude_list_plugins "$1"; }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 7: Touch command
-# ══════════════════════════════════════════════════════════════════════════════
 
 _qlaude_touch_one() {
     local base="${_QLAUDE_DIRS[$1]}"
@@ -1265,9 +1180,6 @@ cmd_touch() {
     fi
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 8: Launch command
-# ══════════════════════════════════════════════════════════════════════════════
 
 cmd_launch() {
     local account="$1"; shift
@@ -1282,9 +1194,6 @@ cmd_launch() {
     CLAUDE_CONFIG_DIR="$base" CLAUDE_CODE_NO_FLICKER=1 \claude "$@"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 9: Help text
-# ══════════════════════════════════════════════════════════════════════════════
 
 cmd_synopsis() {
     cat <<'EOF'
@@ -1375,29 +1284,22 @@ COMMANDS
 EOF
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Section 10: Top-level dispatch
-# ══════════════════════════════════════════════════════════════════════════════
 
-# Detect invocation as 'conv' (thin wrapper)
 if [[ "$(basename "$0")" == "conv" ]]; then
     _qlaude_account="_all_"
     cmd_conv "$@"
     exit $?
 fi
 
-# No args → synopsis
 if [[ $# -eq 0 ]]; then
     cmd_synopsis
     exit 0
 fi
 
-# Help shortcuts (before account parsing)
 case "$1" in
     h|help) cmd_help; exit 0 ;;
 esac
 
-# Parse optional account prefix
 _qlaude_account="_all_"
 if [[ -n "${_QLAUDE_DIRS[$1]:-}" ]]; then
     if [[ $# -ge 2 ]]; then
@@ -1419,7 +1321,6 @@ if [[ -n "${_QLAUDE_DIRS[$1]:-}" ]]; then
     fi
 fi
 
-# Route to subcommand
 case "$1" in
     conv)    shift; cmd_conv "$@" ;;
     skills)  cmd_skills "$_qlaude_account" ;;
