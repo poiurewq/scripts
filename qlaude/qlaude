@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 
-QLAUDE_VERSION="0.2.1"
+QLAUDE_VERSION="0.2.2"
 
 
 typeset -gA _QLAUDE_DIRS=(
