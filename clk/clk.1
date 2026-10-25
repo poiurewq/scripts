@@ -1,6 +1,6 @@
-.Dd October 24, 2026
+.Dd October 25, 2026
 .Dt CLK 1
-.Os "clk 0.5.1"
+.Os "clk 0.7.2"
 .Sh NAME
 .Nm clk
 .Nd clock in & out of work
@@ -9,19 +9,19 @@
 .Op Cm help
 .Ss Core workflow
 .Nm
-.Cm in Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
+.Bro Cm in | Cm i Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
 .Bro Cm in-focus | Cm I Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 .br
 .Nm
-.Cm out Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
+.Bro Cm out | Cm o Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description | Cm +on Ar text
 .br
 .Nm
 .Bro Cm cancel | Cm c Brc Op Ar tag
 .br
 .Nm
-.Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
+.Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description | Cm did Ar description | Cm +did Ar text
 .br
 .Nm
 .Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
@@ -57,7 +57,7 @@
 .Bro Cm edit | Cm e Brc
 .br
 .Nm
-.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm pause | Cm on Brc Ar value
+.Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Bro Cm tag | Cm pause | Cm on | Cm +on Brc Ar value
 .br
 .Nm
 .Bro Cm edit | Cm e Brc Bro Fl Ar n | Ar n Brc Cm start Ar timestamp Op Fl -adjust Cm end
@@ -167,7 +167,7 @@ that you can inject via
 for faster invocation.
 .Ss Core workflow
 .Bl -tag -width indent
-.It Cm in Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
+.It Bro Cm in | Cm i Brc Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
 Clock in to a work session labeled with
 .Ar tag .
 Tags are single tokens
@@ -201,7 +201,7 @@ Options behave exactly as for
 .Cm in .
 Already-paused sessions are left untouched.
 The entire operation is a single undo step.
-.It Cm out Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
+.It Bro Cm out | Cm o Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description | Cm +on Ar text
 Clock out of the active session for
 .Ar tag .
 If exactly one session is active,
@@ -214,6 +214,10 @@ is required.
 If a description is provided via
 .Cm on ,
 it overrides any description set at clock-in.
+With
+.Cm +on
+instead, the text is appended to the existing description, joined by
+.Ql ;\& .
 If the session is currently paused, the pause is finalized
 .Pq pause duration added to break time
 before computing the session length.
@@ -227,7 +231,7 @@ If multiple sessions are active,
 .Ar tag
 is required.
 The operation is undoable.
-.It Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description
+.It Cm switch Ar new-tag Op Cm from Ar old-tag Op Cm minus Ar duration | Cm at Ar timestamp Op Cm on Ar description | Cm did Ar description | Cm +did Ar text
 End one session and start another atomically.
 The switch timestamp is both the end time of the old session and the
 start time of the new one.
@@ -236,7 +240,27 @@ start time of the new one.
 specifies which active session to close.
 If omitted and exactly one session is active, it is inferred.
 .Cm on Ar description
-applies to the session being closed.
+describes the new session, as for
+.Cm in
+.Po
+.Cm +on
+is accepted too; the new session starts empty
+.Pc .
+.Cm did Ar description
+describes the session being closed;
+.Cm +did Ar text
+appends to that session's description, as
+.Cm +on
+does for
+.Cm out .
+Each consumes the rest of the line, so a switch takes only one of them.
+.Pp
+If
+.Ar new-tag
+already has an active session, switch fails without closing anything;
+clock out the old session with
+.Cm out
+instead.
 .It Bro Cm pause | Cm p Brc Op Ar tag Op Cm minus Ar duration | Cm at Ar timestamp
 Pause an active session.
 The session must not already be paused.
@@ -403,6 +427,14 @@ Change the description.
 All arguments after
 .Cm on
 are collected as the description.
+.It Cm edit Bro Fl Ar n | Ar n Brc Cm +on Ar text
+Append
+.Ar text
+to the description, joined to any existing description by
+.Ql ;\& .
+All arguments after
+.Cm +on
+are collected.
 .It Cm edit Bro Fl Ar n | Ar n Brc Cm delete
 Delete the record entirely.
 .El

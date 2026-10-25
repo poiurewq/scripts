@@ -9,7 +9,7 @@ CLK_FMT_RAW=0
 CLK_FMT_DONE_TAG_WIDTH=0
 CLK_TAB='	'
 CLK_LOG_VERSION_MARKER='#clk-v3'
-CLK_VERSION="0.5.1"
+CLK_VERSION="0.7.2"
 
 CLK_OS="$(uname)"
 case "$CLK_OS" in
@@ -29,11 +29,11 @@ read -r -d '' CLK_SYNOPSIS << 'EOF' || true
 clk [help]
 
 Core workflow:
-    in <tag> [minus <duration> | at <timestamp>] [on <description>]
+    in | i <tag> [minus <duration> | at <timestamp>] [on <description>]
     in-focus | I <tag> [minus <duration> | at <timestamp>] [on <description>]
-    out [<tag>] [minus <duration> | at <timestamp>] [on <description>]
+    out | o [<tag>] [minus <duration> | at <timestamp>] [on <description> | +on <text>]
     cancel | c [<tag>]
-    switch <new-tag> [from <old-tag>] [minus <duration> | at <timestamp>] [on <description>]
+    switch <new-tag> [from <old-tag>] [minus <duration> | at <timestamp>] [on <description> | did <description> | +did <text>]
     pause | p [<tag>] [minus <duration> | at <timestamp>]
     resume | r [<tag>] [minus <duration> | at <timestamp>]
     resume-focus | R <tag> [minus <duration> | at <timestamp>]
@@ -49,7 +49,7 @@ Record management:
 
 Editing:
     edit | e                                              (interactive)
-    edit | e (-<n> | <n>) {tag|pause|on} <value>
+    edit | e (-<n> | <n>) {tag|pause|on|+on} <value>
     edit | e (-<n> | <n>) {start} <timestamp> [--adjust end]
     edit | e (-<n> | <n>) {end} <timestamp> [--adjust active|break|start]
     edit | e (-<n> | <n>) {active|break} <duration> [--adjust ...]
@@ -683,6 +683,7 @@ clk__upgrade_check() {
 
 clk_do_in() {
     local tag="$1" at_ts="$2" minus_val="$3" description="$4"
+    local skip_undo="${5:-}"
 
     clk__validate_tag "$tag"
 
@@ -693,7 +694,9 @@ clk_do_in() {
     local start_ts
     start_ts="$(clk__resolve_time "$at_ts" "$minus_val")"
 
-    clk__save_undo
+    if [ "$skip_undo" != "skip_undo" ]; then
+        clk__save_undo
+    fi
 
     local record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${tag}${CLK_TAB}${CLK_TAB}0${CLK_TAB}${CLK_TAB}${description}"
     clk__append_line "$record"
@@ -708,6 +711,7 @@ clk_do_in() {
 clk_do_out() {
     local tag="$1" at_ts="$2" minus_val="$3" description="$4"
     local skip_undo="${5:-}"
+    local desc_mode="${6:-}"
 
     clk__require_active_tag "$tag"
     local active_line="$CLK_ACTIVE_LINE"
@@ -747,6 +751,8 @@ clk_do_out() {
     local final_desc="$description"
     if [ -z "$final_desc" ]; then
         final_desc="$existing_desc"
+    elif [ "$desc_mode" = "append" ]; then
+        final_desc="${existing_desc:+${existing_desc}; }${description}"
     fi
 
     if [ "$skip_undo" != "skip_undo" ]; then
@@ -1254,7 +1260,9 @@ ${lineno}"
 }
 
 clk_do_switch() {
-    local new_tag="$1" from_tag="$2" at_ts="$3" minus_val="$4" description="$5"
+    local new_tag="$1" from_tag="$2" at_ts="$3" minus_val="$4" new_desc="$5"
+    local did_desc="${6:-}"
+    local did_mode="${7:-}"
 
     clk__validate_tag "$new_tag"
 
@@ -1265,11 +1273,15 @@ clk_do_switch() {
         clk__die 1 "Cannot switch from '$old_tag' to the same tag."
     fi
 
+    if clk__find_active "$new_tag" >/dev/null 2>&1; then
+        clk__die 5 "Tag '$new_tag' already has an active session. Clock out first with 'clk out $old_tag'."
+    fi
+
     clk__save_undo
 
-    clk_do_out "$old_tag" "$at_ts" "$minus_val" "$description" "skip_undo"
+    clk_do_out "$old_tag" "$at_ts" "$minus_val" "$did_desc" "skip_undo" "$did_mode"
 
-    clk_do_in "$new_tag" "$at_ts" "$minus_val" ""
+    clk_do_in "$new_tag" "$at_ts" "$minus_val" "$new_desc" "skip_undo"
 }
 
 clk_do_add_session() {
@@ -1729,9 +1741,9 @@ clk__tui_field_menu() {
 
     printf '\n' >/dev/tty
     if [ "$status" = "active" ]; then
-        printf '  Edit record %s: [t]ag [s]tart [a]ctive [b]reak [d]esc [p]ause [D]elete [q]back\n' "$signed_n" >/dev/tty
+        printf '  Edit record %s: [t]ag [s]tart [a]ctive [b]reak [d]esc [+]append [p]ause [D]elete [q]back\n' "$signed_n" >/dev/tty
     else
-        printf '  Edit record %s: [t]ag [s]tart [e]nd [a]ctive [b]reak [d]esc [D]elete [q]back\n' "$signed_n" >/dev/tty
+        printf '  Edit record %s: [t]ag [s]tart [e]nd [a]ctive [b]reak [d]esc [+]append [D]elete [q]back\n' "$signed_n" >/dev/tty
     fi
     printf '  > ' >/dev/tty
 
@@ -1745,6 +1757,7 @@ clk__tui_field_menu() {
         a) CLK_TUI_FIELD="active" ;;
         b) CLK_TUI_FIELD="break" ;;
         d) CLK_TUI_FIELD="on" ;;
+        +) CLK_TUI_FIELD="+on" ;;
         p) [ "$status" = "active" ] && CLK_TUI_FIELD="pause" || { printf '\n  (Pause only for active sessions)\n' >/dev/tty; return 1; } ;;
         D) CLK_TUI_FIELD="delete" ;;
         q|ESC) return 1 ;;
@@ -1886,7 +1899,7 @@ clk_do_edit_interactive() {
                 signed_n="$(printf '%s' "$sel_row" | cut -d"$CLK_TAB" -f1)"
                 row_data="$(printf '%s' "$sel_row" | cut -d"$CLK_TAB" -f3-)"
                 clk__read_line "$row_data"
-                local rec_status="$CLK_F1"
+                local rec_status="$CLK_F1" rec_desc="$CLK_F8"
 
                 if clk__tui_field_menu "$signed_n" "$rec_status"; then
                     local edit_field="$CLK_TUI_FIELD"
@@ -1928,6 +1941,9 @@ clk_do_edit_interactive() {
                             active) prompt_label="New active time (e.g. 90, 1h30m, 1h 30m): " ;;
                             break) prompt_label="New break time (e.g. 15, 1h): " ;;
                             on)    prompt_label="New description: " ;;
+                            +on)
+                                printf '\n  Current: %s\n' "${rec_desc:-(none)}" >/dev/tty
+                                prompt_label="Append to description: " ;;
                             pause) prompt_label="New pause time (HH:MM or 'clear'): " ;;
                         esac
 
@@ -2262,10 +2278,18 @@ clk_do_edit() {
             local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
             clk__replace_line "$lineno" "$new_record"
             ;;
-        on)
-            [ -n "$value" ] || clk__die 1 "Missing description for 'edit ${signed_n} on <description>'."
+        on|+on)
+            if [ "$field" = "+on" ]; then
+                [ -n "$value" ] || clk__die 1 "Missing text for 'edit ${signed_n} +on <text>'."
+            else
+                [ -n "$value" ] || clk__die 1 "Missing description for 'edit ${signed_n} on <description>'."
+            fi
             clk__save_undo
-            description="$value"
+            if [ "$field" = "+on" ]; then
+                description="${description:+${description}; }${value}"
+            else
+                description="$value"
+            fi
             local new_record="${status}${CLK_TAB}${start_ts}${CLK_TAB}${end_ts}${CLK_TAB}${tag}${CLK_TAB}${length_secs}${CLK_TAB}${break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
             clk__replace_line "$lineno" "$new_record"
             ;;
@@ -2278,7 +2302,7 @@ clk_do_edit() {
             return 0
             ;;
         *)
-            clk__die 1 "Unknown field '${field}'. Expected: tag, start, end, active, break, pause, on, delete."
+            clk__die 1 "Unknown field '${field}'. Expected: tag, start, end, active, break, pause, on, +on, delete."
             ;;
     esac
 
@@ -3442,13 +3466,15 @@ clk_tag=""
 clk_at_timestamp=""
 clk_minus_secs=""
 clk_description=""
+clk_desc_append=""
+clk_did_description=""
 clk_for_secs=""
 clk_from_tag=""
 clk_last_n=""
 
 case "$1" in
 
-in)
+in|i)
     clk_subcmd="in"
     shift
     if [ $# -eq 0 ]; then
@@ -3518,11 +3544,11 @@ in-focus|I)
     clk_do_in_focus "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
     ;;
 
-out)
+out|o)
     clk_subcmd="out"
     shift
 
-    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ] && [ "$1" != "on" ]; then
+    if [ $# -gt 0 ] && [ "$1" != "minus" ] && [ "$1" != "at" ] && [ "$1" != "on" ] && [ "$1" != "+on" ]; then
         clk_tag="$1"; shift
     fi
 
@@ -3544,13 +3570,20 @@ out)
                 clk_description="$*"
                 break
                 ;;
+            +on)
+                [ $# -ge 2 ] || clk__die 1 "Missing <text> after '+on'."
+                shift
+                clk_description="$*"
+                clk_desc_append="append"
+                break
+                ;;
             *)
                 clk__die 1 "Unknown option '$1' after 'clk out'."
                 ;;
         esac
     done
 
-    clk_do_out "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
+    clk_do_out "$clk_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description" "" "$clk_desc_append"
     ;;
 
 cancel|c)
@@ -3717,10 +3750,23 @@ switch)
                 clk__consume_timestamp "$2" "${3:-}"
                 clk_at_timestamp="$CLK_VALIDATED_TS"; shift $(( 1 + CLK_TIMESTAMP_ARGC ))
                 ;;
-            on)
-                [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'on'."
+            on|+on)
+                [ $# -ge 2 ] || clk__die 1 "Missing <description> after '$1'."
                 shift
                 clk_description="$*"
+                break
+                ;;
+            did)
+                [ $# -ge 2 ] || clk__die 1 "Missing <description> after 'did'."
+                shift
+                clk_did_description="$*"
+                break
+                ;;
+            +did)
+                [ $# -ge 2 ] || clk__die 1 "Missing <text> after '+did'."
+                shift
+                clk_did_description="$*"
+                clk_desc_append="append"
                 break
                 ;;
             *)
@@ -3729,7 +3775,7 @@ switch)
         esac
     done
 
-    clk_do_switch "$clk_tag" "$clk_from_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description"
+    clk_do_switch "$clk_tag" "$clk_from_tag" "$clk_at_timestamp" "$clk_minus_secs" "$clk_description" "$clk_did_description" "$clk_desc_append"
     ;;
 
 add|a)
@@ -3918,6 +3964,10 @@ edit|e)
             [ $# -ge 1 ] || clk__die 1 "Missing <description> after 'on'."
             clk_edit_value="$*"
             ;;
+        +on)
+            [ $# -ge 1 ] || clk__die 1 "Missing <text> after '+on'."
+            clk_edit_value="$*"
+            ;;
         delete)
             [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'delete'."
             ;;
@@ -3953,7 +4003,7 @@ edit|e)
             [ $# -eq 0 ] || clk__die 1 "Unexpected argument '$1' after 'clk edit ${clk_edit_n} ${clk_edit_field} ${clk_edit_value}'."
             ;;
         *)
-            clk__die 1 "Unknown field '${clk_edit_field}'. Expected: tag, start, end, active, break, pause, on, delete."
+            clk__die 1 "Unknown field '${clk_edit_field}'. Expected: tag, start, end, active, break, pause, on, +on, delete."
             ;;
     esac
 
