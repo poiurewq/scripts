@@ -1,6 +1,6 @@
-.Dd October 25, 2026
+.Dd November 13, 2026
 .Dt CLK 1
-.Os "clk 0.7.2"
+.Os "clk 1.1.1"
 .Sh NAME
 .Nm clk
 .Nd clock in & out of work
@@ -106,8 +106,13 @@ still accurately track your time.
 .Pp
 All durations are stored internally in seconds for precision.
 Timestamps use ISO 8601 format
-.Pq Ql %Y\-%m\-%dT%H:%M:%S
-and are always in the local time zone.
+.Pq Ql %Y\-%m\-%dT%H:%M:%S .
+The log stores each one with the UTC offset in effect when it was recorded
+.Pq e.g. Ql 2026-10-27T00:06:23-0400 ,
+so changing time zone, by travel or daylight saving time, never alters
+recorded time, even for a session that is still running.
+Times are shown, and view ranges and day boundaries are computed,
+in the current local time zone.
 Simplified forms are accepted wherever a
 .Ar timestamp
 is expected:
@@ -129,6 +134,9 @@ are treated as if seconds were
 .Ql yyyy-mm-dd
 alone is treated as midnight
 .Pq Ql T00:00:00 .
+A timestamp without a
+.Ql ±hhmm
+UTC offset is in the current local time zone.
 Timestamps that resolve to a time in the future are rejected.
 Multiple sessions may be active simultaneously.
 .Pp
@@ -310,7 +318,8 @@ is omitted and exactly one session is active, it is inferred.
 Add
 .Ar duration
 of break time to an active session.
-The session must not be currently paused.
+A paused session stays paused; a break longer than the time worked
+before the pause is refused.
 If
 .Cm to Ar tag
 is omitted, the tag is inferred when unambiguous.
@@ -870,7 +879,12 @@ Falls back to
 .Bl -tag -width indent
 .It Pa ${XDG_DATA_HOME}/clk/clk.tsv
 The time-tracking log.
-Tab-separated, eight fields per record.
+Tab-separated, eight fields per record, after a
+.Ql #clk-v4
+header line.
+Records without a UTC offset, as in
+.Ql #clk-v3
+logs, are read in the current local time zone.
 .It Pa ${XDG_DATA_HOME}/clk/clk.tsv.undo
 Snapshot before the last mutating operation.
 .It Pa ${XDG_DATA_HOME}/clk/clk.tsv.redo

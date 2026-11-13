@@ -3,13 +3,14 @@
 set -u
 
 
-CLK_FMT='%Y-%m-%dT%H:%M:%S'
-CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, mm-dd, mm-dd HH:MM, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM, yyyy-mm-dd)'
+CLK_FMT='%Y-%m-%dT%H:%M:%S%z'
+CLK_LOCAL_FMT='%Y-%m-%dT%H:%M:%S'
+CLK_USER_FMT='yyyy-mm-ddTHH:MM:SS (or HH:MM, HH:MM:SS, mm-dd, mm-dd HH:MM, yyyy-mm-ddTHH:MM, yyyy-mm-dd HH:MM, yyyy-mm-dd, yyyy-mm-ddTHH:MM:SS±hhmm)'
 CLK_FMT_RAW=0
 CLK_FMT_DONE_TAG_WIDTH=0
 CLK_TAB='	'
-CLK_LOG_VERSION_MARKER='#clk-v3'
-CLK_VERSION="0.7.2"
+CLK_LOG_VERSION_MARKER='#clk-v4'
+CLK_VERSION="1.1.1"
 
 CLK_OS="$(uname)"
 case "$CLK_OS" in
@@ -78,7 +79,9 @@ Utilities:
 
 <unit>       = hour(s) | day(s) | week(s) | month(s) | year(s)
 <timestamp>  = HH:MM | HH:MM:SS | mm-dd | mm-dd HH:MM | yyyy-mm-dd | yyyy-mm-ddTHH:MM | yyyy-mm-dd HH:MM | yyyy-mm-ddTHH:MM:SS
-               mm-dd and mm-dd HH:MM are interpreted as this year. Timestamps in the future are rejected.
+               | yyyy-mm-ddTHH:MM:SS±hhmm
+               mm-dd and mm-dd HH:MM are interpreted as this year. Without a ±hhmm UTC offset,
+               a timestamp is in the current local timezone. Timestamps in the future are rejected.
 <duration>   = <minutes> | Xh | Ym | XhYm | Xh Ym    (e.g., 90, 2h, 45m, 1h30m, 1h 30m)
 EOF
 
@@ -94,10 +97,14 @@ clk__die() {
 
 
 clk__to_epoch() {
-    local ts="$1" result exit_code=0
+    local ts="$1" fmt="$CLK_FMT" result exit_code=0
+    case "$ts" in
+        *[+-][0-9][0-9][0-9][0-9]) ;;
+        *) fmt="$CLK_LOCAL_FMT" ;;
+    esac
     case "$CLK_OS" in
         Linux)  result="$(date -d "$ts" +'%s' 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
-        Darwin) result="$(date -j -f "$CLK_FMT" "$ts" +'%s' 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+        Darwin) result="$(date -j -f "$fmt" "$ts" +'%s' 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
     esac
     if [ "$exit_code" -ne 0 ]; then
         clk__die 4 "Failed to parse timestamp '$ts'" "$(cat "$CLK_TMP_ERR")"
@@ -115,6 +122,59 @@ clk__from_epoch() {
         clk__die 4 "Failed to format epoch '$epoch'" "$(cat "$CLK_TMP_ERR")"
     fi
     printf '%s' "$result"
+}
+
+clk__to_local() {
+    local ts="$1" result exit_code=0
+    case "$ts" in
+        *[+-][0-9][0-9][0-9][0-9]) ;;
+        *) printf '%s' "$ts"; return ;;
+    esac
+    case "$CLK_OS" in
+        Linux)  result="$(date -d "$ts" +"$CLK_LOCAL_FMT" 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+        Darwin) result="$(date -j -f "$CLK_FMT" "$ts" +"$CLK_LOCAL_FMT" 2>"$CLK_TMP_ERR")" || exit_code=$? ;;
+    esac
+    if [ "$exit_code" -ne 0 ]; then
+        clk__die 4 "Failed to parse timestamp '$ts'" "$(cat "$CLK_TMP_ERR")"
+    fi
+    printf '%s' "$result"
+}
+
+clk__utc_offset() {
+    local z secs
+    case "$CLK_OS" in
+        Linux)  z="$(date -d "@$1" +'%z')" ;;
+        Darwin) z="$(date -r "$1" +'%z')" ;;
+    esac
+    secs=$(( 10#${z:1:2} * 3600 + 10#${z:3:2} * 60 ))
+    if [ "${z:0:1}" = "-" ]; then
+        secs=$(( -secs ))
+    fi
+    printf '%s' "$secs"
+}
+
+clk__tz_table() {
+    local t="$1" to="$2" off next noff lo hi mid
+    off="$(clk__utc_offset "$t")"
+    local table="$t $off"
+    while [ "$t" -lt "$to" ]; do
+        next=$(( t + 1209600 ))
+        if [ "$next" -gt "$to" ]; then next="$to"; fi
+        noff="$(clk__utc_offset "$next")"
+        if [ "$noff" != "$off" ]; then
+            lo="$t"; hi="$next"
+            while [ $(( hi - lo )) -gt 900 ]; do
+                mid=$(( (lo + hi) / 2 ))
+                if [ "$(clk__utc_offset "$mid")" = "$off" ]; then lo="$mid"; else hi="$mid"; fi
+            done
+            mid=$(( hi - hi % 900 ))
+            if [ "$mid" -gt "$lo" ]; then hi="$mid"; fi
+            table="$table $hi $noff"
+            off="$noff"
+        fi
+        t="$next"
+    done
+    printf '%s' "$table"
 }
 
 clk__now_epoch() {
@@ -237,6 +297,7 @@ clk__fmt_ts_display() {
         printf '%s' "$ts"
         return
     fi
+    ts="$(clk__to_local "$ts")"
     local date_part="${ts%%T*}"
     local time_full="${ts#*T}"
     local time_hm="${time_full%:*}"    # drop :SS
@@ -250,7 +311,8 @@ clk__fmt_ts_display() {
 }
 
 clk__fmt_ts_full() {
-    local ts="$1"
+    local ts
+    ts="$(clk__to_local "$1")"
     local date_part="${ts%%T*}"
     local time_full="${ts#*T}"
     local time_hm="${time_full%:*}"    # drop :SS
@@ -289,6 +351,10 @@ clk__fmt_record() {
         local dur_str
         dur_str="$(clk__fmt_duration "$length_secs")"
         local disp_start disp_end
+        if [ "$CLK_FMT_RAW" != "1" ]; then
+            start_time="$(clk__to_local "$start_time")"
+            end_time="$(clk__to_local "$end_time")"
+        fi
         disp_start="$(clk__fmt_ts_display "$start_time")"
         disp_end="$(clk__fmt_ts_display "$end_time")"
         if [ "$CLK_FMT_RAW" != "1" ]; then
@@ -409,7 +475,7 @@ clk__normalize_timestamp() {
 CLK_VALIDATED_TS=""
 clk__validate_timestamp() {
     CLK_VALIDATED_TS="$(clk__normalize_timestamp "$1")"
-    if ! printf '%s' "$CLK_VALIDATED_TS" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'; then
+    if ! printf '%s' "$CLK_VALIDATED_TS" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([+-][0-9]{4})?$'; then
         clk__die 1 "Invalid timestamp '$1'. Expected format: ${CLK_USER_FMT}"
     fi
     local _ts_epoch _now_epoch
@@ -418,6 +484,7 @@ clk__validate_timestamp() {
     if [ "$_ts_epoch" -gt "$_now_epoch" ]; then
         clk__die 1 "Timestamp '$1' is in the future."
     fi
+    CLK_VALIDATED_TS="$(clk__from_epoch "$_ts_epoch")"
 }
 
 CLK_TIMESTAMP_ARGC=0
@@ -1361,14 +1428,19 @@ clk_do_add_break() {
     local description="$CLK_F8"
 
     if [ -n "$paused_at" ]; then
-        clk__die 5 "Session '$active_tag' is currently paused. Resume first with 'clk resume $active_tag'."
+        local worked_secs
+        worked_secs=$(( paused_at - $(clk__to_epoch "$start_ts") - break_secs ))
+        [ "$worked_secs" -ge 0 ] || worked_secs=0
+        if [ "$add_secs" -gt "$worked_secs" ]; then
+            clk__die 1 "Cannot add $(clk__fmt_duration "$add_secs") break: only $(clk__fmt_duration "$worked_secs") worked before the pause."
+        fi
     fi
 
     local new_break_secs=$(( break_secs + add_secs ))
 
     clk__save_undo
 
-    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${new_break_secs}${CLK_TAB}${CLK_TAB}${description}"
+    local new_record="active${CLK_TAB}${start_ts}${CLK_TAB}${CLK_TAB}${active_tag}${CLK_TAB}${CLK_TAB}${new_break_secs}${CLK_TAB}${paused_at}${CLK_TAB}${description}"
     clk__replace_line "$active_line" "$new_record"
 
     local add_str total_str
@@ -2406,11 +2478,22 @@ clk_do_redo() {
 
 
 CLK_VIEW_AWK_LIB='
-function wsec(ts,    y, m, d, a) {
+function tz_init(t,    a, n, i) {
+    n = split(t, a, " "); ntz = 0
+    for (i = 1; i < n; i += 2) { ++ntz; tze[ntz] = a[i] + 0; tzo[ntz] = a[i + 1] + 0 }
+}
+function wsec(ts,    y, m, d, a, w, o, u, i, lo) {
     y = substr(ts, 1, 4) + 0; m = substr(ts, 6, 2) + 0; d = substr(ts, 9, 2) + 0
     a = int((14 - m) / 12); y = y + 4800 - a; m = m + 12 * a - 3
-    return (d + int((153 * m + 2) / 5) + 365 * y + int(y / 4) - int(y / 100) + int(y / 400) - 32045) * 86400 \
+    w = (d + int((153 * m + 2) / 5) + 365 * y + int(y / 4) - int(y / 100) + int(y / 400) - 32045) * 86400 \
         + substr(ts, 12, 2) * 3600 + substr(ts, 15, 2) * 60 + substr(ts, 18, 2)
+    if (length(ts) < 24) return w
+    o = substr(ts, 21, 2) * 3600 + substr(ts, 23, 2) * 60
+    if (substr(ts, 20, 1) == "-") o = -o
+    u = w - o - 2440588 * 86400
+    lo = tzo[1]
+    for (i = 2; i <= ntz && tze[i] <= u; i++) lo = tzo[i]
+    return w - o + lo
 }
 function wts(x,    jdn, r, a, b, c, dd, ee, mm) {
     jdn = int(x / 86400); r = x - jdn * 86400
@@ -2494,6 +2577,16 @@ clk_do_view() {
     fi
 
 
+    local tz_from="$start_epoch" tz_to="$end_epoch" first_ts
+    if [ "$now_epoch" -lt "$tz_to" ]; then tz_to="$now_epoch"; fi
+    first_ts="$(awk -F'\t' '/^[^#]/ { d = substr($2, 1, 10); if (m == "" || d < m) m = d } END { print m }' "$CLK_LOG")"
+    if [ -n "$first_ts" ]; then
+        first_ts=$(( $(clk__to_epoch "${first_ts}T12:00:00") - 172800 ))
+        if [ "$first_ts" -gt "$tz_from" ]; then tz_from="$first_ts"; fi
+    fi
+    if [ "$tz_from" -gt "$tz_to" ]; then tz_from="$tz_to"; fi
+    CLK_VIEW_TZT="$(clk__tz_table "$tz_from" "$tz_to")"
+
     printf '\n'
 
     if [ -n "$group_by" ]; then
@@ -2508,8 +2601,8 @@ clk_do_view() {
     end_ts_str="$end_ts"
 
     local awk_result
-    awk_result="$(printf '%s' "$live_records" | awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" -v now="$now_ts" -v ftag="$filter_tag" "$CLK_VIEW_AWK_LIB"'
-    BEGIN { ftag_init(ftag); rs = wsec(s); re = wsec(e); nowsec = wsec(now) }
+    awk_result="$(printf '%s' "$live_records" | awk -F'\t' -v s="$start_ts_str" -v e="$end_ts_str" -v now="$now_ts" -v tzt="$CLK_VIEW_TZT" -v ftag="$filter_tag" "$CLK_VIEW_AWK_LIB"'
+    BEGIN { ftag_init(ftag); tz_init(tzt); rs = wsec(s); re = wsec(e); nowsec = wsec(now) }
     $1 == "done" {
         if (nftags > 0 && !tag_matches($4)) next
         if (!clip()) next
@@ -2595,10 +2688,18 @@ clk_do_view() {
     fi
 
     if [ "$live_count" -gt 0 ]; then
-        printf '\n(includes %d running session(s))\n' "$live_count"
+        clk__view_live_note "$live_count"
     fi
 
     printf '\n'
+}
+
+clk__view_live_note() {
+    if [ "$1" -eq 1 ]; then
+        printf '\n(includes 1 running session)\n'
+    else
+        printf '\n(includes %d running sessions)\n' "$1"
+    fi
 }
 
 clk__view_grouped() {
@@ -2609,13 +2710,13 @@ clk__view_grouped() {
     local bar_width=40
 
     local raw_data
-    raw_data="$(printf '%s' "$live_records" | awk -F'\t' -v s="$start_ts" -v e="$end_ts" -v now="$now_ts" -v ftag="$filter_tag" -v gby="$group_by" "$CLK_VIEW_AWK_LIB"'
-    BEGIN { ftag_init(ftag); rs = wsec(s); re = wsec(e); nowsec = wsec(now) }
+    raw_data="$(printf '%s' "$live_records" | awk -F'\t' -v s="$start_ts" -v e="$end_ts" -v now="$now_ts" -v tzt="$CLK_VIEW_TZT" -v ftag="$filter_tag" -v gby="$group_by" "$CLK_VIEW_AWK_LIB"'
+    BEGIN { ftag_init(ftag); tz_init(tzt); rs = wsec(s); re = wsec(e); nowsec = wsec(now) }
     $1 == "done" {
         if (nftags > 0 && !tag_matches($4)) next
         if (!clip()) next
         if (gby == "session") {
-            printf "%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s%s\n", c_cs ? wts(c_s) : $2, c_ce ? wts(c_e) : $3, \
+            printf "%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s%s\n", wts(c_s), wts(c_ce ? c_e : wsec($3)), \
                 $4, int(c_w + 0.5), int(c_b + 0.5), $8, $7, c_cs ? "s" : "", c_ce ? "e" : ""
         } else if (c_span <= 0) {
             printf "%s\t%d\n", substr(wts(c_s), 1, 10), $5 + 0
@@ -2680,7 +2781,7 @@ clk__view_grouped() {
         fi
         clk__view_render_session_table "$session_data" "$show_tag"
         if [ "$live_count" -gt 0 ]; then
-            printf '\n(includes %d running session(s))\n' "$live_count"
+            clk__view_live_note "$live_count"
         fi
         return
     fi
@@ -2781,7 +2882,7 @@ clk__view_grouped() {
     fi
 
     if [ "$live_count" -gt 0 ]; then
-        printf '\n(includes %d running session(s))\n' "$live_count"
+        clk__view_live_note "$live_count"
     fi
 }
 
